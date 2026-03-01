@@ -29,30 +29,29 @@
         // FIX [Review #1]: GEMINI_API_KEY removed from client-side code entirely.
         //                  All Gemini requests are proxied through proxy.js running
         //                  on localhost:3001. Key lives in server-side .env only.
-        const APP_VERSION = "3.4.5";
+        const APP_VERSION = "3.4.7";
 
-        // Smart proxy URL detection:
-        //   LOCAL (file:// or localhost) → connects to local proxy.js on 127.0.0.1:3001
-        //   RAILWAY / cloud             → connects to same hostname on port 3001
-        const _host = window.location.hostname;
+        // Environment detection
+        // LOCAL  (file:// or localhost) → calls local proxy.js on 127.0.0.1:3001
+        // CLOUD  (Railway etc.)         → calls same-origin relative paths
+        const _host    = window.location.hostname;
         const _isLocal = (_host === '127.0.0.1' || _host === 'localhost' || _host === '');
-        const PROXY_API_URL = _isLocal
-            ? 'http://127.0.0.1:3001/api/gemini'
-            : `https://${_host}:3001/api/gemini`;
+        const PROXY_API_URL    = _isLocal ? 'http://127.0.0.1:3001/api/gemini' : '/api/gemini';
+        const PROXY_HEALTH_URL = _isLocal ? 'http://127.0.0.1:3001/health'     : '/health';
+        const CONFIG_URL       = _isLocal ? 'http://127.0.0.1:3001/api/config' : '/api/config';
 
-        const firebaseConfig = {
-            apiKey: "AIzaSyAZ6G2kucnUAkem8sxy0hmox_3lrj48V7E",
-            authDomain: "jdinjax-console.firebaseapp.com",
-            projectId: "jdinjax-console",
-            storageBucket: "jdinjax-console.firebasestorage.app",
-            messagingSenderId: "1028387646842",
-            appId: "1:1028387646842:web:18a7874de7c7996704bac3",
-            measurementId: "G-E9W036D46C"
-        };
+        // Runtime config — populated by fetchAppConfig() on mount.
+        // Firebase and Cloudinary credentials are NEVER hardcoded here.
+        // They are fetched from the server and injected at runtime.
+        let firebaseConfig    = null;
+        let CLOUDINARY_CONFIG = null;
 
-        const CLOUDINARY_CONFIG = {
-            cloudName: "daeb6pcxf",
-            uploadPreset: "jdinjax_unsigned"
+        const fetchAppConfig = async () => {
+            const res = await fetch(CONFIG_URL);
+            if (!res.ok) throw new Error('Failed to load app config from server.');
+            const cfg = await res.json();
+            firebaseConfig    = cfg.firebase;
+            CLOUDINARY_CONFIG = cfg.cloudinary;
         };
 
         // FIX [Review #8]: Replaced __app_id dead-code branch with a defined constant.
@@ -264,32 +263,41 @@ Dimensions: ${data.dimensions || 'TBD'}</p>
 
             // ── Proxy Health Check on mount ──────────────────────────────────────
             useEffect(() => {
-                fetch('http://127.0.0.1:3001/health')
+                fetch(PROXY_HEALTH_URL)
                     .then(r => r.ok ? setProxyOnline(true) : setProxyOnline(false))
                     .catch(() => setProxyOnline(false));
             }, []);
 
-            // ── Firebase Init ────────────────────────────────────────────────────
+            // ── Config Fetch + Firebase Init ─────────────────────────────────────
+            // Fetches Firebase/Cloudinary config from server before initializing.
+            // No credentials are hardcoded in this file.
             useEffect(() => {
-                try {
-                    if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
-                    const auth = firebase.auth();
-                    dbRef.current = firebase.firestore();
-                    const initAuth = async () => {
+                const initApp = async () => {
+                    try {
+                        await fetchAppConfig();
+                    } catch (e) {
+                        console.error("Config fetch error:", e);
+                        setErrorMsg("Failed to load app config from server. Is the proxy running?");
+                        return;
+                    }
+                    try {
+                        if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+                        const auth = firebase.auth();
+                        dbRef.current = firebase.firestore();
                         try {
                             await auth.signInAnonymously();
                         } catch (e) {
                             console.error("Auth error:", e);
                             setErrorMsg("Firebase auth failed. Ensure Anonymous Auth is enabled in your console.");
                         }
-                    };
-                    initAuth();
-                    const unsubscribeAuth = auth.onAuthStateChanged((u) => setUser(u));
-                    return () => unsubscribeAuth();
-                } catch (e) {
-                    console.error("Firebase init error:", e);
-                    setErrorMsg("Firebase initialization failed.");
-                }
+                        const unsubscribeAuth = auth.onAuthStateChanged((u) => setUser(u));
+                        return () => unsubscribeAuth();
+                    } catch (e) {
+                        console.error("Firebase init error:", e);
+                        setErrorMsg("Firebase initialization failed: " + e.message);
+                    }
+                };
+                initApp();
             }, []);
 
             // ── Firestore Real-time Listener ─────────────────────────────────────
@@ -485,20 +493,23 @@ Dimensions: ${data.dimensions || 'TBD'}</p>
                 return <img src={url} className="w-full h-full object-cover" onError={() => setHasError(true)} alt="Item" />;
             };
 
-            // ── Proxy status banner ──────────────────────────────────────────────
             const ProxyStatusBanner = () => {
-                if (proxyOnline === true) return null; // Silent when online — no clutter
+                if (proxyOnline === true) return null;
                 if (proxyOnline === null) return (
                     <div className="max-w-6xl mx-auto mb-4 p-3 bg-slate-100 text-slate-500 rounded-xl flex items-center gap-2 text-xs font-bold border border-slate-200">
                         <Icon name="Loader2" size={14} className="animate-spin" /> Checking proxy connection...
                     </div>
                 );
+                const isLocal = window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost' || window.location.hostname === '';
                 return (
                     <div className="max-w-6xl mx-auto mb-4 p-4 bg-amber-50 text-amber-800 rounded-xl flex items-start gap-3 border border-amber-200">
                         <Icon name="AlertTriangle" size={16} className="text-amber-500 mt-0.5 shrink-0" />
                         <div>
                             <span className="font-black text-xs uppercase tracking-widest block mb-1">Proxy Offline</span>
-                            <span className="text-xs">The local proxy server is not running. Open a terminal and run: <code className="bg-amber-100 px-2 py-0.5 rounded font-mono">npm start</code> in the JDINJAX folder. AI analysis will fail until the proxy is online.</span>
+                            {isLocal
+                                ? <span className="text-xs">Local proxy is not running. Open a terminal and run: <code className="bg-amber-100 px-2 py-0.5 rounded font-mono">npm start</code> in the JDINJAX folder.</span>
+                                : <span className="text-xs">Server-side proxy is unreachable. Check Railway deployment logs and verify GEMINI_API_KEY is set in the Variables tab.</span>
+                            }
                         </div>
                     </div>
                 );
