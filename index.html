@@ -2,8 +2,27 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>JDINJAX eBay Listing Pro Console</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>JDINJAX eBay Listing Pro</title>
+
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="/manifest.json">
+
+    <!-- iOS PWA Support -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="JDINJAX">
+    <link rel="apple-touch-icon" href="/icons/icon-192.png">
+    <link rel="apple-touch-icon" sizes="152x152" href="/icons/icon-152.png">
+    <link rel="apple-touch-icon" sizes="144x144" href="/icons/icon-144.png">
+
+    <!-- Android / Theme -->
+    <meta name="theme-color" content="#2563eb">
+    <meta name="mobile-web-app-capable" content="yes">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+    <link rel="icon" type="image/png" sizes="96x96" href="/icons/icon-96.png">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -586,15 +605,37 @@ Dimensions: ${data.dimensions || 'TBD'}</p>
                             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                                 <div className="lg:col-span-2 space-y-6">
                                     <div className="bg-white border-2 border-dashed border-slate-300 rounded-[2.5rem] p-12 text-center hover:border-blue-400 transition-all cursor-pointer relative group shadow-sm">
-                                        <input type="file" multiple accept="image/*" onChange={(e) => {
+                                        {/* Desktop: hidden full-zone file input */}
+                                        <input id="fileInput" type="file" multiple accept="image/*" onChange={(e) => {
                                             const files = Array.from(e.target.files).map(f => ({ id: Math.random().toString(36), url: URL.createObjectURL(f), file: f }));
                                             setImages([...images, ...files]);
-                                        }} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
+                                        }} className="hidden" />
+
+                                        {/* Mobile camera capture — shown only on touch devices */}
+                                        <input id="cameraInput" type="file" multiple accept="image/*" capture="environment" onChange={(e) => {
+                                            const files = Array.from(e.target.files).map(f => ({ id: Math.random().toString(36), url: URL.createObjectURL(f), file: f }));
+                                            setImages([...images, ...files]);
+                                        }} className="hidden" />
                                         <div className="w-20 h-20 bg-blue-50 text-blue-500 rounded-full flex items-center justify-center mx-auto mb-6 group-hover:scale-105 group-hover:bg-blue-600 group-hover:text-white transition-all">
                                             <Icon name="Upload" size={36} />
                                         </div>
                                         <h3 className="text-xl font-black text-slate-800 uppercase tracking-tight">Drop Image Batches</h3>
                                         <p className="text-slate-500 text-sm mt-3 max-w-xs mx-auto leading-relaxed italic text-center">Engine v{APP_VERSION} extracts shipping specs and item features with JDINJAX policy integration.</p>
+
+                                        {/* Mobile buttons — only visible on small screens */}
+                                        <div className="flex gap-3 justify-center mt-6 md:hidden">
+                                            <button onClick={() => document.getElementById('cameraInput').click()}
+                                                className="flex items-center gap-2 bg-blue-600 text-white px-5 py-3 rounded-2xl font-bold text-sm shadow-md active:scale-95 transition-transform">
+                                                <Icon name="Camera" size={18} /> Take Photos
+                                            </button>
+                                            <button onClick={() => document.getElementById('fileInput').click()}
+                                                className="flex items-center gap-2 bg-slate-100 text-slate-700 px-5 py-3 rounded-2xl font-bold text-sm shadow-sm active:scale-95 transition-transform">
+                                                <Icon name="Images" size={18} /> Choose Files
+                                            </button>
+                                        </div>
+
+                                        {/* Desktop tap hint */}
+                                        <p className="hidden md:block text-slate-400 text-xs mt-4">Click anywhere or drag files to upload</p>
                                     </div>
 
                                     {images.length > 0 && (
@@ -763,6 +804,16 @@ Dimensions: ${data.dimensions || 'TBD'}</p>
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
+    </script>
+    <!-- PWA Service Worker Registration -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js')
+                    .then(reg => console.log('[JDINJAX] SW registered:', reg.scope))
+                    .catch(err => console.warn('[JDINJAX] SW registration failed:', err));
+            });
+        }
     </script>
 </body>
 </html>
