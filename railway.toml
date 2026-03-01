@@ -1,0 +1,10 @@
+# railway.toml — JDINJAX Railway Deployment Configuration
+# Railway reads this file automatically on deploy.
+
+[build]
+builder = "NIXPACKS"        # Auto-detects Node.js — no Dockerfile needed
+
+[deploy]
+startCommand = "npm start"  # Runs server.js (static + proxy)
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
