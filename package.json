@@ -1,6 +1,6 @@
 {
-  "name": "jdinjax-proxy",
-  "version": "3.4.5",
+  "name": "jdinjax",
+  "version": "3.4.7",
   "description": "JDINJAX eBay Listing Pro Console — Railway Edition",
   "main": "server.js",
   "scripts": {
