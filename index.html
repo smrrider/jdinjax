@@ -76,6 +76,30 @@
         // FIX [Review #8]: Replaced __app_id dead-code branch with a defined constant.
         const getListingsPath = (uid) => `artifacts/jdinjax-console/users/${uid}/listings`;
 
+        // ── Shipping Profile Templates ────────────────────────────────────────
+        const SHIPPING_PROFILES = [
+            { id: 'usps_fr_small',  label: 'USPS Flat Rate — Small Box',  service: 'USPSPriority',      type: 'Flat',       cost: '9.85'  },
+            { id: 'usps_fr_medium', label: 'USPS Flat Rate — Medium Box', service: 'USPSPriority',      type: 'Flat',       cost: '16.10' },
+            { id: 'usps_fr_large',  label: 'USPS Flat Rate — Large Box',  service: 'USPSPriority',      type: 'Flat',       cost: '21.90' },
+            { id: 'usps_priority',  label: 'USPS Priority (Calculated)',   service: 'USPSPriority',      type: 'Calculated', cost: '0'     },
+            { id: 'ups_ground',     label: 'UPS Ground (Calculated)',      service: 'UPS',               type: 'Calculated', cost: '0'     },
+            { id: 'free_shipping',  label: 'Free Shipping — USPS Priority',service: 'USPSPriority',      type: 'Flat',       cost: '0'     },
+            { id: 'freight',        label: 'Freight / LTL',                service: 'FreightShipping',   type: 'Flat',       cost: '0'     },
+            { id: 'flat_695',       label: 'Flat Rate — $6.95',            service: 'USPSGroundAdvantage', type: 'Flat',     cost: '6.95'  },
+        ];
+
+        // ── eBay Condition IDs ────────────────────────────────────────────────────
+        const EBAY_CONDITIONS = [
+            { id: '1000', label: 'New',                      short: 'NEW'      },
+            { id: '1500', label: 'New — Other',              short: 'NEW-OTH'  },
+            { id: '1750', label: 'New — Open Box',           short: 'OPEN-BOX' },
+            { id: '2000', label: 'Seller Refurbished',       short: 'REFURB'   },
+            { id: '2500', label: 'Used — Like New',          short: 'LIKE-NEW' },
+            { id: '3000', label: 'Used — Good',              short: 'USED-GD'  },
+            { id: '4000', label: 'Used — Acceptable',        short: 'USED-OK'  },
+            { id: '7000', label: 'For Parts / Not Working',  short: 'PARTS'    },
+        ];
+
         const JDINJAX_SYSTEM_PROMPT = `
 SYSTEM PROMPT — JDINJAX eBay Listing Pro Agent
 You are JDINJAX eBay Listing Pro Agent, a professional eBay listing generator for Captain John Philip DeBok.
@@ -107,6 +131,12 @@ JDINJAX DESCRIPTION CONTENT REQUIREMENTS:
 STRICT CSV CONTENT RULES:
 - DO NOT include any hyperlinks, URLs, or <a> tags within descriptions.
 - Description must follow the exact bolded header and <p> tag structure.
+
+TITLE RULES:
+- The listing title MUST be 80 characters or fewer — this is a hard eBay limit.
+- Count every character including spaces. Truncate or rephrase if needed.
+- Never exceed 80 characters under any circumstance.
+- Prioritize: Brand + Model + Key Spec + Condition keyword. No filler words.
 
 PRICE RULES:
 - Buy It Now price MUST end in .95.
@@ -276,6 +306,7 @@ Dimensions: ${data.dimensions || 'TBD'}</p>
             const [isNuking, setIsNuking]               = useState(false);
             const [editingCategoryId, setEditingCategoryId] = useState(null);
             const [tempCategoryData, setTempCategoryData]   = useState({ id: '', path: '' });
+            const [pricingListingId, setPricingListingId]   = useState(null);  // which listing is being priced
             const [proxyOnline, setProxyOnline]         = useState(null); // null=checking, true=ok, false=down
 
             const dbRef = useRef(null);
@@ -429,8 +460,11 @@ Dimensions: ${data.dimensions || 'TBD'}</p>
                         const aiData = await generateJDINJAXListing(cloudinaryUrls, batch.map(img => img.file));
                         await dbRef.current.collection(listingsPath).add({
                             ...aiData,
-                            images: cloudinaryUrls,
-                            timestamp: Date.now()
+                            images:          cloudinaryUrls,
+                            conditionId:     aiData.conditionId     || '1000',
+                            shippingProfile: aiData.shippingProfile || 'ups_ground',
+                            priceResearch:   null,
+                            timestamp:       Date.now()
                         });
                     }
                     setImages([]);
@@ -461,6 +495,89 @@ Dimensions: ${data.dimensions || 'TBD'}</p>
                 }
             };
 
+            // ── Generic listing field updater ────────────────────────────────────
+            const updateListingField = async (listingId, field, value) => {
+                if (!user) return;
+                try {
+                    await dbRef.current.doc(`${getListingsPath(user.uid)}/${listingId}`).update({ [field]: value });
+                } catch (e) {
+                    console.error('Update failed:', e);
+                    setErrorMsg('Failed to save update.');
+                }
+            };
+
+            // ── Price Intelligence — Gemini-powered market research ───────────────
+            // Sends item details to Gemini for a structured price range estimate.
+            // When eBay API credentials are added, this will upgrade to live
+            // completed listings data automatically.
+            const researchPrice = async (listing) => {
+                if (!listing || pricingListingId) return;
+                setPricingListingId(listing.id);
+                try {
+                    const condLabel = (EBAY_CONDITIONS.find(c => c.id === (listing.conditionId || '1000')) || EBAY_CONDITIONS[0]).label;
+
+                    const promptText =
+                        "You are an eBay US pricing expert. Analyze this item and estimate its market price.\n\n" +
+                        "Item: " + listing.title + "\n" +
+                        "Category: " + (listing.categoryPath || "Unknown") + "\n" +
+                        "Condition: " + condLabel + "\n" +
+                        "Weight: " + (listing.weightTotal || "Unknown") + "\n\n" +
+                        "Return a JSON object with: low (number), mid (number, must end in .95), high (number), " +
+                        "confidence (HIGH/MEDIUM/LOW), basis (string under 60 chars), comparable (string under 60 chars).";
+
+                    // Use gemini-1.5-flash — stable structured output, no thinking overhead
+                    const payload = {
+                        model: 'gemini-2.5-flash',
+                        contents: [{ parts: [{ text: promptText }] }],
+                        generationConfig: {
+                            temperature: 0.1,
+                            maxOutputTokens: 8192,
+                            responseMimeType: "application/json",
+                            responseSchema: {
+                                type: "OBJECT",
+                                properties: {
+                                    low:        { type: "NUMBER" },
+                                    mid:        { type: "NUMBER" },
+                                    high:       { type: "NUMBER" },
+                                    confidence: { type: "STRING" },
+                                    basis:      { type: "STRING" },
+                                    comparable: { type: "STRING" }
+                                },
+                                required: ["low","mid","high","confidence","basis","comparable"]
+                            }
+                        }
+                    };
+
+                    const response = await fetch(PROXY_API_URL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!response.ok) {
+                        const errBody = await response.json().catch(() => ({}));
+                        throw new Error('API ' + response.status + ': ' + (errBody.error?.message || response.statusText));
+                    }
+
+                    const result = await response.json();
+                    const raw = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
+                    console.log('[JDINJAX] Price response:', raw);
+
+                    const priceData = JSON.parse(raw);
+                    if (typeof priceData.mid !== 'number') throw new Error('mid not a number');
+
+                    await updateListingField(listing.id, 'priceResearch', { ...priceData, generatedAt: Date.now() });
+                    await updateListingField(listing.id, 'buyItNowPrice', priceData.mid);
+                    showToast('Price research complete: $' + priceData.low + ' — $' + priceData.high);
+
+                } catch (e) {
+                    console.error('[JDINJAX] Price research error:', e);
+                    setErrorMsg('Price research failed: ' + e.message);
+                } finally {
+                    setPricingListingId(null);
+                }
+            };
+
             // ── CSV Export ───────────────────────────────────────────────────────
             const exportMasterCSV = () => {
                 const infoLines = [
@@ -469,12 +586,12 @@ Dimensions: ${data.dimensions || 'TBD'}</p>
                     "\"#INFO After you've successfully uploaded your draft from the Seller Hub Reports tab, complete your drafts to active listings here: https://www.ebay.com/sh/lst/drafts\",,,,,,,,,,,,,,,",
                     "#INFO,,,,,,,,,,,,,,,"
                 ];
-                const headerRow = "Action(SiteID=US|Country=US|Currency=USD|Version=1193|CC=UTF-8),Custom label (SKU),Category ID,Title,UPC,Price,Quantity,Item photo URL,Condition ID,Description,Format,WeightMajor,WeightMinor,PackageLength,PackageWidth,PackageDepth";
+                const headerRow = "Action(SiteID=US|Country=US|Currency=USD|Version=1193|CC=UTF-8),Custom label (SKU),Category ID,Title,UPC,Price,Quantity,Item photo URL,Condition ID,Description,Format,Duration,BuyItNow,BestOffer,ShippingType,ShippingService1Option,ShippingService1Cost,WeightMajor,WeightMinor,PackageLength,PackageWidth,PackageDepth";
 
                 const rows = listings.map(l => {
                     const cleanSKU       = `JD-${l.id.substring(0, 8)}`;
                     const cleanCatId     = (l.categoryId || "").toString().trim();
-                    const cleanTitle     = (l.title || "").trim().replace(/"/g, '""');
+                    const cleanTitle     = (l.title || "").trim().replace(/"/g, '""').substring(0, 80);
                     const cleanPrice     = (l.buyItNowPrice || 0.95).toFixed(2);
                     const cleanPhotoUrls = (l.images || []).map(url => url.trim()).join('|');
                     const cleanDesc      = (l.htmlDescription || "").trim().replace(/"/g, '""');
@@ -490,7 +607,17 @@ Dimensions: ${data.dimensions || 'TBD'}</p>
                     const dimParts = (l.dimensions || "").split(/[xX*]/).map(s => s.trim().replace(/[^\d.]/g, ''));
                     if (dimParts.length >= 3) { l_val = dimParts[0]; w_val = dimParts[1]; h_val = dimParts[2]; }
 
-                    return `"Draft","${cleanSKU}","${cleanCatId}","${cleanTitle}","Does Not Apply","${cleanPrice}","1","${cleanPhotoUrls}","NEW","${cleanDesc}","FixedPrice","${weightMajor}","${weightMinor}","${l_val}","${w_val}","${h_val}"`;
+                    // Condition
+                    const condObj     = EBAY_CONDITIONS.find(c => c.id === (l.conditionId || '1000')) || EBAY_CONDITIONS[0];
+                    const cleanCondId = condObj.id;
+
+                    // Shipping profile
+                    const shipProf    = SHIPPING_PROFILES.find(s => s.id === (l.shippingProfile || 'ups_ground')) || SHIPPING_PROFILES.find(s => s.id === 'ups_ground');
+                    const shipType    = shipProf.type;
+                    const shipService = shipProf.service;
+                    const shipCost    = shipProf.cost;
+
+                    return `"Draft","${cleanSKU}","${cleanCatId}","${cleanTitle}","Does Not Apply","${cleanPrice}","1","${cleanPhotoUrls}","${cleanCondId}","${cleanDesc}","FixedPrice","GTC","1","1","${shipType}","${shipService}","${shipCost}","${weightMajor}","${weightMinor}","${l_val}","${w_val}","${h_val}"`;
                 });
 
                 const csvContent = [...infoLines, headerRow, ...rows].join('\r\n');
@@ -605,11 +732,11 @@ Dimensions: ${data.dimensions || 'TBD'}</p>
                             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                                 <div className="lg:col-span-2 space-y-6">
                                     <div className="bg-white border-2 border-dashed border-slate-300 rounded-[2.5rem] p-12 text-center hover:border-blue-400 transition-all cursor-pointer relative group shadow-sm">
-                                        {/* Desktop: hidden full-zone file input */}
+                                        {/* Desktop: invisible but covers full drop zone — click anywhere to upload */}
                                         <input id="fileInput" type="file" multiple accept="image/*" onChange={(e) => {
                                             const files = Array.from(e.target.files).map(f => ({ id: Math.random().toString(36), url: URL.createObjectURL(f), file: f }));
                                             setImages([...images, ...files]);
-                                        }} className="hidden" />
+                                        }} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
 
                                         {/* Mobile camera capture — shown only on touch devices */}
                                         <input id="cameraInput" type="file" multiple accept="image/*" capture="environment" onChange={(e) => {
@@ -705,12 +832,12 @@ Dimensions: ${data.dimensions || 'TBD'}</p>
 
                                 <div className="grid grid-cols-1 gap-4">
                                     {listings.sort((a,b) => b.timestamp - a.timestamp).map(listing => (
-                                        <div key={listing.id} className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden flex flex-col md:flex-row group transition-all hover:border-blue-300 hover:shadow-lg">
+                                        <div key={listing.id} className="bg-white rounded-[2rem] border border-slate-200 shadow-sm flex flex-col md:flex-row group transition-all hover:border-blue-300 hover:shadow-lg">
                                             <div className="w-full md:w-72 h-[400px] md:h-auto bg-slate-50 shrink-0 relative overflow-hidden group/img border-r border-slate-100">
                                                 <ImageRenderer url={listing.images?.[0]} />
                                                 <div className="absolute bottom-4 left-4 bg-black/70 backdrop-blur-md text-white text-[9px] font-black px-3 py-1 rounded-xl uppercase tracking-widest">{listing.images?.length || 0} Assets</div>
                                             </div>
-                                            <div className="p-8 flex-grow flex flex-col justify-between">
+                                            <div className="p-8 flex-grow flex flex-col gap-4">
                                                 <div>
                                                     <div className="flex justify-between items-start mb-4">
                                                         {editingCategoryId === listing.id ? (
@@ -735,7 +862,12 @@ Dimensions: ${data.dimensions || 'TBD'}</p>
                                                             </>
                                                         )}
                                                     </div>
-                                                    <h3 className="text-xl font-extrabold text-slate-900 mb-4 leading-tight uppercase tracking-tight group-hover:text-blue-600 transition-colors">{listing.title}</h3>
+                                                    <div className="mb-4">
+                                                        <h3 className="text-xl font-extrabold text-slate-900 leading-tight uppercase tracking-tight group-hover:text-blue-600 transition-colors">{listing.title}</h3>
+                                                        <span className={`text-[9px] font-black uppercase tracking-widest mt-1 block ${(listing.title || '').length > 80 ? 'text-red-500' : (listing.title || '').length > 70 ? 'text-amber-500' : 'text-slate-400'}`}>
+                                                            {(listing.title || '').length}/80 chars {(listing.title || '').length > 80 ? '⚠ EXCEEDS LIMIT' : ''}
+                                                        </span>
+                                                    </div>
 
                                                     <div className="flex items-center gap-2 mb-2">
                                                         <Icon name="FileText" size={14} className="text-blue-500" />
@@ -769,9 +901,91 @@ Dimensions: ${data.dimensions || 'TBD'}</p>
                                                             </div>
                                                         </div>
                                                     </div>
+
+                                                </div>{/* end top content */}
+
+                                                {/* ── Condition + Shipping Controls ─────────────────────────────── */}
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-5 mb-2">
+                                                    {/* Condition Selector */}
+                                                    <div className="bg-slate-50 rounded-2xl p-3 border border-slate-200">
+                                                        <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block mb-2 flex items-center gap-1"><Icon name="Tag" size={9}/> Item Condition</span>
+                                                        <select
+                                                            value={listing.conditionId || '1000'}
+                                                            onChange={(e) => updateListingField(listing.id, 'conditionId', e.target.value)}
+                                                            className="w-full text-[11px] font-bold text-slate-800 bg-white border border-slate-200 rounded-xl px-3 py-2 focus:outline-none focus:border-blue-400 cursor-pointer"
+                                                        >
+                                                            {EBAY_CONDITIONS.map(c => (
+                                                                <option key={c.id} value={c.id}>{c.label}</option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+
+                                                    {/* Shipping Profile Selector */}
+                                                    <div className="bg-slate-50 rounded-2xl p-3 border border-slate-200">
+                                                        <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block mb-2 flex items-center gap-1"><Icon name="Truck" size={9}/> Shipping Profile</span>
+                                                        <select
+                                                            value={listing.shippingProfile || 'ups_ground'}
+                                                            onChange={(e) => updateListingField(listing.id, 'shippingProfile', e.target.value)}
+                                                            className="w-full text-[11px] font-bold text-slate-800 bg-white border border-slate-200 rounded-xl px-3 py-2 focus:outline-none focus:border-blue-400 cursor-pointer"
+                                                        >
+                                                            {SHIPPING_PROFILES.map(s => (
+                                                                <option key={s.id} value={s.id}>{s.label}{s.cost !== '0' ? ` — $${s.cost}` : ' — Calculated'}</option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
                                                 </div>
 
-                                                <div className="flex items-center gap-8 border-t border-slate-100 pt-6 mt-6">
+                                                {/* ── Price Intelligence Panel ─────────────────────────────────── */}
+                                                <div className="bg-gradient-to-br from-blue-50 to-slate-50 rounded-2xl p-4 border border-blue-100 mb-4">
+                                                    <div className="flex items-center justify-between mb-3">
+                                                        <span className="text-[8px] font-black text-blue-600 uppercase tracking-widest flex items-center gap-1">
+                                                            <Icon name="TrendingUp" size={10}/> Price Intelligence
+                                                        </span>
+                                                        <button
+                                                            onClick={() => researchPrice(listing)}
+                                                            disabled={pricingListingId === listing.id}
+                                                            className="text-[9px] font-black uppercase tracking-widest bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-xl flex items-center gap-1.5 transition-all active:scale-95 disabled:bg-slate-200 disabled:text-slate-400"
+                                                        >
+                                                            {pricingListingId === listing.id
+                                                                ? <><Icon name="Loader2" size={10} className="animate-spin"/> Researching...</>
+                                                                : <><Icon name="Search" size={10}/> {listing.priceResearch ? 'Refresh' : 'Research Price'}</>
+                                                            }
+                                                        </button>
+                                                    </div>
+
+                                                    {listing.priceResearch ? (
+                                                        <div>
+                                                            <div className="flex items-end gap-3 mb-2">
+                                                                <div className="text-center">
+                                                                    <span className="text-[8px] text-slate-400 font-black uppercase block">Low</span>
+                                                                    <span className="text-base font-black text-slate-600">${listing.priceResearch.low?.toFixed(2)}</span>
+                                                                </div>
+                                                                <div className="flex-1 text-center bg-white rounded-xl px-3 py-2 border border-blue-200 shadow-sm">
+                                                                    <span className="text-[8px] text-blue-500 font-black uppercase block">Recommended</span>
+                                                                    <span className="text-xl font-black text-blue-700">${listing.priceResearch.mid?.toFixed(2)}</span>
+                                                                </div>
+                                                                <div className="text-center">
+                                                                    <span className="text-[8px] text-slate-400 font-black uppercase block">High</span>
+                                                                    <span className="text-base font-black text-slate-600">${listing.priceResearch.high?.toFixed(2)}</span>
+                                                                </div>
+                                                                <span className={`text-[8px] font-black px-2 py-1 rounded-lg uppercase tracking-widest self-start ${
+                                                                    listing.priceResearch.confidence === 'HIGH'   ? 'bg-green-100 text-green-700' :
+                                                                    listing.priceResearch.confidence === 'MEDIUM' ? 'bg-amber-100 text-amber-700' :
+                                                                    'bg-red-100 text-red-600'
+                                                                }`}>{listing.priceResearch.confidence}</span>
+                                                            </div>
+                                                            <p className="text-[9px] text-slate-500 italic leading-relaxed">{listing.priceResearch.basis}</p>
+                                                            {listing.priceResearch.comparable && (
+                                                                <p className="text-[9px] text-blue-500 mt-1 font-bold">⚡ {listing.priceResearch.comparable}</p>
+                                                            )}
+                                                        </div>
+                                                    ) : (
+                                                        <p className="text-[10px] text-slate-400 italic">Click Research Price to get an AI-powered market value estimate based on comparable eBay sales.</p>
+                                                    )}
+                                                </div>
+
+                                                {/* ── Action Buttons ──────────────────────────────────────────── */}
+                                                <div className="flex items-center gap-8 border-t border-slate-100 pt-5 mt-2">
                                                     <div className="flex items-center gap-6 overflow-x-auto pb-1 no-scrollbar">
                                                         <button onClick={() => copyToClipboard(listing.markdownDescription, "Description")} className="text-slate-400 hover:text-blue-600 text-[10px] font-black uppercase tracking-widest flex items-center gap-2 transition-all whitespace-nowrap"><Icon name="ClipboardList" size={14}/> Copy Description</button>
                                                         <button onClick={() => copyToClipboard((listing.images || []).join('\n'), "Links")} className="text-slate-400 hover:text-blue-600 text-[10px] font-black uppercase tracking-widest flex items-center gap-2 transition-all whitespace-nowrap"><Icon name="Copy" size={12}/> Copy Links</button>
