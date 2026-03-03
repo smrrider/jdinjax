@@ -1,6 +1,6 @@
 /**
  * JDINJAX eBay Listing Pro Console — Unified Single-Port Server
- * Version: 4.0.0 (Production Baseline)
+ * Version: 5.1.0 (Gemini Two-Stage Category Resolution)
  * MISSION: Secure multi-user logistics, CSV mapping, and signed uploads.
  */
 
@@ -8,39 +8,13 @@ require('dotenv').config();
 const express = require('express');
 const cors    = require('cors');
 const path    = require('path');
-const fs      = require('fs');
 const crypto  = require('crypto');
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
-const APP_VERSION = "4.0.0";
+const APP_VERSION = "5.1.0";
 
-// ─── INTERNAL CATEGORY DATABASE ───────────────────────────────────────────
-let EBAY_CATEGORY_DB = [];
-
-const loadCategoryDatabase = () => {
-    try {
-        const csvPath = path.join(__dirname, 'CategoryIDs-US.csv');
-        if (!fs.existsSync(csvPath)) {
-            console.error('[JDINJAX] ❌ CategoryIDs-US.csv NOT FOUND.');
-            return;
-        }
-        const data = fs.readFileSync(csvPath, 'utf8');
-        const lines = data.split(/\r?\n/);
-        EBAY_CATEGORY_DB = lines.slice(1).filter(line => line.trim()).map(line => {
-            const match = line.match(/^(\d+),"(.*)"$/) || line.match(/^(\d+),(.*)$/);
-            if (match) {
-                return { 
-                    id: match[1], 
-                    path: match[2], 
-                    normalizedPath: match[2].toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]/g, '').trim() 
-                };
-            }
-            return null;
-        }).filter(Boolean);
-        console.log(`[JDINJAX] 📦 Category Mapping Engine: Online.`);
-    } catch (err) { console.error('[JDINJAX] ❌ DB Error:', err.message); }
-};
+// ─── CATEGORY RESOLUTION ENGINE ─────────────────────────────────────────
 
 // ─── Middleware ────────────────────────────────────────────────────────────
 app.use(cors());
@@ -90,15 +64,85 @@ app.post('/api/sign-upload', (req, res) => {
 });
 
 /**
- * CATEGORY LOOKUP ENGINE
- * Matches AI Predicted Path to CSV verified ID.
+ * CATEGORY RESOLUTION ENGINE v3 — Gemini Two-Stage
+ * Dedicated AI call focused purely on eBay category classification.
+ * Seeded with BKA known-good category map for firearms/tactical inventory.
+ * Falls back to Gemini general knowledge for out-of-scope items.
  */
-app.get('/api/category-lookup', (req, res) => {
-    const { predictedPath } = req.query;
-    const aiPathNorm = (predictedPath || '').toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]/g, '').trim();
-    const match = EBAY_CATEGORY_DB.find(cat => cat.normalizedPath === aiPathNorm);
-    if (match) return res.json({ categoryId: match.id, categoryPath: match.path });
-    res.status(404).json({ error: "Mapping failed" });
+
+const BKA_CATEGORY_SEED = `
+KNOWN eBay LEAF CATEGORIES FOR FIREARMS & TACTICAL GEAR (use these when applicable):
+- 73944  | Sporting Goods > Hunting > Scopes, Sights & Optics
+- 177882 | Sporting Goods > Hunting > Mounts & Rings
+- 73943  | Sporting Goods > Hunting > Stocks, Grips & Forends
+- 73938  | Sporting Goods > Hunting > Magazines & Clips
+- 177891 | Sporting Goods > Hunting > Cleaning Equipment & Supplies
+- 73949  | Sporting Goods > Hunting > Slings & Swivels
+- 177895 | Sporting Goods > Hunting > Lights, Lasers & Accessories
+- 73940  | Sporting Goods > Hunting > Holsters
+- 73936  | Sporting Goods > Hunting > Gun Parts
+- 177885 | Sporting Goods > Hunting > Handguards & Rail Systems
+- 177887 | Sporting Goods > Hunting > Triggers
+- 177889 | Sporting Goods > Hunting > Barrels
+- 177893 | Sporting Goods > Hunting > Suppressors & Silencers
+- 3259   | Sporting Goods > Hunting > Clothing & Footwear
+- 52387  | Sporting Goods > Hunting > Bags, Packs & Cases
+- 31771  | Sporting Goods > Tactical & Duty Gear
+- 57881  | Consumer Electronics > Batteries & Power Accessories
+- 175759 | Computers/Tablets > Cases, Bags & Covers
+- 20710  | Tools & Home Improvement > Tool Storage
+- 183446 | Home & Garden > Tools & Workshop Equipment
+`.trim();
+
+app.post('/api/category-resolve', async (req, res) => {
+    const { title, keyFeatures = [], description = '' } = req.body;
+    if (!title) return res.status(400).json({ error: "Title required." });
+
+    const prompt = `You are an eBay category classification expert specializing in firearms accessories, tactical gear, and general merchandise.
+
+Your task: Identify the single most accurate eBay LEAF category for the item described below.
+
+ITEM TITLE: ${title}
+KEY FEATURES: ${keyFeatures.join(', ') || 'N/A'}
+DESCRIPTION CONTEXT: ${description.substring(0, 200) || 'N/A'}
+
+${BKA_CATEGORY_SEED}
+
+INSTRUCTIONS:
+1. Reason step by step about what this item is and what category best fits
+2. Prefer the most specific LEAF category — never use a parent/broad category
+3. If the item matches a known category above, use it exactly
+4. If not, provide the correct eBay leaf category from your knowledge
+5. Return ONLY valid JSON — no markdown, no preamble
+
+Return JSON with exactly these keys:
+{
+  "categoryId": "string — numeric eBay category ID",
+  "categoryPath": "string — full path e.g. Sporting Goods > Hunting > Scopes, Sights & Optics",
+  "confidence": "High | Medium | Low",
+  "reasoning": "one sentence explaining the classification"
+}`;
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                generationConfig: { responseMimeType: 'application/json' }
+            })
+        });
+        const data = await response.json();
+        const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        const clean = raw.replace(/```json|```/g, '').trim();
+        const result = JSON.parse(clean);
+        console.log(`[eBay Scout] 🎯 Category resolved: "${result.categoryPath}" (${result.confidence}) for: "${title}"`);
+        res.json(result);
+    } catch (err) {
+        console.error(`[eBay Scout] ❌ Category resolve failed for "${title}": ${err.message}`);
+        res.status(502).json({ error: 'Category resolution failed', detail: err.message });
+    }
 });
 
 /**
@@ -119,7 +163,7 @@ app.post('/api/gemini', async (req, res) => {
 });
 
 // Start Logistics Engine
-loadCategoryDatabase();
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[JDINJAX] 🚀 Black Knight Command Center: v${APP_VERSION} active on port ${PORT}`);
+    console.log(`[eBay Scout] 🚀 Black Knight Command Center: v${APP_VERSION} active on port ${PORT}`);
+    console.log(`[eBay Scout] 🎯 Gemini Category Resolution Engine: Ready`);
 });
