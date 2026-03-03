@@ -213,6 +213,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
             const [result,        setResult]         = useState(null);
             const [history,       setHistory]        = useState([]);
             const [activeHistory, setActiveHistory]  = useState(null);
+            const [confirmPurge,  setConfirmPurge]   = useState(false);
             const [errorMsg,      setErrorMsg]       = useState(null);
 
             // Load Scout history from Firestore on mount
@@ -234,7 +235,6 @@ Return ONLY valid JSON — no markdown, no preamble.`;
 
             const purgeHistory = async () => {
                 if (!user || !dbRef || !dbRef.current) return;
-                if (!window.confirm('Clear all Scout history? This cannot be undone.')) return;
                 try {
                     const path = `artifacts/jdinjax-console/users/${user.uid}/scoutHistory`;
                     const snap = await dbRef.current.collection(path).get();
@@ -244,8 +244,9 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                     await batch.commit();
                     setActiveHistory(null);
                     setResult(null);
+                    setConfirmPurge(false);
                     showToast('Scout history cleared.');
-                } catch(e) { showToast('Purge failed: ' + e.message); }
+                } catch(e) { setConfirmPurge(false); showToast('Purge failed: ' + e.message); }
             };
 
             const displayResult = activeHistory !== null ? history[activeHistory] : result;
@@ -355,7 +356,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                                     {/* Session History */}
                                     {history.length > 0 && (
                                         <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200">
-                                            <div className="flex items-center justify-between mb-3"><p className="text-[8px] font-black uppercase text-slate-400 tracking-widest">Scout History ({history.length}/20)</p><button onClick={purgeHistory} className="flex items-center gap-1 text-[8px] font-black uppercase tracking-widest text-red-400 hover:text-red-600 transition-colors px-2 py-1 rounded-lg hover:bg-red-50"><Icon name="Trash2" size={10}/> Clear</button></div>
+                                            <div className="flex items-center justify-between mb-3"><p className="text-[8px] font-black uppercase text-slate-400 tracking-widest">Scout History ({history.length}/20)</p>{confirmPurge ? (<span className="flex items-center gap-1"><button onClick={() => setConfirmPurge(false)} className="text-[8px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-600 px-2 py-1 rounded-lg hover:bg-slate-100 transition-colors">Cancel</button><button onClick={purgeHistory} className="text-[8px] font-black uppercase tracking-widest text-white bg-red-500 hover:bg-red-600 px-2 py-1 rounded-lg transition-colors">Confirm</button></span>) : (<button onClick={() => setConfirmPurge(true)} className="flex items-center gap-1 text-[8px] font-black uppercase tracking-widest text-red-400 hover:text-red-600 transition-colors px-2 py-1 rounded-lg hover:bg-red-50"><Icon name="Trash2" size={10}/> Clear</button>)}</div>
                                             <div className="space-y-1">
                                                 {history.map((h, i) => (
                                                     <button key={i} onClick={() => { setActiveHistory(i); setResult(null); }}

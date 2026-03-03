@@ -1,6 +1,6 @@
 /**
  * JDINJAX eBay Listing Pro Console — Unified Single-Port Server
- * Version: 5.2.0 (SerpApi Category Resolution + Gemini Fallback)
+ * Version: 5.3.0 (Hybrid: SerpApi Candidates + Gemini Selection)
  * MISSION: Secure multi-user logistics, CSV mapping, and signed uploads.
  */
 
@@ -12,9 +12,32 @@ const crypto  = require('crypto');
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
-const APP_VERSION = "5.2.0";
+const APP_VERSION = "5.3.0";
 
 // ─── CATEGORY RESOLUTION ENGINE ─────────────────────────────────────────
+
+const BKA_CATEGORY_MAP = {
+    "73944":  "Sporting Goods > Hunting > Scopes, Optics & Lasers",
+    "177882": "Sporting Goods > Hunting > Gun Parts > Scope Mounts & Accessories",
+    "73943":  "Sporting Goods > Hunting > Gun Parts > Stocks, Grips & Foregrips",
+    "73938":  "Sporting Goods > Hunting > Gun Parts > Magazines & Clips",
+    "177891": "Sporting Goods > Hunting > Hunting Equipment > Cleaning Equipment",
+    "73949":  "Sporting Goods > Hunting > Gun Parts > Slings & Swivels",
+    "177895": "Sporting Goods > Hunting > Gun Parts > Lights, Lasers & Accessories",
+    "73940":  "Sporting Goods > Hunting > Holsters, Belts & Pouches",
+    "73936":  "Sporting Goods > Hunting > Gun Parts",
+    "177885": "Sporting Goods > Hunting > Gun Parts > Handguards & Forends",
+    "177887": "Sporting Goods > Hunting > Gun Parts > Triggers",
+    "177889": "Sporting Goods > Hunting > Gun Parts > Barrels",
+    "177893": "Sporting Goods > Hunting > Gun Parts > Suppressors & Silencers",
+    "3259":   "Clothing, Shoes & Accessories > Men > Men's Clothing",
+    "52387":  "Sporting Goods > Outdoor Sports > Camping & Hiking > Bags & Packs",
+    "31771":  "Sporting Goods > Hunting > Tactical & Duty Gear",
+    "57881":  "Consumer Electronics > Multipurpose Batteries & Power",
+    "175759": "Sporting Goods > Hunting > Gun Storage",
+    "20710":  "Home & Garden > Tools & Workshop Equipment > Tool Storage",
+    "183446": "Home & Garden > Tools & Workshop Equipment"
+};
 
 // ─── Middleware ────────────────────────────────────────────────────────────
 app.use(cors());
@@ -63,60 +86,78 @@ app.post('/api/sign-upload', (req, res) => {
     res.json({ signature, folder });
 });
 
-// ─── CATEGORY RESOLUTION ENGINE v4 ─────────────────────────────────────────
+// ─── CATEGORY RESOLUTION ENGINE v5 ─────────────────────────────────────────
+// Strategy: SerpApi fetches LIVE eBay category candidates (flat sibling list)
+// → Gemini selects the best match using item context.
+// Fallback: Pure Gemini w/ BKA seed map if SerpApi unavailable.
 
-const resolveViaSerpApi = async (title) => {
-    const key = process.env.SERPAPI_KEY;
-    if (!key) throw new Error("SERPAPI_KEY not configured");
-    const params = new URLSearchParams({
-        engine: "ebay", _nkw: title, ebay_domain: "ebay.com", api_key: key
-    });
-    const response = await fetch("https://serpapi.com/search?" + params.toString());
-    if (!response.ok) throw new Error("SerpApi HTTP " + response.status);
-    const data = await response.json();
-    const cats = (data.categories || []).filter(c => c.id);
-    if (!cats.length) throw new Error("SerpApi returned no category IDs");
-    const best = cats[cats.length - 1]; // last = most specific leaf
-    const categoryId = String(best.id);
-    const categoryPath = BKA_CATEGORY_MAP[categoryId] || best.name || ("eBay Category " + categoryId);
-    console.log("[eBay Scout] SerpApi: ID " + categoryId + " -> " + categoryPath);
-    return { categoryId, categoryPath, confidence: "High", source: "SerpApi" };
-};
-
-const resolveViaGemini = async (title, keyFeatures, description) => {
-    const seed = Object.entries(BKA_CATEGORY_MAP).map(([id,p]) => "- " + id + " | " + p).join("\n");
-    const prompt = "You are an eBay category expert.\n\nITEM: " + title +
-        "\nFEATURES: " + (keyFeatures.join(", ") || "N/A") +
-        "\nDESCRIPTION: " + (description || "").substring(0,200) +
-        "\n\nKNOWN BKA CATEGORIES:\n" + seed +
-        "\n\nReturn ONLY JSON: {categoryId, categoryPath, confidence, source:\"Gemini\"}";
+const geminiPick = async (title, keyFeatures, description, candidates) => {
+    const candidateList = candidates.map(c => `- ${c.id} | ${c.name}`).join("\n");
+    const prompt =
+        "You are an eBay listing category expert.\n\n" +
+        "ITEM: " + title + "\n" +
+        "FEATURES: " + (keyFeatures.join(", ") || "N/A") + "\n" +
+        "DESCRIPTION: " + (description || "").substring(0, 200) + "\n\n" +
+        "LIVE EBAY CATEGORY CANDIDATES (ID | Name):\n" + candidateList + "\n\n" +
+        "Select the SINGLE most appropriate category ID for listing this item on eBay. " +
+        "Prefer the most specific subcategory. " +
+        'Return ONLY valid JSON: {"categoryId": "<id>", "categoryPath": "<full path>", "confidence": "High", "source": "Hybrid"}';
     const url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + process.env.GEMINI_API_KEY;
     const resp = await fetch(url, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            generationConfig: { responseMimeType: "application/json" }
+        })
     });
     const d = await resp.json();
     const raw = (d.candidates?.[0]?.content?.parts?.[0]?.text || "").replace(/```json|```/g, "").trim();
     const result = JSON.parse(raw);
-    console.log("[eBay Scout] Gemini fallback: " + result.categoryPath);
-    return { ...result, source: "Gemini" };
+    if (BKA_CATEGORY_MAP[result.categoryId]) result.categoryPath = BKA_CATEGORY_MAP[result.categoryId];
+    return result;
+};
+
+const fetchSerpApiCandidates = async (title) => {
+    const key = process.env.SERPAPI_KEY;
+    if (!key) throw new Error("SERPAPI_KEY not configured");
+    const params = new URLSearchParams({ engine: "ebay", _nkw: title, ebay_domain: "ebay.com", api_key: key });
+    const response = await fetch("https://serpapi.com/search?" + params.toString());
+    if (!response.ok) throw new Error("SerpApi HTTP " + response.status);
+    const data = await response.json();
+    const cats = (data.categories || []).filter(c => c.id && c.name);
+    if (!cats.length) throw new Error("SerpApi returned no category candidates");
+    console.log("[eBay Scout] SerpApi candidates: " + cats.map(c => c.id + ":" + c.name).join(", "));
+    return cats;
+};
+
+const resolveViaGeminiOnly = async (title, keyFeatures, description) => {
+    const candidates = Object.entries(BKA_CATEGORY_MAP).map(([id, name]) => ({ id, name }));
+    const result = await geminiPick(title, keyFeatures, description, candidates);
+    result.source = "Gemini";
+    console.log("[eBay Scout] Gemini-only: " + result.categoryId + " -> " + result.categoryPath);
+    return result;
 };
 
 app.post("/api/category-resolve", async (req, res) => {
     const { title, keyFeatures = [], description = "" } = req.body;
     if (!title) return res.status(400).json({ error: "Title required." });
     try {
-        return res.json(await resolveViaSerpApi(title));
-    } catch (serpErr) {
-        console.warn("[eBay Scout] SerpApi failed (" + serpErr.message + ") — Gemini fallback");
+        const candidates = await fetchSerpApiCandidates(title);
+        const result = await geminiPick(title, keyFeatures, description, candidates);
+        console.log("[eBay Scout] Hybrid result: " + result.categoryId + " -> " + result.categoryPath);
+        return res.json(result);
+    } catch (err) {
+        console.warn("[eBay Scout] Hybrid failed (" + err.message + ") — Gemini-only fallback");
     }
     try {
-        return res.json(await resolveViaGemini(title, keyFeatures, description));
+        return res.json(await resolveViaGeminiOnly(title, keyFeatures, description));
     } catch (err) {
         res.status(502).json({ error: "Category resolution failed", detail: err.message });
     }
 });
 
+/**
  * GEMINI PROXY
  */
 app.post('/api/gemini', async (req, res) => {
