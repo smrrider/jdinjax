@@ -1,7 +1,7 @@
 {
   "name": "jdinjax-console-pro",
-  "version": "3.8.2",
-  "description": "JDINJAX AI eBay Lister Proxy - Black Knight Armament Edition",
+  "version": "4.0.0",
+  "description": "JDINJAX AI eBay Lister Proxy - Production Baseline Edition",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
