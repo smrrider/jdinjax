@@ -187,14 +187,22 @@ Return ONLY valid JSON — no markdown, no preamble.`;
             return 82.10 + ((billableLbs - 70) * 0.80); // overage estimate
         };
 
-        const calcArbitrage = (priceMid, purchasePrice, shippingCost) => {
-            const ebayFVF     = priceMid * 0.1325;
-            const paymentFee  = priceMid * 0.029 + 0.30;
-            const packaging   = 2.00;
-            const totalFees   = ebayFVF + paymentFee + packaging + shippingCost;
-            const netProfit   = priceMid - purchasePrice - totalFees;
-            const roi         = purchasePrice > 0 ? (netProfit / purchasePrice) * 100 : 0;
-            return { ebayFVF, paymentFee, packaging, shippingCost, totalFees, netProfit, roi };
+        // shippingMode: 'flat' | 'free' | 'pickup'
+        const calcArbitrage = (priceMid, purchasePrice, uspsEstimate, shippingMode, flatFee) => {
+            const packaging = 2.00;
+            if (shippingMode === 'pickup') {
+                const netProfit = priceMid - purchasePrice - packaging;
+                const roi = purchasePrice > 0 ? (netProfit / purchasePrice) * 100 : 0;
+                return { ebayFVF: 0, paymentFee: 0, packaging, uspsEstimate: 0, flatFeeCollected: 0, netShippingCost: 0, totalFees: packaging, netProfit, roi };
+            }
+            const ebayFVF          = priceMid * 0.1325;
+            const paymentFee       = priceMid * 0.029 + 0.30;
+            const flatFeeCollected = shippingMode === 'flat' ? (parseFloat(flatFee) || 0) : 0;
+            const netShippingCost  = uspsEstimate - flatFeeCollected;
+            const totalFees        = ebayFVF + paymentFee + packaging + netShippingCost;
+            const netProfit        = priceMid - purchasePrice - totalFees;
+            const roi              = purchasePrice > 0 ? (netProfit / purchasePrice) * 100 : 0;
+            return { ebayFVF, paymentFee, packaging, uspsEstimate, flatFeeCollected, netShippingCost, totalFees, netProfit, roi };
         };
 
         const getVerdict = (netProfit) => {
@@ -214,6 +222,8 @@ Return ONLY valid JSON — no markdown, no preamble.`;
             const [history,       setHistory]        = useState([]);
             const [activeHistory, setActiveHistory]  = useState(null);
             const [confirmPurge,  setConfirmPurge]   = useState(false);
+            const [shippingMode,    setShippingMode]   = useState('flat');
+            const [flatShippingFee, setFlatShippingFee] = useState('6.95');
             const [errorMsg,      setErrorMsg]       = useState(null);
 
             // Load Scout history from Firestore on mount
@@ -230,6 +240,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
 
             const reset = () => {
                 setScoutImage(null); setCondition('3000'); setPurchasePrice('');
+                setShippingMode('flat'); setFlatShippingFee('6.95');
                 setResult(null); setErrorMsg(null); setScoutStatus(''); setActiveHistory(null);
             };
 
@@ -285,14 +296,16 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                     const ai   = JSON.parse(raw);
 
                     setScoutStatus("Calculating shipping...");
-                    const shipping  = getUspsZone8Rate(ai.weightOz, ai.packageLengthIn, ai.packageWidthIn, ai.packageHeightIn);
-                    const purchase  = parseFloat(purchasePrice) || 0;
-                    const arb       = calcArbitrage(ai.priceMid, purchase, shipping);
+                    const uspsEstimate = getUspsZone8Rate(ai.weightOz, ai.packageLengthIn, ai.packageWidthIn, ai.packageHeightIn);
+                    const purchase     = parseFloat(purchasePrice) || 0;
+                    const flatFee      = parseFloat(flatShippingFee) || 0;
+                    const arb          = calcArbitrage(ai.priceMid, purchase, uspsEstimate, shippingMode, flatFee);
+                    const shipping     = uspsEstimate;
                     const verdict   = getVerdict(arb.netProfit);
 
                     const scoutResult = {
                         ...ai, condition: condLabel, purchasePrice: purchase,
-                        shipping, arb, verdict,
+                        shipping, arb, verdict, shippingMode,
                         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                         imageUrl: scoutImage.url
                     };
@@ -415,6 +428,29 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                                                 </div>
                                             </div>
 
+
+                                            {/* Shipping Mode */}
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                                                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-2">Buyer Shipping</p>
+                                                    <select value={shippingMode} onChange={e => setShippingMode(e.target.value)}
+                                                        className="w-full bg-transparent text-[11px] font-black text-slate-800 focus:outline-none uppercase cursor-pointer">
+                                                        <option value="flat">Flat Fee</option>
+                                                        <option value="free">Free Shipping</option>
+                                                        <option value="pickup">Local Pickup</option>
+                                                    </select>
+                                                </div>
+                                                <div className={shippingMode !== "flat" ? "bg-slate-100 border border-slate-200 rounded-2xl p-4 opacity-40 pointer-events-none" : "bg-slate-50 border border-slate-200 rounded-2xl p-4"}>
+                                                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-2">Flat Fee Charged</p>
+                                                    <div className="flex items-center gap-1">
+                                                        <span className="text-slate-400 font-black text-sm">$</span>
+                                                        <input type="number" step="0.01" min="0" value={flatShippingFee}
+                                                            onChange={e => setFlatShippingFee(e.target.value)}
+                                                            disabled={shippingMode !== "flat"}
+                                                            className="w-full bg-transparent text-[11px] font-black text-slate-800 focus:outline-none" />
+                                                    </div>
+                                                </div>
+                                            </div>
                                             {errorMsg && (
                                                 <div className="bg-red-50 border border-red-200 rounded-2xl px-5 py-3 text-xs font-bold text-red-600">{errorMsg}</div>
                                             )}
@@ -510,40 +546,66 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                                                 {/* Fee Breakdown */}
                                                 <div className="bg-white border border-slate-200 rounded-2xl p-5">
                                                     <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-4">Cost Stack Breakdown</p>
+                                                    {r.shippingMode === 'pickup' && (
+                                                        <div className="mb-3 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-[9px] font-black text-amber-700 uppercase tracking-widest flex items-center gap-2">
+                                                            <span>🤝</span> Local Pickup — eBay and payment fees waived
+                                                        </div>
+                                                    )}
+                                                    {r.shippingMode === 'free' && (
+                                                        <div className="mb-3 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 text-[9px] font-black text-blue-700 uppercase tracking-widest flex items-center gap-2">
+                                                            <span>🚚</span> Free Shipping — full USPS cost absorbed
+                                                        </div>
+                                                    )}
                                                     <div className="space-y-2.5">
-                                                        {[
-                                                            { label: 'Sale Price (eBay Mid)', val: r.priceMid, positive: true },
-                                                            { label: 'Purchase Cost', val: -r.purchasePrice },
-                                                            { label: `eBay Final Value Fee (13.25%)`, val: -r.arb.ebayFVF },
-                                                            { label: 'Payment Processing (2.9% + $0.30)', val: -r.arb.paymentFee },
-                                                            { label: 'Packaging Materials', val: -r.arb.packaging },
-                                                            { label: `USPS Ground Advantage Zone 8 (${r.weightOz}oz est.)`, val: -r.shipping },
-                                                        ].map((row, i) => (
-                                                            <div key={i} className={`flex justify-between items-center py-1.5 ${i < 5 ? 'border-b border-slate-100' : ''}`}>
-                                                                <span className="text-[10px] font-bold text-slate-600">{row.label}</span>
-                                                                <span className={`text-[11px] font-black ${row.positive ? 'text-emerald-600' : 'text-red-500'}`}>
-                                                                    {row.positive ? '+' : '-'}${Math.abs(row.val).toFixed(2)}
-                                                                </span>
-                                                            </div>
-                                                        ))}
+                                                        {(() => {
+                                                            const mode = r.shippingMode || 'flat';
+                                                            const usps = r.arb.uspsEstimate || r.shipping || 0;
+                                                            const rows = [
+                                                                { label: 'Sale Price (eBay Mid)', val: r.priceMid, pos: true },
+                                                                { label: 'Purchase Cost', val: -r.purchasePrice },
+                                                            ];
+                                                            if (mode !== 'pickup') {
+                                                                rows.push({ label: 'eBay Final Value Fee (13.25%)', val: -r.arb.ebayFVF });
+                                                                rows.push({ label: 'Payment Processing (2.9% + $0.30)', val: -r.arb.paymentFee });
+                                                            }
+                                                            rows.push({ label: 'Packaging Materials', val: -r.arb.packaging });
+                                                            if (mode === 'free') {
+                                                                rows.push({ label: 'USPS Zone 8 — Free to Buyer (' + r.weightOz + 'oz)', val: -usps });
+                                                            } else if (mode === 'flat') {
+                                                                rows.push({ label: 'USPS Zone 8 (' + r.weightOz + 'oz)', val: -usps });
+                                                                const fc = r.arb.flatFeeCollected || 0;
+                                                                if (fc > 0) rows.push({ label: 'Flat Shipping Collected', val: fc, pos: true });
+                                                            }
+                                                            return rows.map((row, i) => (
+                                                                <div key={i} className={'flex justify-between items-center py-1.5' + (i < rows.length - 1 ? ' border-b border-slate-100' : '')}>
+                                                                    <span className="text-[10px] font-bold text-slate-600">{row.label}</span>
+                                                                    <span className={'text-[11px] font-black ' + (row.pos ? 'text-emerald-600' : 'text-red-500')}>
+                                                                        {row.pos ? '+' : '-'}${Math.abs(row.val).toFixed(2)}
+                                                                    </span>
+                                                                </div>
+                                                            ));
+                                                        })()}
                                                         <div className="flex justify-between items-center pt-2 mt-1 border-t-2 border-slate-200">
                                                             <span className="text-[11px] font-black text-slate-800 uppercase tracking-wide">Net Profit</span>
-                                                            <span className={`text-lg font-black ${r.arb.netProfit >= 15 ? 'text-emerald-600' : r.arb.netProfit >= 5 ? 'text-amber-600' : 'text-red-500'}`}>
+                                                            <span className={'text-lg font-black ' + (r.arb.netProfit >= 15 ? 'text-emerald-600' : r.arb.netProfit >= 5 ? 'text-amber-600' : 'text-red-500')}>
                                                                 ${r.arb.netProfit.toFixed(2)}
                                                             </span>
                                                         </div>
                                                     </div>
                                                 </div>
 
-                                                {/* Shipping Spec */}
+                                                {/* Shipping Spec — hidden for local pickup */}
+                                                {r.shippingMode !== 'pickup' && (
                                                 <div className="bg-slate-50 border border-slate-100 rounded-2xl p-5">
-                                                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-3">Shipping Estimate — USPS Zone 8 (VA→CA)</p>
+                                                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-3">
+                                                        {r.shippingMode === 'free' ? 'Shipping Cost (Absorbed) — USPS Zone 8 (VA to CA)' : 'Shipping Estimate — USPS Zone 8 (VA to CA)'}
+                                                    </p>
                                                     <div className="grid grid-cols-4 gap-3">
                                                         {[
-                                                            { label: 'Weight', val: `${r.weightOz}oz` },
-                                                            { label: 'Length', val: `${r.packageLengthIn}"` },
-                                                            { label: 'Width',  val: `${r.packageWidthIn}"` },
-                                                            { label: 'Height', val: `${r.packageHeightIn}"` },
+                                                            { label: 'Weight', val: r.weightOz + 'oz' },
+                                                            { label: 'Length', val: r.packageLengthIn + '"' },
+                                                            { label: 'Width',  val: r.packageWidthIn + '"' },
+                                                            { label: 'Height', val: r.packageHeightIn + '"' },
                                                         ].map((d, i) => (
                                                             <div key={i} className="text-center bg-white rounded-xl p-3 border border-slate-200">
                                                                 <p className="text-[8px] font-black text-slate-400 uppercase mb-1">{d.label}</p>
@@ -552,10 +614,13 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                                                         ))}
                                                     </div>
                                                     <div className="flex justify-between items-center mt-4 bg-white rounded-xl px-4 py-3 border border-slate-200">
-                                                        <span className="text-[10px] font-black text-slate-600 uppercase">Estimated Shipping Cost</span>
-                                                        <span className="text-base font-black text-slate-800">${r.shipping.toFixed(2)}</span>
+                                                        <span className="text-[10px] font-black text-slate-600 uppercase">
+                                                            {r.shippingMode === 'free' ? 'My Cost (Absorbed)' : 'Estimated Shipping Cost'}
+                                                        </span>
+                                                        <span className="text-base font-black text-slate-800">${(r.arb.uspsEstimate || r.shipping || 0).toFixed(2)}</span>
                                                     </div>
                                                 </div>
+                                                )}
 
                                             </div>
                                         );
