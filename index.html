@@ -38,6 +38,16 @@
         .login-field:focus { border-color: #2563eb; background: #ffffff; box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.1); }
         .listing-card { transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
         .listing-card:hover { transform: translateY(-2px); }
+        .scout-fab { box-shadow: 0 8px 32px rgba(16, 185, 129, 0.45); }
+        .scout-modal-bg { animation: fadeInBg 0.2s ease; }
+        .scout-modal { animation: slideUpModal 0.25s cubic-bezier(0.4, 0, 0.2, 1); }
+        @keyframes fadeInBg { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes slideUpModal { from { opacity: 0; transform: translateY(40px) scale(0.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        .verdict-go { background: linear-gradient(135deg, #d1fae5, #a7f3d0); border-color: #6ee7b7; color: #065f46; }
+        .verdict-marginal { background: linear-gradient(135deg, #fef9c3, #fde68a); border-color: #fcd34d; color: #78350f; }
+        .verdict-nogo { background: linear-gradient(135deg, #fee2e2, #fecaca); border-color: #fca5a5; color: #7f1d1d; }
+        .scout-history-item { transition: all 0.15s ease; }
+        .scout-history-item:hover { background: #f1f5f9; }
     </style>
 </head>
 <body class="bg-slate-100 text-slate-900">
@@ -46,7 +56,7 @@
     <script type="text/babel">
         const { useState, useEffect, useCallback, useRef } = React;
 
-        const APP_VERSION = "4.3.0"; // Draft Template Mapping Verified
+        const APP_VERSION = "4.5.0"; // Feature: Arbitrage Scout Module — FAB, Intel Card, Session History
 
         const _host    = window.location.hostname;
         const _isLocal = (_host === '127.0.0.1' || _host === 'localhost' || _host === '');
@@ -104,6 +114,416 @@
             }, [name, size]);
             return <span ref={ref} className={`inline-block align-middle leading-none ${className}`}></span>;
         };
+        // ─── ARBITRAGE SCOUT ─────────────────────────────────────────────────────
+
+        const SCOUT_SYSTEM_PROMPT = `You are an expert eBay arbitrage analyst and resale market specialist. 
+Analyze the provided item image and condition, then return a complete arbitrage assessment as JSON.
+All prices must end in .95. Be precise and realistic based on actual eBay sold listings data.
+Return ONLY valid JSON — no markdown, no preamble.`;
+
+        const SCOUT_SCHEMA = {
+            type: "OBJECT",
+            properties: {
+                itemTitle:        { type: "STRING" },
+                itemDescription:  { type: "STRING" },
+                priceLow:         { type: "NUMBER" },
+                priceMid:         { type: "NUMBER" },
+                priceHigh:        { type: "NUMBER" },
+                priceConfidence:  { type: "STRING" },
+                priceBasis:       { type: "STRING" },
+                sellThroughRate:  { type: "NUMBER" },
+                velocityLabel:    { type: "STRING" },
+                daysToSell:       { type: "NUMBER" },
+                weightOz:         { type: "NUMBER" },
+                packageLengthIn:  { type: "NUMBER" },
+                packageWidthIn:   { type: "NUMBER" },
+                packageHeightIn:  { type: "NUMBER" },
+            },
+            required: ["itemTitle","priceMid","sellThroughRate","velocityLabel","daysToSell","weightOz","packageLengthIn","packageWidthIn","packageHeightIn"]
+        };
+
+        // USPS Ground Advantage Zone 8 rate table (oz → cents, as of 2024 schedule)
+        // Source: USPS Retail Ground Advantage Zone 8 published rates
+        const getUspsZone8Rate = (weightOz, lengthIn, widthIn, heightIn) => {
+            // Dimensional weight check (USPS uses 139 divisor for Retail)
+            const dimWeight = (lengthIn * widthIn * heightIn) / 139;
+            const billableOz = Math.max(weightOz, dimWeight * 16);
+            const billableLbs = billableOz / 16;
+
+            // Zone 8 Ground Advantage rates (2024)
+            const rates = [
+                { max: 4/16,   price: 5.55 },
+                { max: 8/16,   price: 6.10 },
+                { max: 12/16,  price: 6.65 },
+                { max: 1,      price: 7.20 },
+                { max: 2,      price: 8.95 },
+                { max: 3,      price: 10.40 },
+                { max: 4,      price: 11.85 },
+                { max: 5,      price: 13.30 },
+                { max: 6,      price: 14.75 },
+                { max: 7,      price: 16.20 },
+                { max: 8,      price: 17.65 },
+                { max: 9,      price: 19.10 },
+                { max: 10,     price: 20.55 },
+                { max: 11,     price: 22.00 },
+                { max: 12,     price: 23.45 },
+                { max: 13,     price: 24.90 },
+                { max: 14,     price: 26.35 },
+                { max: 15,     price: 27.80 },
+                { max: 16,     price: 29.25 },
+                { max: 20,     price: 34.50 },
+                { max: 25,     price: 40.95 },
+                { max: 30,     price: 47.40 },
+                { max: 40,     price: 57.50 },
+                { max: 50,     price: 67.65 },
+                { max: 70,     price: 82.10 },
+            ];
+
+            for (const tier of rates) {
+                if (billableLbs <= tier.max) return tier.price;
+            }
+            return 82.10 + ((billableLbs - 70) * 0.80); // overage estimate
+        };
+
+        const calcArbitrage = (priceMid, purchasePrice, shippingCost) => {
+            const ebayFVF     = priceMid * 0.1325;
+            const paymentFee  = priceMid * 0.029 + 0.30;
+            const packaging   = 2.00;
+            const totalFees   = ebayFVF + paymentFee + packaging + shippingCost;
+            const netProfit   = priceMid - purchasePrice - totalFees;
+            const roi         = purchasePrice > 0 ? (netProfit / purchasePrice) * 100 : 0;
+            return { ebayFVF, paymentFee, packaging, shippingCost, totalFees, netProfit, roi };
+        };
+
+        const getVerdict = (netProfit) => {
+            if (netProfit >= 15)  return { label: '🟢 GO',       css: 'verdict-go',       tag: 'GO' };
+            if (netProfit >= 5)   return { label: '🟡 MARGINAL', css: 'verdict-marginal', tag: 'MARGINAL' };
+            return                       { label: '🔴 NO-GO',    css: 'verdict-nogo',     tag: 'NO-GO' };
+        };
+
+        const ArbitrageScout = ({ proxyUrl, ebayConditions, showToast }) => {
+            const [isOpen,        setIsOpen]        = useState(false);
+            const [scoutImage,    setScoutImage]     = useState(null);
+            const [condition,     setCondition]      = useState('3000');
+            const [purchasePrice, setPurchasePrice]  = useState('');
+            const [isRunning,     setIsRunning]      = useState(false);
+            const [scoutStatus,   setScoutStatus]    = useState('');
+            const [result,        setResult]         = useState(null);
+            const [history,       setHistory]        = useState([]); // session only, max 5
+            const [activeHistory, setActiveHistory]  = useState(null);
+            const [errorMsg,      setErrorMsg]       = useState(null);
+
+            const reset = () => {
+                setScoutImage(null); setCondition('3000'); setPurchasePrice('');
+                setResult(null); setErrorMsg(null); setScoutStatus(''); setActiveHistory(null);
+            };
+
+            const displayResult = activeHistory !== null ? history[activeHistory] : result;
+
+            const runScout = async () => {
+                if (!scoutImage || !purchasePrice) { setErrorMsg("Upload an image and enter purchase price."); return; }
+                setIsRunning(true); setErrorMsg(null); setResult(null);
+                try {
+                    setScoutStatus("Uploading image...");
+                    const b64 = await new Promise((res, rej) => {
+                        const r = new FileReader(); r.readAsDataURL(scoutImage.file);
+                        r.onload = e => res(e.target.result.split(',')[1]);
+                        r.onerror = () => rej(new Error("Read failed"));
+                    });
+
+                    const condLabel = ebayConditions.find(c => c.id === condition)?.label || 'Used';
+                    setScoutStatus("Running intel analysis...");
+
+                    const res = await fetch(proxyUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            model: "gemini-2.5-flash",
+                            contents: [{ role: "user", parts: [
+                                { text: `Analyze this item for eBay arbitrage. Condition: ${condLabel}. Provide realistic pricing based on actual eBay sold data, sell-through rate, days to sell, and estimated package dimensions for shipping.` },
+                                { inlineData: { mimeType: "image/jpeg", data: b64 } }
+                            ]}],
+                            systemInstruction: { parts: [{ text: SCOUT_SYSTEM_PROMPT }] },
+                            generationConfig: { responseMimeType: "application/json", responseSchema: SCOUT_SCHEMA }
+                        })
+                    });
+
+                    const data = await res.json();
+                    const raw  = data.candidates[0].content.parts[0].text.replace(/```json|```/g,'').trim();
+                    const ai   = JSON.parse(raw);
+
+                    setScoutStatus("Calculating shipping...");
+                    const shipping  = getUspsZone8Rate(ai.weightOz, ai.packageLengthIn, ai.packageWidthIn, ai.packageHeightIn);
+                    const purchase  = parseFloat(purchasePrice) || 0;
+                    const arb       = calcArbitrage(ai.priceMid, purchase, shipping);
+                    const verdict   = getVerdict(arb.netProfit);
+
+                    const scoutResult = {
+                        ...ai, condition: condLabel, purchasePrice: purchase,
+                        shipping, arb, verdict,
+                        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                        imageUrl: scoutImage.url
+                    };
+
+                    setResult(scoutResult);
+                    setHistory(prev => [scoutResult, ...prev].slice(0, 5));
+                    setActiveHistory(null);
+                } catch(e) { setErrorMsg("Scout failed: " + e.message); }
+                finally { setIsRunning(false); setScoutStatus(''); }
+            };
+
+            return (
+                <>
+                    {/* FAB */}
+                    <button
+                        onClick={() => { setIsOpen(true); reset(); }}
+                        className="fixed bottom-8 right-8 z-40 scout-fab bg-emerald-500 hover:bg-emerald-400 text-white rounded-2xl px-5 py-4 flex items-center gap-3 font-black text-[11px] uppercase tracking-widest transition-all active:scale-95 hover:scale-105"
+                    >
+                        <Icon name="Crosshair" size={20} />
+                        Scout
+                    </button>
+
+                    {/* Modal Backdrop */}
+                    {isOpen && (
+                        <div className="scout-modal-bg fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end md:items-center justify-center p-0 md:p-6" onClick={(e) => { if(e.target === e.currentTarget) setIsOpen(false); }}>
+                            <div className="scout-modal bg-white w-full md:max-w-2xl md:rounded-[2.5rem] rounded-t-[2.5rem] max-h-[92vh] overflow-y-auto no-scrollbar shadow-2xl">
+
+                                {/* Header */}
+                                <div className="sticky top-0 bg-white/95 backdrop-blur-sm border-b border-slate-100 px-8 py-5 flex items-center justify-between rounded-t-[2.5rem] z-10">
+                                    <div className="flex items-center gap-4">
+                                        <div className="w-10 h-10 bg-emerald-500 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-100">
+                                            <Icon name="Crosshair" size={20} className="text-white" />
+                                        </div>
+                                        <div>
+                                            <h2 className="text-base font-black uppercase tracking-tight leading-none">Arbitrage Scout</h2>
+                                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-0.5">eBay Flip Intel Engine</p>
+                                        </div>
+                                    </div>
+                                    <button onClick={() => setIsOpen(false)} className="p-2 hover:bg-slate-100 rounded-xl transition-colors">
+                                        <Icon name="X" size={20} className="text-slate-400" />
+                                    </button>
+                                </div>
+
+                                <div className="p-8 space-y-6">
+
+                                    {/* Session History */}
+                                    {history.length > 0 && (
+                                        <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200">
+                                            <p className="text-[8px] font-black uppercase text-slate-400 tracking-widest mb-3">Session History ({history.length}/5)</p>
+                                            <div className="space-y-1">
+                                                {history.map((h, i) => (
+                                                    <button key={i} onClick={() => { setActiveHistory(i); setResult(null); }}
+                                                        className={`scout-history-item w-full flex items-center gap-3 p-3 rounded-xl text-left ${activeHistory === i ? 'bg-emerald-50 border border-emerald-200' : 'border border-transparent'}`}>
+                                                        <img src={h.imageUrl} className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0" />
+                                                        <div className="flex-1 min-w-0">
+                                                            <p className="text-[10px] font-black text-slate-800 truncate">{h.itemTitle}</p>
+                                                            <p className="text-[9px] text-slate-400 font-bold">{h.timestamp} · ${h.arb.netProfit.toFixed(2)} net</p>
+                                                        </div>
+                                                        <span className={`text-[8px] font-black px-2 py-1 rounded-lg border ${h.verdict.css}`}>{h.verdict.tag}</span>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Input Panel — hide if viewing history */}
+                                    {activeHistory === null && (
+                                        <>
+                                            {/* Image Upload */}
+                                            <div className="relative border-2 border-dashed border-slate-300 rounded-2xl overflow-hidden hover:border-emerald-400 transition-colors">
+                                                <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer z-10"
+                                                    onChange={(e) => { if (e.target.files[0]) setScoutImage({ file: e.target.files[0], url: URL.createObjectURL(e.target.files[0]) }); }} />
+                                                {scoutImage ? (
+                                                    <div className="relative">
+                                                        <img src={scoutImage.url} className="w-full h-52 object-contain bg-slate-50" />
+                                                        <div className="absolute bottom-3 right-3 bg-emerald-500 text-white text-[9px] font-black px-3 py-1.5 rounded-full uppercase tracking-widest">Tap to Replace</div>
+                                                    </div>
+                                                ) : (
+                                                    <div className="py-12 text-center">
+                                                        <Icon name="Camera" size={40} className="text-slate-300 mb-3" />
+                                                        <p className="text-sm font-black text-slate-400 uppercase">Load Item Photo</p>
+                                                        <p className="text-[10px] text-slate-300 mt-1">Single image for item identification</p>
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {/* Condition + Price Row */}
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                                                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-2">Item Condition</p>
+                                                    <select value={condition} onChange={e => setCondition(e.target.value)}
+                                                        className="w-full bg-transparent text-[11px] font-black text-slate-800 focus:outline-none uppercase cursor-pointer">
+                                                        {ebayConditions.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                                                    </select>
+                                                </div>
+                                                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                                                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-2">Purchase Price</p>
+                                                    <div className="flex items-center gap-1">
+                                                        <span className="text-slate-400 font-black text-sm">$</span>
+                                                        <input type="number" step="0.01" min="0" value={purchasePrice}
+                                                            onChange={e => setPurchasePrice(e.target.value)}
+                                                            placeholder="0.00"
+                                                            className="w-full bg-transparent text-[11px] font-black text-slate-800 focus:outline-none placeholder-slate-300" />
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {errorMsg && (
+                                                <div className="bg-red-50 border border-red-200 rounded-2xl px-5 py-3 text-xs font-bold text-red-600">{errorMsg}</div>
+                                            )}
+
+                                            {/* Run Button */}
+                                            <button onClick={runScout} disabled={isRunning || !scoutImage || !purchasePrice}
+                                                className={`w-full py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest transition-all active:scale-95 shadow-lg flex items-center justify-center gap-3 ${isRunning || !scoutImage || !purchasePrice ? 'bg-slate-200 text-slate-400' : 'bg-emerald-500 text-white shadow-emerald-100 hover:bg-emerald-400'}`}>
+                                                {isRunning ? <><Icon name="Loader2" size={16} className="animate-spin" /> {scoutStatus || 'Running Scout...'}</> : <><Icon name="Zap" size={16} /> Run Arbitrage Intel</>}
+                                            </button>
+                                        </>
+                                    )}
+
+                                    {/* Back button when viewing history */}
+                                    {activeHistory !== null && (
+                                        <button onClick={() => setActiveHistory(null)} className="flex items-center gap-2 text-[10px] font-black text-slate-500 uppercase tracking-widest hover:text-slate-800 transition-colors">
+                                            <Icon name="ChevronLeft" size={14} /> New Scout
+                                        </button>
+                                    )}
+
+                                    {/* ── INTEL CARD ─────────────────────────────── */}
+                                    {displayResult && (() => {
+                                        const r = displayResult;
+                                        return (
+                                            <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-400">
+
+                                                {/* Verdict Banner */}
+                                                <div className={`rounded-2xl border-2 px-6 py-5 flex items-center justify-between ${r.verdict.css}`}>
+                                                    <div>
+                                                        <p className="text-2xl font-black leading-none">{r.verdict.label}</p>
+                                                        <p className="text-[10px] font-black uppercase tracking-widest mt-1 opacity-70">Arbitrage Verdict</p>
+                                                    </div>
+                                                    <div className="text-right">
+                                                        <p className="text-3xl font-black leading-none">${r.arb.netProfit.toFixed(2)}</p>
+                                                        <p className="text-[9px] font-black uppercase tracking-widest mt-1 opacity-70">Net Profit · {r.arb.roi.toFixed(0)}% ROI</p>
+                                                    </div>
+                                                </div>
+
+                                                {/* Item ID */}
+                                                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 flex gap-4">
+                                                    {r.imageUrl && <img src={r.imageUrl} className="w-20 h-20 rounded-xl object-cover border border-slate-200 shrink-0" />}
+                                                    <div className="min-w-0">
+                                                        <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1">Item Identified</p>
+                                                        <p className="text-sm font-black text-slate-900 leading-tight uppercase">{r.itemTitle}</p>
+                                                        <p className="text-[10px] text-slate-500 mt-1 leading-relaxed">{r.itemDescription}</p>
+                                                        <span className="text-[9px] font-black text-blue-500 bg-blue-50 border border-blue-100 px-2 py-1 rounded-lg mt-2 inline-block uppercase">{r.condition}</span>
+                                                    </div>
+                                                </div>
+
+                                                {/* Price Intel */}
+                                                <div className="bg-white border border-slate-200 rounded-2xl p-5">
+                                                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-4">eBay Market Intel — {r.priceConfidence} Confidence</p>
+                                                    <div className="flex items-end gap-3 mb-3">
+                                                        <div className="text-center flex-1 bg-slate-50 rounded-xl p-3 border border-slate-200">
+                                                            <p className="text-[8px] font-black text-slate-400 uppercase mb-1">Low</p>
+                                                            <p className="text-base font-black text-slate-500">${Number(r.priceLow || 0).toFixed(2)}</p>
+                                                        </div>
+                                                        <div className="text-center flex-1 bg-blue-50 rounded-xl p-3 border-2 border-blue-200">
+                                                            <p className="text-[8px] font-black text-blue-500 uppercase mb-1">Mid (Used)</p>
+                                                            <p className="text-xl font-black text-blue-700">${Number(r.priceMid || 0).toFixed(2)}</p>
+                                                        </div>
+                                                        <div className="text-center flex-1 bg-slate-50 rounded-xl p-3 border border-slate-200">
+                                                            <p className="text-[8px] font-black text-slate-400 uppercase mb-1">High</p>
+                                                            <p className="text-base font-black text-slate-500">${Number(r.priceHigh || 0).toFixed(2)}</p>
+                                                        </div>
+                                                    </div>
+                                                    <p className="text-[10px] text-slate-500 italic border-l-2 border-blue-200 pl-3 leading-relaxed">{r.priceBasis}</p>
+                                                </div>
+
+                                                {/* Sell-Through */}
+                                                <div className="bg-white border border-slate-200 rounded-2xl p-5">
+                                                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-4">Market Velocity</p>
+                                                    <div className="flex items-center gap-6">
+                                                        <div className="flex-1">
+                                                            <div className="flex justify-between mb-2">
+                                                                <span className="text-[9px] font-black text-slate-400 uppercase">Sell-Through Rate</span>
+                                                                <span className="text-[9px] font-black text-slate-700">{r.sellThroughRate}%</span>
+                                                            </div>
+                                                            <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
+                                                                <div className={`h-full rounded-full transition-all ${r.sellThroughRate >= 60 ? 'bg-emerald-400' : r.sellThroughRate >= 30 ? 'bg-amber-400' : 'bg-red-400'}`}
+                                                                    style={{ width: `${Math.min(r.sellThroughRate, 100)}%` }} />
+                                                            </div>
+                                                        </div>
+                                                        <div className="text-right shrink-0">
+                                                            <p className="text-lg font-black text-slate-800 leading-none">~{r.daysToSell}d</p>
+                                                            <p className="text-[8px] font-black text-slate-400 uppercase mt-0.5">Avg. Days to Sell</p>
+                                                        </div>
+                                                    </div>
+                                                    <div className="mt-3 bg-slate-50 rounded-xl px-4 py-2 border border-slate-100 inline-block">
+                                                        <span className="text-[10px] font-black text-slate-600 uppercase">{r.velocityLabel}</span>
+                                                    </div>
+                                                </div>
+
+                                                {/* Fee Breakdown */}
+                                                <div className="bg-white border border-slate-200 rounded-2xl p-5">
+                                                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-4">Cost Stack Breakdown</p>
+                                                    <div className="space-y-2.5">
+                                                        {[
+                                                            { label: 'Sale Price (eBay Mid)', val: r.priceMid, positive: true },
+                                                            { label: 'Purchase Cost', val: -r.purchasePrice },
+                                                            { label: `eBay Final Value Fee (13.25%)`, val: -r.arb.ebayFVF },
+                                                            { label: 'Payment Processing (2.9% + $0.30)', val: -r.arb.paymentFee },
+                                                            { label: 'Packaging Materials', val: -r.arb.packaging },
+                                                            { label: `USPS Ground Advantage Zone 8 (${r.weightOz}oz est.)`, val: -r.shipping },
+                                                        ].map((row, i) => (
+                                                            <div key={i} className={`flex justify-between items-center py-1.5 ${i < 5 ? 'border-b border-slate-100' : ''}`}>
+                                                                <span className="text-[10px] font-bold text-slate-600">{row.label}</span>
+                                                                <span className={`text-[11px] font-black ${row.positive ? 'text-emerald-600' : 'text-red-500'}`}>
+                                                                    {row.positive ? '+' : '-'}${Math.abs(row.val).toFixed(2)}
+                                                                </span>
+                                                            </div>
+                                                        ))}
+                                                        <div className="flex justify-between items-center pt-2 mt-1 border-t-2 border-slate-200">
+                                                            <span className="text-[11px] font-black text-slate-800 uppercase tracking-wide">Net Profit</span>
+                                                            <span className={`text-lg font-black ${r.arb.netProfit >= 15 ? 'text-emerald-600' : r.arb.netProfit >= 5 ? 'text-amber-600' : 'text-red-500'}`}>
+                                                                ${r.arb.netProfit.toFixed(2)}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                {/* Shipping Spec */}
+                                                <div className="bg-slate-50 border border-slate-100 rounded-2xl p-5">
+                                                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-3">Shipping Estimate — USPS Zone 8 (VA→CA)</p>
+                                                    <div className="grid grid-cols-4 gap-3">
+                                                        {[
+                                                            { label: 'Weight', val: `${r.weightOz}oz` },
+                                                            { label: 'Length', val: `${r.packageLengthIn}"` },
+                                                            { label: 'Width',  val: `${r.packageWidthIn}"` },
+                                                            { label: 'Height', val: `${r.packageHeightIn}"` },
+                                                        ].map((d, i) => (
+                                                            <div key={i} className="text-center bg-white rounded-xl p-3 border border-slate-200">
+                                                                <p className="text-[8px] font-black text-slate-400 uppercase mb-1">{d.label}</p>
+                                                                <p className="text-xs font-black text-slate-700">{d.val}</p>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                    <div className="flex justify-between items-center mt-4 bg-white rounded-xl px-4 py-3 border border-slate-200">
+                                                        <span className="text-[10px] font-black text-slate-600 uppercase">Estimated Shipping Cost</span>
+                                                        <span className="text-base font-black text-slate-800">${r.shipping.toFixed(2)}</span>
+                                                    </div>
+                                                </div>
+
+                                            </div>
+                                        );
+                                    })()}
+
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </>
+            );
+        };
+
+        // ─── END ARBITRAGE SCOUT ─────────────────────────────────────────────────
+
 
         const App = () => {
             const [user, setUser] = useState(null);
@@ -237,17 +657,17 @@
                     const cleanTitle = (l.title || "").substring(0, 80).replace(/"/g, '""');
                     const htmlDesc = `<div>${convertToHtml(l.markdownDescription)}</div>`;
                     const escapedDesc = htmlDesc.replace(/"/g, '""');
-                    const photoUrl = l.images?.[0] || "";
+                    const sku = l.sku || `BKA-${l.timestamp || Date.now()}`;
                     
                     return [
                         "Draft",                   // Action
-                        "",                        // Custom Label (SKU)
+                        sku,                       // Custom Label (SKU)
                         l.categoryId || "",        // Category ID
                         `"${cleanTitle}"`,         // Title
                         "",                        // UPC
                         Number(l.buyItNowPrice || 0).toFixed(2), // Price
                         "1",                       // Quantity
-                        `"${photoUrl}"`,           // Item photo URL
+                        `"${(l.images || []).slice(0, 12).join('|')}"`,           // Item photo URL (up to 12)
                         l.conditionId || "1000",   // Condition ID
                         `"${escapedDesc}"`,        // Description
                         "FixedPrice"               // Format
@@ -376,6 +796,7 @@ We take our reputation seriously, we buy and sell online, so we understand the v
                             images: urls, 
                             conditionId: batchCondition, 
                             timestamp: Date.now(),
+                            sku: `BKA-${Date.now()}`,
                             markdownDescription: fullDescription
                         });
                     }
@@ -392,7 +813,8 @@ We take our reputation seriously, we buy and sell online, so we understand the v
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             model: 'gemini-2.5-flash',
-                            contents: [{ parts: [{ text: `Estimate for: ${listing.title}. Condition: ${condition}. Return JSON: low, mid, high, confidence, basis.` }] }],
+                            contents: [{ role: "user", parts: [{ text: `Estimate current eBay market value for: "${listing.title}". Condition: ${condition}. Return ONLY JSON with keys: low, mid, high (all numbers ending in .95), confidence (string: Low/Medium/High), basis (string: brief 1-sentence rationale).` }] }],
+                            systemInstruction: { parts: [{ text: "You are an expert eBay pricing analyst specializing in firearms accessories, tactical gear, and general merchandise. Analyze real eBay sold listings data. All prices must end in .95. Return ONLY valid JSON with no markdown or preamble." }] },
                             generationConfig: { responseMimeType: "application/json" }
                         })
                     });
@@ -433,6 +855,7 @@ We take our reputation seriously, we buy and sell online, so we understand the v
             const sortedListings = [...listings].sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
 
             return (
+                <>
                 <div className="min-h-screen p-4 md:p-8 max-w-6xl mx-auto animate-in fade-in duration-700">
                     {toast && <div className="fixed top-8 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest shadow-2xl animate-in slide-in-from-top-4">{toast}</div>}
                     <header className="flex flex-col md:flex-row justify-between items-center mb-10 gap-4">
@@ -531,7 +954,7 @@ We take our reputation seriously, we buy and sell online, so we understand the v
                                                 {!editingCategoryId && (
                                                     <div className="flex flex-col items-end">
                                                         <span className="text-2xl font-black text-slate-900 tracking-tighter leading-none">${Number(l.buyItNowPrice || 0).toFixed(2)}</span>
-                                                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">ID: {l.categoryId || 'N/A'}</span>
+                                                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">SKU: {l.sku || 'N/A'}</span>
                                                     </div>
                                                 )}
                                             </div>
@@ -583,6 +1006,14 @@ We take our reputation seriously, we buy and sell online, so we understand the v
                     </main>
                     <footer className="mt-20 py-8 border-t text-center text-[9px] font-black uppercase tracking-[0.4em] text-slate-400 opacity-60 italic">© 2026 JDINJAX AUTOMATION • BLACK KNIGHT ARMAMENT • v{APP_VERSION}</footer>
                 </div>
+
+                {/* Arbitrage Scout FAB + Modal */}
+                <ArbitrageScout
+                    proxyUrl={PROXY_API_URL}
+                    ebayConditions={EBAY_CONDITIONS}
+                    showToast={showToast}
+                />
+                </>
             );
         };
         ReactDOM.createRoot(document.getElementById('root')).render(<App />);
