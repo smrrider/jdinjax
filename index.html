@@ -232,6 +232,22 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                 setResult(null); setErrorMsg(null); setScoutStatus(''); setActiveHistory(null);
             };
 
+            const purgeHistory = async () => {
+                if (!user || !dbRef || !dbRef.current) return;
+                if (!window.confirm('Clear all Scout history? This cannot be undone.')) return;
+                try {
+                    const path = `artifacts/jdinjax-console/users/${user.uid}/scoutHistory`;
+                    const snap = await dbRef.current.collection(path).get();
+                    if (snap.empty) return;
+                    const batch = dbRef.current.batch();
+                    snap.docs.forEach(d => batch.delete(d.ref));
+                    await batch.commit();
+                    setActiveHistory(null);
+                    setResult(null);
+                    showToast('Scout history cleared.');
+                } catch(e) { showToast('Purge failed: ' + e.message); }
+            };
+
             const displayResult = activeHistory !== null ? history[activeHistory] : result;
 
             const runScout = async () => {
@@ -339,7 +355,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                                     {/* Session History */}
                                     {history.length > 0 && (
                                         <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200">
-                                            <p className="text-[8px] font-black uppercase text-slate-400 tracking-widest mb-3">Scout History ({history.length}/20)</p>
+                                            <div className="flex items-center justify-between mb-3"><p className="text-[8px] font-black uppercase text-slate-400 tracking-widest">Scout History ({history.length}/20)</p><button onClick={purgeHistory} className="flex items-center gap-1 text-[8px] font-black uppercase tracking-widest text-red-400 hover:text-red-600 transition-colors px-2 py-1 rounded-lg hover:bg-red-50"><Icon name="Trash2" size={10}/> Clear</button></div>
                                             <div className="space-y-1">
                                                 {history.map((h, i) => (
                                                     <button key={i} onClick={() => { setActiveHistory(i); setResult(null); }}

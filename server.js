@@ -1,6 +1,6 @@
 /**
  * JDINJAX eBay Listing Pro Console — Unified Single-Port Server
- * Version: 5.1.0 (Gemini Two-Stage Category Resolution)
+ * Version: 5.2.0 (SerpApi Category Resolution + Gemini Fallback)
  * MISSION: Secure multi-user logistics, CSV mapping, and signed uploads.
  */
 
@@ -12,7 +12,7 @@ const crypto  = require('crypto');
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
-const APP_VERSION = "5.1.0";
+const APP_VERSION = "5.2.0";
 
 // ─── CATEGORY RESOLUTION ENGINE ─────────────────────────────────────────
 
@@ -63,89 +63,60 @@ app.post('/api/sign-upload', (req, res) => {
     res.json({ signature, folder });
 });
 
-/**
- * CATEGORY RESOLUTION ENGINE v3 — Gemini Two-Stage
- * Dedicated AI call focused purely on eBay category classification.
- * Seeded with BKA known-good category map for firearms/tactical inventory.
- * Falls back to Gemini general knowledge for out-of-scope items.
- */
+// ─── CATEGORY RESOLUTION ENGINE v4 ─────────────────────────────────────────
 
-const BKA_CATEGORY_SEED = `
-KNOWN eBay LEAF CATEGORIES FOR FIREARMS & TACTICAL GEAR (use these when applicable):
-- 73944  | Sporting Goods > Hunting > Scopes, Sights & Optics
-- 177882 | Sporting Goods > Hunting > Mounts & Rings
-- 73943  | Sporting Goods > Hunting > Stocks, Grips & Forends
-- 73938  | Sporting Goods > Hunting > Magazines & Clips
-- 177891 | Sporting Goods > Hunting > Cleaning Equipment & Supplies
-- 73949  | Sporting Goods > Hunting > Slings & Swivels
-- 177895 | Sporting Goods > Hunting > Lights, Lasers & Accessories
-- 73940  | Sporting Goods > Hunting > Holsters
-- 73936  | Sporting Goods > Hunting > Gun Parts
-- 177885 | Sporting Goods > Hunting > Handguards & Rail Systems
-- 177887 | Sporting Goods > Hunting > Triggers
-- 177889 | Sporting Goods > Hunting > Barrels
-- 177893 | Sporting Goods > Hunting > Suppressors & Silencers
-- 3259   | Sporting Goods > Hunting > Clothing & Footwear
-- 52387  | Sporting Goods > Hunting > Bags, Packs & Cases
-- 31771  | Sporting Goods > Tactical & Duty Gear
-- 57881  | Consumer Electronics > Batteries & Power Accessories
-- 175759 | Computers/Tablets > Cases, Bags & Covers
-- 20710  | Tools & Home Improvement > Tool Storage
-- 183446 | Home & Garden > Tools & Workshop Equipment
-`.trim();
+const resolveViaSerpApi = async (title) => {
+    const key = process.env.SERPAPI_KEY;
+    if (!key) throw new Error("SERPAPI_KEY not configured");
+    const params = new URLSearchParams({
+        engine: "ebay", _nkw: title, ebay_domain: "ebay.com", api_key: key
+    });
+    const response = await fetch("https://serpapi.com/search?" + params.toString());
+    if (!response.ok) throw new Error("SerpApi HTTP " + response.status);
+    const data = await response.json();
+    const cats = (data.categories || []).filter(c => c.id);
+    if (!cats.length) throw new Error("SerpApi returned no category IDs");
+    const best = cats[cats.length - 1]; // last = most specific leaf
+    const categoryId = String(best.id);
+    const categoryPath = BKA_CATEGORY_MAP[categoryId] || best.name || ("eBay Category " + categoryId);
+    console.log("[eBay Scout] SerpApi: ID " + categoryId + " -> " + categoryPath);
+    return { categoryId, categoryPath, confidence: "High", source: "SerpApi" };
+};
 
-app.post('/api/category-resolve', async (req, res) => {
-    const { title, keyFeatures = [], description = '' } = req.body;
+const resolveViaGemini = async (title, keyFeatures, description) => {
+    const seed = Object.entries(BKA_CATEGORY_MAP).map(([id,p]) => "- " + id + " | " + p).join("\n");
+    const prompt = "You are an eBay category expert.\n\nITEM: " + title +
+        "\nFEATURES: " + (keyFeatures.join(", ") || "N/A") +
+        "\nDESCRIPTION: " + (description || "").substring(0,200) +
+        "\n\nKNOWN BKA CATEGORIES:\n" + seed +
+        "\n\nReturn ONLY JSON: {categoryId, categoryPath, confidence, source:\"Gemini\"}";
+    const url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + process.env.GEMINI_API_KEY;
+    const resp = await fetch(url, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
+    });
+    const d = await resp.json();
+    const raw = (d.candidates?.[0]?.content?.parts?.[0]?.text || "").replace(/```json|```/g, "").trim();
+    const result = JSON.parse(raw);
+    console.log("[eBay Scout] Gemini fallback: " + result.categoryPath);
+    return { ...result, source: "Gemini" };
+};
+
+app.post("/api/category-resolve", async (req, res) => {
+    const { title, keyFeatures = [], description = "" } = req.body;
     if (!title) return res.status(400).json({ error: "Title required." });
-
-    const prompt = `You are an eBay category classification expert specializing in firearms accessories, tactical gear, and general merchandise.
-
-Your task: Identify the single most accurate eBay LEAF category for the item described below.
-
-ITEM TITLE: ${title}
-KEY FEATURES: ${keyFeatures.join(', ') || 'N/A'}
-DESCRIPTION CONTEXT: ${description.substring(0, 200) || 'N/A'}
-
-${BKA_CATEGORY_SEED}
-
-INSTRUCTIONS:
-1. Reason step by step about what this item is and what category best fits
-2. Prefer the most specific LEAF category — never use a parent/broad category
-3. If the item matches a known category above, use it exactly
-4. If not, provide the correct eBay leaf category from your knowledge
-5. Return ONLY valid JSON — no markdown, no preamble
-
-Return JSON with exactly these keys:
-{
-  "categoryId": "string — numeric eBay category ID",
-  "categoryPath": "string — full path e.g. Sporting Goods > Hunting > Scopes, Sights & Optics",
-  "confidence": "High | Medium | Low",
-  "reasoning": "one sentence explaining the classification"
-}`;
-
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
     try {
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                generationConfig: { responseMimeType: 'application/json' }
-            })
-        });
-        const data = await response.json();
-        const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        const clean = raw.replace(/```json|```/g, '').trim();
-        const result = JSON.parse(clean);
-        console.log(`[eBay Scout] 🎯 Category resolved: "${result.categoryPath}" (${result.confidence}) for: "${title}"`);
-        res.json(result);
+        return res.json(await resolveViaSerpApi(title));
+    } catch (serpErr) {
+        console.warn("[eBay Scout] SerpApi failed (" + serpErr.message + ") — Gemini fallback");
+    }
+    try {
+        return res.json(await resolveViaGemini(title, keyFeatures, description));
     } catch (err) {
-        console.error(`[eBay Scout] ❌ Category resolve failed for "${title}": ${err.message}`);
-        res.status(502).json({ error: 'Category resolution failed', detail: err.message });
+        res.status(502).json({ error: "Category resolution failed", detail: err.message });
     }
 });
 
-/**
  * GEMINI PROXY
  */
 app.post('/api/gemini', async (req, res) => {
@@ -165,5 +136,5 @@ app.post('/api/gemini', async (req, res) => {
 // Start Logistics Engine
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`[eBay Scout] 🚀 Black Knight Command Center: v${APP_VERSION} active on port ${PORT}`);
-    console.log(`[eBay Scout] 🎯 Gemini Category Resolution Engine: Ready`);
+    console.log(`[eBay Scout] 🛒 SerpApi Category Engine: ${process.env.SERPAPI_KEY ? 'Ready' : '⚠️  SERPAPI_KEY missing — Gemini fallback only'}`);
 });
