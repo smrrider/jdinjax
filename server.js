@@ -1,6 +1,6 @@
 /**
  * JDINJAX eBay Listing Pro Console — Unified Single-Port Server
- * Version: 5.3.0 (Hybrid: SerpApi Candidates + Gemini Selection)
+ * Version: 5.4.0 (Image Compression + Category Cache)
  * MISSION: Secure multi-user logistics, CSV mapping, and signed uploads.
  */
 
@@ -12,7 +12,7 @@ const crypto  = require('crypto');
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
-const APP_VERSION = "5.3.0";
+const APP_VERSION = "5.4.0";
 
 // ─── CATEGORY RESOLUTION ENGINE ─────────────────────────────────────────
 
@@ -91,6 +91,32 @@ app.post('/api/sign-upload', (req, res) => {
 // → Gemini selects the best match using item context.
 // Fallback: Pure Gemini w/ BKA seed map if SerpApi unavailable.
 
+// ── In-memory category cache ─────────────────────────────────────────────────
+// Key: normalized title string  Value: { result, expiresAt }
+// Max 200 entries, 2-hour TTL. Survives server restarts only in-process.
+const CATEGORY_CACHE     = new Map();
+const CACHE_TTL_MS       = 2 * 60 * 60 * 1000; // 2 hours
+const CACHE_MAX_ENTRIES  = 200;
+
+const cacheKey = (title) => title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().substring(0, 80);
+
+const cacheGet = (title) => {
+    const key = cacheKey(title);
+    const entry = CATEGORY_CACHE.get(key);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) { CATEGORY_CACHE.delete(key); return null; }
+    return { ...entry.result, source: entry.result.source + " (cached)" };
+};
+
+const cacheSet = (title, result) => {
+    const key = cacheKey(title);
+    // Evict oldest entry if at cap
+    if (CATEGORY_CACHE.size >= CACHE_MAX_ENTRIES) {
+        CATEGORY_CACHE.delete(CATEGORY_CACHE.keys().next().value);
+    }
+    CATEGORY_CACHE.set(key, { result, expiresAt: Date.now() + CACHE_TTL_MS });
+};
+
 const geminiPick = async (title, keyFeatures, description, candidates) => {
     const candidateList = candidates.map(c => `- ${c.id} | ${c.name}`).join("\n");
     const prompt =
@@ -142,16 +168,30 @@ const resolveViaGeminiOnly = async (title, keyFeatures, description) => {
 app.post("/api/category-resolve", async (req, res) => {
     const { title, keyFeatures = [], description = "" } = req.body;
     if (!title) return res.status(400).json({ error: "Title required." });
+
+    // ── Cache hit — instant return, no API calls ──────────────────────────────
+    const cached = cacheGet(title);
+    if (cached) {
+        console.log("[eBay Scout] Cache hit: " + title.substring(0, 40) + " → " + cached.categoryId);
+        return res.json(cached);
+    }
+
+    // ── Stage 1: Hybrid (SerpApi candidates + Gemini selection) ──────────────
     try {
         const candidates = await fetchSerpApiCandidates(title);
         const result = await geminiPick(title, keyFeatures, description, candidates);
         console.log("[eBay Scout] Hybrid result: " + result.categoryId + " -> " + result.categoryPath);
+        cacheSet(title, result);
         return res.json(result);
     } catch (err) {
         console.warn("[eBay Scout] Hybrid failed (" + err.message + ") — Gemini-only fallback");
     }
+
+    // ── Stage 2: Pure Gemini fallback ────────────────────────────────────────
     try {
-        return res.json(await resolveViaGeminiOnly(title, keyFeatures, description));
+        const result = await resolveViaGeminiOnly(title, keyFeatures, description);
+        cacheSet(title, result);
+        return res.json(result);
     } catch (err) {
         res.status(502).json({ error: "Category resolution failed", detail: err.message });
     }

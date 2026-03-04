@@ -266,18 +266,57 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                 if (!scoutImage || !purchasePrice) { setErrorMsg("Upload an image and enter purchase price."); return; }
                 setIsRunning(true); setErrorMsg(null); setResult(null);
                 try {
-                    setScoutStatus("Uploading image...");
-                    const scoutMimeType = scoutImage.file.type || 'image/jpeg';
-                    const b64 = await new Promise((res, rej) => {
-                        const r = new FileReader(); r.readAsDataURL(scoutImage.file);
-                        r.onload = e => res(e.target.result.split(',')[1]);
-                        r.onerror = () => rej(new Error("Read failed"));
+                    setScoutStatus("Compressing image...");
+                    // Single canvas pass produces blob (Cloudinary) + b64 (Gemini) simultaneously
+                    const { scoutBlob, b64, scoutMimeType } = await new Promise((res, rej) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            const MAX = 1024;
+                            let w = img.width, h = img.height;
+                            if (w > MAX || h > MAX) {
+                                if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
+                                else       { w = Math.round(w * MAX / h); h = MAX; }
+                            }
+                            const canvas = document.createElement('canvas');
+                            canvas.width = w; canvas.height = h;
+                            canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                            canvas.toBlob(blob => {
+                                const reader = new FileReader();
+                                reader.onload = e => res({ scoutBlob: blob, b64: e.target.result.split(',')[1], scoutMimeType: 'image/jpeg' });
+                                reader.readAsDataURL(blob);
+                            }, 'image/jpeg', 0.82);
+                        };
+                        img.onerror = () => rej(new Error("Image load failed"));
+                        img.src = scoutImage.url;
                     });
 
                     const condLabel = ebayConditions.find(c => c.id === condition)?.label || 'Used';
+
+                    // Cloudinary upload (async, non-blocking) — runs in parallel with Gemini
+                    const cloudinaryUpload = (async () => {
+                        try {
+                            const timestamp = Math.round(Date.now() / 1000);
+                            const signRes = await fetch(SIGN_API_URL, {
+                                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ userId: user.uid, timestamp })
+                            });
+                            const { signature, folder } = await signRes.json();
+                            const fd = new FormData();
+                            fd.append("file", scoutBlob);
+                            fd.append("api_key", CLOUDINARY_CONFIG.apiKey);
+                            fd.append("timestamp", timestamp);
+                            fd.append("signature", signature);
+                            fd.append("folder", folder);
+                            const upRes = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CONFIG.cloudName}/image/upload`, { method: "POST", body: fd });
+                            const upData = await upRes.json();
+                            return upData.secure_url || scoutImage.url;
+                        } catch(e) { console.warn('[Scout] Image upload failed:', e.message); return scoutImage.url; }
+                    })();
+
                     setScoutStatus("Running intel analysis...");
 
-                    const res = await fetch(proxyUrl, {
+                    // Gemini + Cloudinary race in parallel — net time = max(gemini, upload) not sum
+                    const geminiRes = fetch(proxyUrl, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -291,8 +330,8 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                         })
                     });
 
-                    const data = await res.json();
-                    const raw  = data.candidates[0].content.parts[0].text.replace(/```json|```/g,'').trim();
+                    const [geminiResponse, persistentImageUrl] = await Promise.all([geminiRes.then(r => r.json()), cloudinaryUpload]);
+                    const raw  = geminiResponse.candidates[0].content.parts[0].text.replace(/```json|```/g,'').trim();
                     const ai   = JSON.parse(raw);
 
                     setScoutStatus("Calculating shipping...");
@@ -307,7 +346,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                         ...ai, condition: condLabel, purchasePrice: purchase,
                         shipping, arb, verdict, shippingMode,
                         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                        imageUrl: scoutImage.url
+                        imageUrl: persistentImageUrl
                     };
 
                     setResult(scoutResult);
@@ -814,7 +853,34 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                         const batch = images.slice(i * step, (i * step) + step);
                         setStatus(`Processing ${i+1}/${total}...`);
 
-                        const uploadResults = await Promise.allSettled(batch.map(async img => {
+                        // ── Compress all images in batch ONCE, reuse for Cloudinary + Gemini ──
+                        const compressImage = (img, maxPx = 1400) => new Promise((resolve, reject) => {
+                            const image = new Image();
+                            image.onload = () => {
+                                let w = image.width, h = image.height;
+                                if (w > maxPx || h > maxPx) {
+                                    if (w > h) { h = Math.round(h * maxPx / w); w = maxPx; }
+                                    else       { w = Math.round(w * maxPx / h); h = maxPx; }
+                                }
+                                const canvas = document.createElement('canvas');
+                                canvas.width = w; canvas.height = h;
+                                canvas.getContext('2d').drawImage(image, 0, 0, w, h);
+                                canvas.toBlob(blob => {
+                                    const reader = new FileReader();
+                                    reader.onload = e => resolve({
+                                        blob,
+                                        b64: e.target.result.split(',')[1],
+                                        mimeType: 'image/jpeg'
+                                    });
+                                    reader.readAsDataURL(blob);
+                                }, 'image/jpeg', 0.82);
+                            };
+                            image.onerror = () => reject(new Error('Compress failed'));
+                            image.src = img.url;
+                        });
+                        const compressed = await Promise.all(batch.map(img => compressImage(img)));
+
+                        const uploadResults = await Promise.allSettled(compressed.map(async (comp, idx) => {
                             const timestamp = Math.round((new Date()).getTime() / 1000);
                             const signRes = await fetch(SIGN_API_URL, {
                                 method: 'POST',
@@ -823,7 +889,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                             });
                             const { signature, folder } = await signRes.json();
                             const fd = new FormData();
-                            fd.append("file", img.file);
+                            fd.append("file", comp.blob);  // compressed blob, not raw file
                             fd.append("api_key", CLOUDINARY_CONFIG.apiKey);
                             fd.append("timestamp", timestamp);
                             fd.append("signature", signature);
@@ -837,10 +903,9 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                         if (failedUploads > 0) showToast(`⚠️ ${failedUploads} image(s) failed to upload — skipped.`);
                         const urls = uploadResults.filter(r => r.status === 'fulfilled').map(r => r.value);
                         if (urls.length === 0) { setStatus(`Batch ${i+1} skipped — all uploads failed.`); continue; }
-                        
-                        const b64s = await Promise.all(batch.map(img => new Promise(res => {
-                            const r = new FileReader(); r.readAsDataURL(img.file); r.onload = e => res({ data: e.target.result.split(',')[1], mimeType: img.file.type || 'image/jpeg' });
-                        })));
+
+                        // Reuse already-compressed b64 — no second FileReader pass needed
+                        const b64s = compressed.map(comp => ({ data: comp.b64, mimeType: comp.mimeType }));
 
                         const res = await fetch(PROXY_API_URL, {
                             method: 'POST',
