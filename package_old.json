@@ -1,0 +1,24 @@
+{
+  "name": "jdinjax",
+  "version": "3.4.7",
+  "description": "JDINJAX eBay Listing Pro Console — Railway Edition",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "local": "node proxy.js"
+  },
+  "dependencies": {
+    "axios": "^1.13.6",
+    "cheerio": "^1.2.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
