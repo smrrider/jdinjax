@@ -200,22 +200,112 @@ app.post("/api/category-resolve", async (req, res) => {
 /**
  * GEMINI PROXY
  */
+// ── Barcode Search ────────────────────────────────────────────────────────
+
+// ── Barcode Search ────────────────────────────────────────────────────────────
+app.post('/api/barcode-search', async (req, res) => {
+    const { upc, engine = 'ebay' } = req.body;
+    if (!upc) return res.status(400).json({ error: 'UPC required' });
+    try {
+        const params = new URLSearchParams({ api_key: process.env.SERPAPI_KEY });
+        if (engine === 'amazon') {
+            params.set('engine', 'amazon');
+            params.set('k', upc);
+            params.set('amazon_domain', 'amazon.com');
+        } else {
+            params.set('engine', 'ebay');
+            params.set('_nkw', upc);
+        }
+        const response = await fetch('https://serpapi.com/search?' + params.toString());
+        const data = await response.json();
+        console.log('[Barcode] engine=' + engine + ' upc=' + upc + ' keys=' + Object.keys(data).join(','));
+
+        let results = [];
+        if (engine === 'ebay') {
+            const raw = data.organic_results || [];
+            results = raw.slice(0, 6).map(function(r) {
+                var priceStr = '';
+                if (typeof r.price === 'string') priceStr = r.price;
+                else if (r.price && r.price.extracted) priceStr = '$' + r.price.extracted;
+                return { title: r.title || '', price: priceStr, image: r.thumbnail || '', condition: r.condition || '', url: r.link || '' };
+            });
+        } else {
+            const raw = data.organic_results || [];
+            results = raw.slice(0, 6).map(function(r) {
+                return { title: r.title || '', price: r.price || '', image: r.thumbnail || '', condition: '', url: r.link || '' };
+            });
+        }
+        if (results.length === 0) {
+            console.warn('[Barcode] No results — snippet: ' + JSON.stringify(data).substring(0, 300));
+        }
+        res.json({ upc, engine, results });
+    } catch(e) {
+        console.error('[Barcode] Error:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ── Image Proxy (for barcode listing — fetch external image → b64 + Cloudinary) ─
+app.post('/api/proxy-image', async (req, res) => {
+    const { url } = req.body;
+    if (!url) return res.status(400).json({ error: 'URL required' });
+    try {
+        const imgRes = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        if (!imgRes.ok) throw new Error('Image fetch failed: ' + imgRes.status);
+        const arrayBuffer = await imgRes.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        const mimeType = imgRes.headers.get('content-type') || 'image/jpeg';
+        const b64 = buffer.toString('base64');
+
+        // Also upload to Cloudinary so the listing card has a persistent image
+        let cloudinaryUrl = null;
+        try {
+            const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+            const apiKey    = process.env.CLOUDINARY_API_KEY;
+            const apiSecret = process.env.CLOUDINARY_API_SECRET;
+            if (cloudName && apiKey && apiSecret) {
+                const crypto = require('crypto');
+                const timestamp = Math.round(Date.now() / 1000);
+                const folder = 'jdinjax/barcode';
+                const sigStr = 'folder=' + folder + '&timestamp=' + timestamp + apiSecret;
+                const signature = crypto.createHash('sha1').update(sigStr).digest('hex');
+                const form = new FormData();
+                const blob = new Blob([buffer], { type: mimeType });
+                form.append('file', blob, 'barcode-item.jpg');
+                form.append('api_key', apiKey);
+                form.append('timestamp', String(timestamp));
+                form.append('signature', signature);
+                form.append('folder', folder);
+                const upRes = await fetch('https://api.cloudinary.com/v1_1/' + cloudName + '/image/upload', { method: 'POST', body: form });
+                const upData = await upRes.json();
+                if (upData.secure_url) cloudinaryUrl = upData.secure_url;
+            }
+        } catch(e) { console.warn('[ProxyImage] Cloudinary upload failed:', e.message); }
+
+        res.json({ b64, mimeType, cloudinaryUrl });
+    } catch(e) {
+        console.error('[ProxyImage] Error:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ── Gemini Proxy ──────────────────────────────────────────────────────────────
 app.post('/api/gemini', async (req, res) => {
     const { model = 'gemini-2.5-flash', ...payload } = req.body;
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`;
     try {
-        const response = await fetch(url, { 
-            method: 'POST', 
-            headers: { 'Content-Type': 'application/json' }, 
-            body: JSON.stringify(payload) 
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
         });
         const data = await response.json();
         res.json(data);
     } catch (err) { res.status(502).json({ error: { message: err.message } }); }
 });
 
-// Start Logistics Engine
+// ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`[eBay Scout] 🚀 Black Knight Command Center: v${APP_VERSION} active on port ${PORT}`);
-    console.log(`[eBay Scout] 🛒 SerpApi Category Engine: ${process.env.SERPAPI_KEY ? 'Ready' : '⚠️  SERPAPI_KEY missing — Gemini fallback only'}`);
+    console.log(`[eBay Scout] 🛒 SerpApi Category Engine: ${process.env.SERPAPI_KEY ? 'Ready' : '⚠️  SERPAPI_KEY missing'}`);
 });

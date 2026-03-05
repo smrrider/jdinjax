@@ -19,10 +19,11 @@
     
     <!-- Script Imports (Tactical Baseline) -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/@babel/standalone@7.23.9/babel.min.js" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/lucide@0.263.0" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js" crossorigin="anonymous"></script>
     <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore-compat.js"></script>
@@ -48,15 +49,60 @@
         .verdict-nogo { background: linear-gradient(135deg, #fee2e2, #fecaca); border-color: #fca5a5; color: #7f1d1d; }
         .scout-history-item { transition: all 0.15s ease; }
         .scout-history-item:hover { background: #f1f5f9; }
+        /* Desktop 3-panel layout */
+        .desktop-layout { display: flex; height: 100vh; overflow: hidden; }
+        .panel-left { width: 240px; min-width: 240px; height: 100vh; overflow-y: auto; border-right: 1px solid #e2e8f0; background: #ffffff; }
+        .panel-center { flex: 1; height: 100vh; overflow-y: auto; background: #f1f5f9; }
+        .panel-right { width: 400px; min-width: 400px; height: 100vh; overflow-y: auto; border-left: 1px solid #e2e8f0; background: #ffffff; }
+        /* Scanner overlay */
+        .scanner-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.92); z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .scanner-viewport { position: relative; width: 100%; height: 420px; border-radius: 16px; overflow: hidden; }
+        .scanner-viewport video { width: 100%; height: 100%; object-fit: cover; }
+        .scanner-corner { position: absolute; width: 32px; height: 32px; border-color: #10b981; border-style: solid; }
+        .scanner-corner.tl { top: 8px; left: 8px; border-width: 3px 0 0 3px; border-radius: 4px 0 0 0; }
+        .scanner-corner.tr { top: 8px; right: 8px; border-width: 3px 3px 0 0; border-radius: 0 4px 0 0; }
+        .scanner-corner.bl { bottom: 8px; left: 8px; border-width: 0 0 3px 3px; border-radius: 0 0 0 4px; }
+        .scanner-corner.br { bottom: 8px; right: 8px; border-width: 0 3px 3px 0; border-radius: 0 0 4px 0; }
+        .scan-line { position: absolute; left: 8px; right: 8px; height: 2px; background: linear-gradient(90deg, transparent, #10b981, transparent); animation: scanLine 2s ease-in-out infinite; }
+        @keyframes scanLine { 0%,100% { top: 10%; } 50% { top: 85%; } }
     </style>
 </head>
 <body class="bg-slate-100 text-slate-900">
     <div id="root"></div>
+    <script>
+    window._loadErrors = [];
+    window.onerror = function(msg, src, line, col, err) {
+        var info = '<div style="font-family:monospace;padding:20px;background:#fee2e2;color:#991b1b;border-radius:8px;margin:20px">'
+            + '<h2 style="margin:0 0 12px">App Error</h2>'
+            + '<p><b>Message:</b> ' + msg + '</p>'
+            + '<p><b>Source:</b> ' + (src||'unknown') + '</p>'
+            + '<p><b>Line:</b> ' + line + ':' + col + '</p>'
+            + '<pre style="background:#fca5a5;padding:8px;border-radius:4px;overflow:auto;white-space:pre-wrap">' + (err && err.stack ? err.stack : 'no stack') + '</pre>';
+        if (window._loadErrors.length) {
+            info += '<p><b>Failed script loads:</b></p><ul>' + window._loadErrors.map(function(e){return '<li>'+e+'</li>';}).join('') + '</ul>';
+        }
+        info += '</div>';
+        document.getElementById('root').innerHTML = info;
+        return true;
+    };
+    // Detect which CDN scripts fail to load
+    document.addEventListener('error', function(e) {
+        if (e.target && e.target.src) {
+            window._loadErrors.push(e.target.src);
+            document.getElementById('root').innerHTML = '<div style="font-family:monospace;padding:20px;background:#fee2e2;color:#991b1b;border-radius:8px;margin:20px">'
+                + '<h2>CDN Load Failure</h2>'
+                + '<p>Failed to load: <b>' + e.target.src + '</b></p>'
+                + '<p>Check your internet connection or firewall blocking unpkg.com/CDN URLs.</p>'
+                + '</div>';
+        }
+    }, true);
+    console.log('[JDINJAX] v5.5.0 loading - checking CDN...');
+    </script>
 
     <script type="text/babel">
         const { useState, useEffect, useCallback, useRef } = React;
 
-        const APP_VERSION = "5.1.0"; // Category: Gemini two-stage resolution engine, CSV retired
+        const APP_VERSION = "5.5.0"; // 3-panel desktop + barcode scanner
 
         const _host    = window.location.hostname;
         const _isLocal = (_host === '127.0.0.1' || _host === 'localhost' || _host === '');
@@ -64,6 +110,7 @@
         const CONFIG_URL       = _isLocal ? 'http://127.0.0.1:3001/api/config' : '/api/config';
         const SIGN_API_URL     = _isLocal ? 'http://127.0.0.1:3001/api/sign-upload' : '/api/sign-upload';
         const CATEGORY_API_URL = _isLocal ? 'http://127.0.0.1:3001/api/category-resolve' : '/api/category-resolve';
+        const BARCODE_API_URL  = _isLocal ? 'http://127.0.0.1:3001/api/barcode-search' : '/api/barcode-search';
 
         let firebaseConfig    = null;
         let CLOUDINARY_CONFIG = null;
@@ -78,12 +125,12 @@
         const getListingsPath = (uid) => `artifacts/jdinjax-console/users/${uid}/listings`;
 
         const EBAY_CONDITIONS = [
-            { id: '1000', label: 'New' }, { id: '1500', label: 'New — Other' }, { id: '1750', label: 'New — Open Box' },
-            { id: '2000', label: 'Seller Refurbished' }, { id: '2500', label: 'Used — Like New' }, { id: '3000', label: 'Used — Good' },
-            { id: '4000', label: 'Used — Acceptable' }, { id: '7000', label: 'For Parts / Not Working' }
+            { id: '1000', label: 'New' }, { id: '1500', label: 'New  -  Other' }, { id: '1750', label: 'New  -  Open Box' },
+            { id: '2000', label: 'Seller Refurbished' }, { id: '2500', label: 'Used  -  Like New' }, { id: '3000', label: 'Used  -  Good' },
+            { id: '4000', label: 'Used  -  Acceptable' }, { id: '7000', label: 'For Parts / Not Working' }
         ];
 
-        const JDINJAX_SYSTEM_PROMPT = "Role: eBay Listing Pro for Black Knight Armament. Identify the item in the photos. Title STRICT MAX 80 CHARS. Prices should end in .95. Calculate initial price assuming NEW/Excellent condition. For categoryId and categoryPath: be as specific as possible — use the deepest applicable eBay leaf category. For firearms accessories use categories like 73944 (Scopes, Sights & Optics), 73943 (Grips, Forends & Stocks), 73938 (Magazines), 177891 (Cleaning Equipment), 73949 (Slings & Swivels). For general items use the most precise leaf node. Format response as JSON strictly.";
+        const JDINJAX_SYSTEM_PROMPT = "Role: eBay Listing Pro for Black Knight Armament. Identify the item in the photos. Title STRICT MAX 80 CHARS. Prices should end in .95. Calculate initial price assuming NEW/Excellent condition. For categoryId and categoryPath: be as specific as possible  -  use the deepest applicable eBay leaf category. For firearms accessories use categories like 73944 (Scopes, Sights & Optics), 73943 (Grips, Forends & Stocks), 73938 (Magazines), 177891 (Cleaning Equipment), 73949 (Slings & Swivels). For general items use the most precise leaf node. Format response as JSON strictly.";
 
 
 
@@ -100,7 +147,10 @@
                 weightItem: { type: "STRING" },
                 weightPackaging: { type: "STRING" },
                 weightTotal: { type: "STRING" },
-                dimensions: { type: "STRING" }
+                dimensions:          { type: "STRING" },
+                brand:               { type: "STRING" },
+                itemType:            { type: "STRING" },
+                markdownDescription: { type: "STRING" }
             },
             required: ["title", "buyItNowPrice", "categoryId", "categoryPath", "weightItem", "dimensions"]
         };
@@ -116,12 +166,247 @@
             }, [name, size]);
             return <span ref={ref} className={`inline-block align-middle leading-none ${className}`}></span>;
         };
-        // ─── ARBITRAGE SCOUT ─────────────────────────────────────────────────────
+        // --- BARCODE SCANNER -----------------------------------------------------
+
+        const BarcodeScanner = ({ onScan, onClose }) => {
+            const videoRef   = useRef(null);
+            const readerRef  = useRef(null);
+            const inputRef   = useRef(null);
+            const [mode, setMode]     = useState('input');   // 'input' | 'camera'
+            const [manualVal, setManualVal] = useState('');
+            const [camError, setCamError]   = useState(null);
+            const [camActive, setCamActive] = useState(false);
+
+            // Auto-focus the text input when modal opens
+            useEffect(() => {
+                if (mode === 'input') {
+                    setTimeout(() => inputRef.current && inputRef.current.focus(), 120);
+                }
+            }, [mode]);
+
+            // Start camera when switching to camera mode
+            useEffect(() => {
+                if (mode !== 'camera') return;
+                if (!window.ZXing) { setCamError('Scanner library not loaded.'); return; }
+                const codeReader = new window.ZXing.BrowserMultiFormatReader();
+                readerRef.current = codeReader;
+                setCamActive(true);
+                codeReader.decodeFromVideoDevice(null, videoRef.current, (result, err) => {
+                    if (result) { codeReader.reset(); onScan(result.getText()); }
+                    if (err && !(err instanceof window.ZXing.NotFoundException)) console.warn('[Scanner]', err);
+                }).catch(() => setCamError('Camera access denied. Check browser permissions.'));
+                return () => { try { codeReader.reset(); } catch(e){} };
+            }, [mode]);
+
+            const stopCamera = () => {
+                if (readerRef.current) try { readerRef.current.reset(); } catch(e){}
+                setCamActive(false);
+            };
+
+            const handleKeyDown = (e) => {
+                if (e.key === 'Enter' && manualVal.trim().length >= 4) {
+                    onScan(manualVal.trim());
+                }
+            };
+
+            const handleSubmit = () => {
+                if (manualVal.trim().length >= 4) onScan(manualVal.trim());
+            };
+
+            return (
+                <div className="scanner-overlay" onClick={(e) => { if (e.target === e.currentTarget) { stopCamera(); onClose(); }}}>
+                    <div className="bg-slate-900 border border-slate-700 rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl mx-4">
+
+                        {/* Header */}
+                        <div className="px-6 py-5 border-b border-slate-700 flex items-center justify-between">
+                            <div>
+                                <p className="text-white font-black text-sm uppercase tracking-widest">Barcode Lookup</p>
+                                <p className="text-slate-400 text-[10px] mt-0.5 uppercase tracking-widest">Gun · Keyboard · Camera</p>
+                            </div>
+                            <button onClick={() => { stopCamera(); onClose(); }} className="text-slate-500 hover:text-white transition-colors p-1">
+                                <Icon name="X" size={18}/>
+                            </button>
+                        </div>
+
+                        {/* Mode toggle */}
+                        <div className="px-6 pt-5 flex gap-2">
+                            <button onClick={() => { stopCamera(); setMode('input'); }}
+                                className={"flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 " + (mode === 'input' ? "bg-emerald-500 text-white shadow-md" : "bg-slate-800 text-slate-400 hover:bg-slate-700")}>
+                                <Icon name="Keyboard" size={13}/> Type / Gun
+                            </button>
+                            <button onClick={() => setMode('camera')}
+                                className={"flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 " + (mode === 'camera' ? "bg-emerald-500 text-white shadow-md" : "bg-slate-800 text-slate-400 hover:bg-slate-700")}>
+                                <Icon name="Camera" size={13}/> Camera
+                            </button>
+                        </div>
+
+                        {/* Input mode */}
+                        {mode === 'input' && (
+                            <div className="px-6 py-5 space-y-4">
+                                <div className="bg-slate-800 border border-slate-600 rounded-2xl px-4 py-3 flex items-center gap-3 focus-within:border-emerald-500 transition-colors">
+                                    <Icon name="ScanLine" size={18} className="text-emerald-400 shrink-0"/>
+                                    <input
+                                        ref={inputRef}
+                                        type="text"
+                                        value={manualVal}
+                                        onChange={e => setManualVal(e.target.value)}
+                                        onKeyDown={handleKeyDown}
+                                        placeholder="Scan or type barcode..."
+                                        className="flex-1 bg-transparent text-white font-black text-sm placeholder-slate-500 focus:outline-none tracking-widest"
+                                        autoComplete="off"
+                                        autoCorrect="off"
+                                        spellCheck={false}
+                                    />
+                                    {manualVal.length > 0 && (
+                                        <button onClick={() => setManualVal('')} className="text-slate-500 hover:text-white transition-colors">
+                                            <Icon name="X" size={14}/>
+                                        </button>
+                                    )}
+                                </div>
+                                <p className="text-slate-500 text-[10px] uppercase tracking-widest text-center">
+                                    Scanning gun fires on trigger · Keyboard press Enter
+                                </p>
+                                <button onClick={handleSubmit} disabled={manualVal.trim().length < 4}
+                                    className={"w-full py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-2 " + (manualVal.trim().length >= 4 ? "bg-emerald-500 text-white hover:bg-emerald-400 shadow-lg shadow-emerald-900/50" : "bg-slate-800 text-slate-600 cursor-not-allowed")}>
+                                    <Icon name="Search" size={14}/> Search
+                                </button>
+                            </div>
+                        )}
+
+                        {/* Camera mode */}
+                        {mode === 'camera' && (
+                            <div className="px-6 py-5">
+                                {camError ? (
+                                    <div className="bg-red-900/50 border border-red-700 rounded-2xl px-5 py-4 text-center">
+                                        <p className="text-red-300 text-sm font-bold">{camError}</p>
+                                        <button onClick={() => { setCamError(null); setMode('input'); }} className="mt-3 px-5 py-2 bg-red-500 text-white rounded-xl text-xs font-black uppercase">Back to Input</button>
+                                    </div>
+                                ) : (
+                                    <div className="scanner-viewport mx-auto">
+                                        <video ref={videoRef} className="w-full h-full object-cover" />
+                                        <div className="scanner-corner tl" /><div className="scanner-corner tr" />
+                                        <div className="scanner-corner bl" /><div className="scanner-corner br" />
+                                        <div className="scan-line" />
+                                    </div>
+                                )}
+                                {!camError && (
+                                    <p className="text-slate-500 text-[10px] uppercase tracking-widest text-center mt-4">
+                                        UPC · EAN · QR · Code128  -  auto-detects
+                                    </p>
+                                )}
+                            </div>
+                        )}
+
+                        <div className="px-6 pb-6">
+                            <button onClick={() => { stopCamera(); onClose(); }} className="w-full py-3 bg-slate-800 text-slate-400 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-700 transition-all">
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ScanResult = ({ upc, onClose, onSendToScout, onSendToListing, showToast }) => {
+            const [engine, setEngine]     = useState('ebay');
+            const [loading, setLoading]   = useState(true);
+            const [results, setResults]   = useState([]);
+            const [topTitle, setTopTitle] = useState('');
+            const [selected, setSelected] = useState(0);
+
+            useEffect(() => { doSearch('ebay'); }, []);
+
+            const doSearch = async (eng) => {
+                setLoading(true); setEngine(eng);
+                try {
+                    const res = await fetch(BARCODE_API_URL, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ upc, engine: eng })
+                    });
+                    const d = await res.json();
+                    setResults(d.results || []);
+                    setTopTitle(d.results?.[0]?.title || '');
+                    setSelected(0);
+                } catch(e) { showToast('Search failed: ' + e.message); }
+                finally { setLoading(false); }
+            };
+
+            const selectedItem = results[selected] || {};
+
+            return (
+                <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={(e) => { if(e.target===e.currentTarget) onClose(); }}>
+                    <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden">
+                        {/* Header */}
+                        <div className="bg-slate-900 px-6 py-4 flex items-center justify-between">
+                            <div>
+                                <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Barcode Detected</p>
+                                <p className="text-emerald-400 font-black text-sm tracking-wider">{upc}</p>
+                            </div>
+                            <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors"><Icon name="X" size={18}/></button>
+                        </div>
+
+                        {/* Engine toggle */}
+                        <div className="px-6 pt-5 flex gap-2">
+                            {['ebay','amazon'].map(eng => (
+                                <button key={eng} onClick={() => doSearch(eng)}
+                                    className={"flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all " + (engine===eng ? (eng==='ebay' ? 'bg-blue-600 text-white shadow-md' : 'bg-orange-500 text-white shadow-md') : 'bg-slate-100 text-slate-500 hover:bg-slate-200')}>
+                                    {eng === 'ebay' ? 'eBay' : 'Amazon'}
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* Results */}
+                        <div className="px-6 py-4 max-h-64 overflow-y-auto no-scrollbar">
+                            {loading ? (
+                                <div className="flex items-center justify-center py-8 gap-3">
+                                    <Icon name="Loader2" size={20} className="text-blue-500 animate-spin" />
+                                    <span className="text-[11px] font-black text-slate-400 uppercase">Searching {engine}...</span>
+                                </div>
+                            ) : results.length === 0 ? (
+                                <div className="text-center py-8">
+                                    <p className="text-[11px] font-black text-slate-400 uppercase">No results found</p>
+                                    <p className="text-[10px] text-slate-300 mt-1">Try the other marketplace</p>
+                                </div>
+                            ) : results.map((r, i) => (
+                                <div key={i} onClick={() => setSelected(i)}
+                                    className={"flex gap-3 p-3 rounded-2xl cursor-pointer transition-all mb-2 border " + (selected===i ? 'bg-blue-50 border-blue-200' : 'bg-slate-50 border-transparent hover:border-slate-200')}>
+                                    {r.image && <img src={r.image} className="w-12 h-12 rounded-xl object-cover border border-slate-200 shrink-0" />}
+                                    <div className="min-w-0 flex-1">
+                                        <p className="text-[10px] font-black text-slate-800 leading-tight line-clamp-2">{r.title}</p>
+                                        {r.price && <p className="text-[11px] font-black text-emerald-600 mt-1">{r.price}</p>}
+                                        {r.condition && <p className="text-[9px] text-slate-400 uppercase mt-0.5">{r.condition}</p>}
+                                    </div>
+                                    {selected===i && <div className="w-4 h-4 bg-blue-600 rounded-full shrink-0 mt-1 flex items-center justify-center"><Icon name="Check" size={10} className="text-white"/></div>}
+                                </div>
+                            ))}
+                        </div>
+
+                        {/* Destination buttons */}
+                        {!loading && results.length > 0 && (
+                            <div className="px-6 pb-6 grid grid-cols-2 gap-3 border-t border-slate-100 pt-4">
+                                <button onClick={() => onSendToScout(selectedItem, upc)}
+                                    className="py-4 bg-emerald-500 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-emerald-100 hover:bg-emerald-400 transition-all active:scale-95 flex flex-col items-center gap-1">
+                                    <Icon name="Zap" size={16}/>
+                                    Send to Scout
+                                </button>
+                                <button onClick={() => onSendToListing(selectedItem, upc)}
+                                    className="py-4 bg-blue-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-blue-100 hover:bg-blue-500 transition-all active:scale-95 flex flex-col items-center gap-1">
+                                    <Icon name="FileText" size={16}/>
+                                    Send to Listing
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        // --- ARBITRAGE SCOUT -----------------------------------------------------
 
         const SCOUT_SYSTEM_PROMPT = `You are an expert eBay arbitrage analyst and resale market specialist. 
 Analyze the provided item image and condition, then return a complete arbitrage assessment as JSON.
 All prices must end in .95. Be precise and realistic based on actual eBay sold listings data.
-Return ONLY valid JSON — no markdown, no preamble.`;
+Return ONLY valid JSON  -  no markdown, no preamble.`;
 
         const SCOUT_SCHEMA = {
             type: "OBJECT",
@@ -144,7 +429,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
             required: ["itemTitle","priceMid","sellThroughRate","velocityLabel","daysToSell","weightOz","packageLengthIn","packageWidthIn","packageHeightIn"]
         };
 
-        // USPS Ground Advantage Zone 8 rate table (oz → cents, as of 2024 schedule)
+        // USPS Ground Advantage Zone 8 rate table (oz -> cents, as of 2024 schedule)
         // Source: USPS Retail Ground Advantage Zone 8 published rates
         const getUspsZone8Rate = (weightOz, lengthIn, widthIn, heightIn) => {
             // Dimensional weight check (USPS uses 139 divisor for Retail)
@@ -206,12 +491,12 @@ Return ONLY valid JSON — no markdown, no preamble.`;
         };
 
         const getVerdict = (netProfit) => {
-            if (netProfit >= 15)  return { label: '🟢 GO',       css: 'verdict-go',       tag: 'GO' };
-            if (netProfit >= 5)   return { label: '🟡 MARGINAL', css: 'verdict-marginal', tag: 'MARGINAL' };
-            return                       { label: '🔴 NO-GO',    css: 'verdict-nogo',     tag: 'NO-GO' };
+            if (netProfit >= 15)  return { label: 'GO',       css: 'verdict-go',       tag: 'GO' };
+            if (netProfit >= 5)   return { label: 'MARGINAL', css: 'verdict-marginal', tag: 'MARGINAL' };
+            return                       { label: 'NO-GO',    css: 'verdict-nogo',     tag: 'NO-GO' };
         };
 
-        const ArbitrageScout = ({ proxyUrl, ebayConditions, showToast, dbRef, user }) => {
+        const ArbitrageScout = ({ proxyUrl, ebayConditions, showToast, dbRef, user, inline = false, scanPreload = null, onScanRequest, onSendToProcessing }) => {
             const [isOpen,        setIsOpen]        = useState(false);
             const [scoutImage,    setScoutImage]     = useState(null);
             const [condition,     setCondition]      = useState('3000');
@@ -224,6 +509,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
             const [confirmPurge,  setConfirmPurge]   = useState(false);
             const [shippingMode,    setShippingMode]   = useState('flat');
             const [flatShippingFee, setFlatShippingFee] = useState('6.95');
+            const [barcodePreload,  setBarcodePreload]  = useState(null);
             const [errorMsg,      setErrorMsg]       = useState(null);
 
             // Load Scout history from Firestore on mount
@@ -237,6 +523,18 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                     });
                 return () => unsubscribe();
             }, [user, dbRef]);
+
+            // Handle barcode preload from scan
+            useEffect(() => {
+                if (!scanPreload) return;
+                setBarcodePreload(scanPreload);
+                setIsOpen(true);
+                // Auto-fill purchase price from market price if available
+                if (scanPreload.price) {
+                    const numeric = parseFloat(scanPreload.price.replace(/[^0-9.]/g, ''));
+                    if (numeric > 0) setPurchasePrice(String(numeric.toFixed(2)));
+                }
+            }, [scanPreload]);
 
             const reset = () => {
                 setScoutImage(null); setCondition('3000'); setPurchasePrice('');
@@ -263,37 +561,45 @@ Return ONLY valid JSON — no markdown, no preamble.`;
             const displayResult = activeHistory !== null ? history[activeHistory] : result;
 
             const runScout = async () => {
-                if (!scoutImage || !purchasePrice) { setErrorMsg("Upload an image and enter purchase price."); return; }
+                const hasBarcode = !!barcodePreload;
+                if (!scoutImage && !hasBarcode) { setErrorMsg("Upload an image or scan a barcode first."); return; }
+                if (purchasePrice === '' || purchasePrice === null || purchasePrice === undefined) { setErrorMsg("Enter a purchase price."); return; }
                 setIsRunning(true); setErrorMsg(null); setResult(null);
                 try {
-                    setScoutStatus("Compressing image...");
-                    // Single canvas pass produces blob (Cloudinary) + b64 (Gemini) simultaneously
-                    const { scoutBlob, b64, scoutMimeType } = await new Promise((res, rej) => {
-                        const img = new Image();
-                        img.onload = () => {
-                            const MAX = 1024;
-                            let w = img.width, h = img.height;
-                            if (w > MAX || h > MAX) {
-                                if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
-                                else       { w = Math.round(w * MAX / h); h = MAX; }
-                            }
-                            const canvas = document.createElement('canvas');
-                            canvas.width = w; canvas.height = h;
-                            canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-                            canvas.toBlob(blob => {
-                                const reader = new FileReader();
-                                reader.onload = e => res({ scoutBlob: blob, b64: e.target.result.split(',')[1], scoutMimeType: 'image/jpeg' });
-                                reader.readAsDataURL(blob);
-                            }, 'image/jpeg', 0.82);
-                        };
-                        img.onerror = () => rej(new Error("Image load failed"));
-                        img.src = scoutImage.url;
-                    });
-
+                    // Skip compression if no image  -  barcode text-only path
+                    let scoutBlob = null, b64 = null, scoutMimeType = null;
+                    if (scoutImage) {
+                        setScoutStatus("Compressing image...");
+                        const compressed = await new Promise((res, rej) => {
+                            const img = new Image();
+                            img.onload = () => {
+                                const MAX = 1024;
+                                let w = img.width, h = img.height;
+                                if (w > MAX || h > MAX) {
+                                    if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
+                                    else       { w = Math.round(w * MAX / h); h = MAX; }
+                                }
+                                const canvas = document.createElement('canvas');
+                                canvas.width = w; canvas.height = h;
+                                canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                                canvas.toBlob(blob => {
+                                    const reader = new FileReader();
+                                    reader.onload = e => res({ scoutBlob: blob, b64: e.target.result.split(',')[1], scoutMimeType: 'image/jpeg' });
+                                    reader.readAsDataURL(blob);
+                                }, 'image/jpeg', 0.82);
+                            };
+                            img.onerror = () => rej(new Error("Image load failed"));
+                            img.src = scoutImage.url;
+                        });
+                        scoutBlob = compressed.scoutBlob;
+                        b64 = compressed.b64;
+                        scoutMimeType = compressed.scoutMimeType;
+                    } // end if(scoutImage)
                     const condLabel = ebayConditions.find(c => c.id === condition)?.label || 'Used';
 
-                    // Cloudinary upload (async, non-blocking) — runs in parallel with Gemini
+                    // Cloudinary upload  -  skip if no image (barcode text-only mode)
                     const cloudinaryUpload = (async () => {
+                        if (!scoutBlob) return barcodePreload?.image || null;
                         try {
                             const timestamp = Math.round(Date.now() / 1000);
                             const signRes = await fetch(SIGN_API_URL, {
@@ -315,16 +621,22 @@ Return ONLY valid JSON — no markdown, no preamble.`;
 
                     setScoutStatus("Running intel analysis...");
 
-                    // Gemini + Cloudinary race in parallel — net time = max(gemini, upload) not sum
+                    // Build Gemini parts  -  image if available, barcode title if not
+                    const geminiParts = [];
+                    if (hasBarcode && barcodePreload.title) {
+                        geminiParts.push({ text: `Item: ${barcodePreload.title}${barcodePreload.price ? '. Current market price: ' + barcodePreload.price : ''}. UPC: ${barcodePreload.upc || ''}. Condition: ${condLabel}. Analyze for eBay arbitrage  -  provide pricing, sell-through rate, days to sell, and estimated package dimensions.` });
+                    } else {
+                        geminiParts.push({ text: `Analyze this item for eBay arbitrage. Condition: ${condLabel}. Provide realistic pricing based on actual eBay sold data, sell-through rate, days to sell, and estimated package dimensions for shipping.` });
+                    }
+                    if (b64) geminiParts.push({ inlineData: { mimeType: scoutMimeType, data: b64 } });
+
+                    // Gemini + Cloudinary race in parallel  -  net time = max(gemini, upload) not sum
                     const geminiRes = fetch(proxyUrl, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             model: "gemini-2.5-flash",
-                            contents: [{ role: "user", parts: [
-                                { text: `Analyze this item for eBay arbitrage. Condition: ${condLabel}. Provide realistic pricing based on actual eBay sold data, sell-through rate, days to sell, and estimated package dimensions for shipping.` },
-                                { inlineData: { mimeType: scoutMimeType, data: b64 } }
-                            ]}],
+                            contents: [{ role: "user", parts: geminiParts }],
                             systemInstruction: { parts: [{ text: SCOUT_SYSTEM_PROMPT }] },
                             generationConfig: { responseMimeType: "application/json", responseSchema: SCOUT_SCHEMA }
                         })
@@ -351,6 +663,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
 
                     setResult(scoutResult);
                     setActiveHistory(null);
+                    setBarcodePreload(null);
 
                     // Persist to Firestore, enforce 20-result cap
                     if (user && dbRef && dbRef.current) {
@@ -358,7 +671,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                             const path = `artifacts/jdinjax-console/users/${user.uid}/scoutHistory`;
                             const colRef = dbRef.current.collection(path);
                             await colRef.add({ ...scoutResult, savedAt: Date.now() });
-                            // Prune to 20 — delete oldest beyond cap
+                            // Prune to 20  -  delete oldest beyond cap
                             const all = await colRef.orderBy('savedAt', 'desc').get();
                             if (all.docs.length > 20) {
                                 const batch = dbRef.current.batch();
@@ -370,6 +683,239 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                 } catch(e) { setErrorMsg("Scout failed: " + e.message); }
                 finally { setIsRunning(false); setScoutStatus(''); }
             };
+
+            // -- Inline mode: desktop right panel -------------------------------------
+            if (inline) {
+                const renderCostStack = (r) => {
+                    const mode = r.shippingMode || 'flat';
+                    const usps = r.arb.uspsEstimate || r.shipping || 0;
+                    const rows = [
+                        { label: 'Sale Price', val: r.priceMid, pos: true },
+                        { label: 'Purchase Cost', val: -r.purchasePrice },
+                    ];
+                    if (mode !== 'pickup') {
+                        rows.push({ label: 'eBay FVF (13.25%)', val: -r.arb.ebayFVF });
+                        rows.push({ label: 'Payment (2.9%+$0.30)', val: -r.arb.paymentFee });
+                    }
+                    rows.push({ label: 'Packaging', val: -r.arb.packaging });
+                    if (mode === 'free') {
+                        rows.push({ label: 'USPS Zone 8', val: -usps });
+                    } else if (mode === 'flat') {
+                        rows.push({ label: 'USPS Zone 8', val: -usps });
+                        if ((r.arb.flatFeeCollected || 0) > 0) rows.push({ label: 'Flat Fee Collected', val: r.arb.flatFeeCollected, pos: true });
+                    }
+                    return rows.map((row, i) => (
+                        <div key={i} className={"flex justify-between items-center py-1 " + (i < rows.length - 1 ? "border-b border-slate-50" : "")}>
+                            <span className="text-[9px] font-bold text-slate-600">{row.label}</span>
+                            <span className={"text-[10px] font-black " + (row.pos ? "text-emerald-600" : "text-red-500")}>{row.pos ? "+" : "-"}${Math.abs(row.val).toFixed(2)}</span>
+                        </div>
+                    ));
+                };
+
+                return (
+                    <div className="flex flex-col h-full">
+                        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between shrink-0 bg-white">
+                            <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
+                                <p className="text-[10px] font-black text-slate-700 uppercase tracking-widest">Arbitrage Scout</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                {onScanRequest && (
+                                    <button onClick={onScanRequest} title="Scan Barcode"
+                                        className="p-2 bg-emerald-50 text-emerald-600 rounded-xl hover:bg-emerald-100 transition-all active:scale-95">
+                                        <Icon name="ScanLine" size={16}/>
+                                    </button>
+                                )}
+                                {confirmPurge ? (
+                                    <div className="flex items-center gap-1">
+                                        <button onClick={() => setConfirmPurge(false)} className="text-[9px] font-black text-slate-400 px-2 py-1 rounded-lg hover:bg-slate-100 uppercase">Cancel</button>
+                                        <button onClick={purgeHistory} className="text-[9px] font-black text-red-600 px-2 py-1 rounded-lg bg-red-50 uppercase">Confirm</button>
+                                    </div>
+                                ) : (
+                                    <button onClick={() => setConfirmPurge(true)} className="p-1.5 text-slate-300 hover:text-red-400 transition-colors rounded-lg">
+                                        <Icon name="Trash2" size={14}/>
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+
+                        {barcodePreload && (
+                            <div className="mx-4 mt-3 bg-emerald-50 border border-emerald-200 rounded-2xl px-4 py-3 flex items-center justify-between">
+                                <div className="min-w-0 flex-1">
+                                    <p className="text-[8px] font-black text-emerald-600 uppercase tracking-widest">Barcode Loaded</p>
+                                    <p className="text-[10px] font-bold text-slate-700 leading-tight mt-0.5 truncate">{barcodePreload.title}</p>
+                                </div>
+                                <button onClick={() => setBarcodePreload(null)} className="text-slate-300 hover:text-slate-500 ml-2 shrink-0"><Icon name="X" size={14}/></button>
+                            </div>
+                        )}
+
+                        <div className="flex-1 overflow-y-auto no-scrollbar px-4 py-4 space-y-4">
+                            {history.length > 0 && activeHistory === null && !result && (
+                                <div className="space-y-1">
+                                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest px-1 mb-2">Recent Scans</p>
+                                    {history.slice(0, 8).map((h, i) => (
+                                        <button key={h._docId} onClick={() => setActiveHistory(i)}
+                                            className="w-full flex items-center gap-3 p-3 rounded-2xl text-left hover:bg-slate-50 transition-all border border-transparent hover:border-slate-100">
+                                            {h.imageUrl && <img src={h.imageUrl} className="w-10 h-10 rounded-xl object-cover border border-slate-200 shrink-0"/>}
+                                            <div className="min-w-0 flex-1">
+                                                <p className="text-[10px] font-black text-slate-800 uppercase leading-tight truncate">{h.itemTitle}</p>
+                                                <p className="text-[9px] text-slate-400 mt-0.5">{h.timestamp}</p>
+                                            </div>
+                                            <span className={"text-[8px] font-black px-2 py-1 rounded-lg uppercase " + (h.verdict && h.verdict.tag === "GO" ? "bg-emerald-100 text-emerald-700" : h.verdict && h.verdict.tag === "MARGINAL" ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700")}>{h.verdict ? h.verdict.tag : "?"}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+
+                            {activeHistory !== null && (
+                                <button onClick={() => setActiveHistory(null)} className="flex items-center gap-2 text-[10px] font-black text-slate-500 uppercase tracking-widest hover:text-slate-800 transition-colors">
+                                    <Icon name="ChevronLeft" size={14}/> Back
+                                </button>
+                            )}
+
+                            {!displayResult && activeHistory === null && (
+                                <div className="space-y-3">
+                                    <div className="relative border-2 border-dashed border-slate-300 rounded-2xl overflow-hidden hover:border-emerald-400 transition-colors">
+                                        <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer z-10"
+                                            onChange={(e) => { if (e.target.files[0]) setScoutImage({ file: e.target.files[0], url: URL.createObjectURL(e.target.files[0]) }); }} />
+                                        {scoutImage ? (
+                                            <div className="relative">
+                                                <img src={scoutImage.url} className="w-full h-40 object-contain bg-slate-50"/>
+                                                <div className="absolute bottom-2 right-2 bg-emerald-500 text-white text-[9px] font-black px-2 py-1 rounded-full uppercase">Tap to Replace</div>
+                                            </div>
+                                        ) : (
+                                            <div className="py-8 text-center">
+                                                <Icon name="Camera" size={32} className="text-slate-300 mb-2"/>
+                                                <p className="text-xs font-black text-slate-400 uppercase">Load Item Photo</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3">
+                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Condition</p>
+                                            <select value={condition} onChange={e => setCondition(e.target.value)} className="w-full bg-transparent text-[10px] font-black text-slate-800 focus:outline-none uppercase cursor-pointer">
+                                                {ebayConditions.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                                            </select>
+                                        </div>
+                                        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3">
+                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Purchase Price</p>
+                                            <div className="flex items-center gap-1">
+                                                <span className="text-slate-400 font-black">$</span>
+                                                <input type="number" step="0.01" min="0" value={purchasePrice} onChange={e => setPurchasePrice(e.target.value)} placeholder="0.00"
+                                                    className="w-full bg-transparent text-[10px] font-black text-slate-800 focus:outline-none placeholder-slate-300"/>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3">
+                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Buyer Shipping</p>
+                                            <select value={shippingMode} onChange={e => setShippingMode(e.target.value)} className="w-full bg-transparent text-[10px] font-black text-slate-800 focus:outline-none uppercase cursor-pointer">
+                                                <option value="flat">Flat Fee</option>
+                                                <option value="free">Free Shipping</option>
+                                                <option value="pickup">Local Pickup</option>
+                                            </select>
+                                        </div>
+                                        <div className={shippingMode !== "flat" ? "bg-slate-100 border border-slate-200 rounded-2xl p-3 opacity-40" : "bg-slate-50 border border-slate-200 rounded-2xl p-3"}>
+                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Flat Fee</p>
+                                            <div className="flex items-center gap-1">
+                                                <span className="text-slate-400 font-black">$</span>
+                                                <input type="number" step="0.01" min="0" value={flatShippingFee} onChange={e => setFlatShippingFee(e.target.value)} disabled={shippingMode !== "flat"}
+                                                    className="w-full bg-transparent text-[10px] font-black text-slate-800 focus:outline-none"/>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {errorMsg && <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-2 text-xs font-bold text-red-600">{errorMsg}</div>}
+                                    <button onClick={runScout} disabled={isRunning || (!scoutImage && !barcodePreload) || purchasePrice === ''}
+                                        className={"w-full py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 shadow-lg flex items-center justify-center gap-2 " + (isRunning || (!scoutImage && !barcodePreload) || purchasePrice === '' ? "bg-slate-200 text-slate-400" : "bg-emerald-500 text-white shadow-emerald-100 hover:bg-emerald-400")}>
+                                        {isRunning ? <><Icon name="Loader2" size={14} className="animate-spin"/> {scoutStatus || "Running..."}</> : <><Icon name="Zap" size={14}/> Run Intel</>}
+                                    </button>
+                                </div>
+                            )}
+
+                            {displayResult && (() => {
+                                const r = displayResult;
+                                return (
+                                    <div className="space-y-3 animate-in fade-in slide-in-from-bottom-4">
+                                        {activeHistory !== null && (
+                                            <button onClick={() => setActiveHistory(null)} className="flex items-center gap-2 text-[10px] font-black text-slate-500 uppercase tracking-widest hover:text-slate-800 mb-2">
+                                                <Icon name="ChevronLeft" size={14}/> New Scout
+                                            </button>
+                                        )}
+                                        <div className={"rounded-2xl border-2 px-5 py-4 flex items-center justify-between " + r.verdict.css}>
+                                            <div>
+                                                <p className="text-xl font-black leading-none">{r.verdict.label}</p>
+                                                <p className="text-[9px] font-black uppercase tracking-widest mt-1 opacity-70">Verdict</p>
+                                            </div>
+                                            <div className="text-right">
+                                                <p className="text-2xl font-black">${r.arb.netProfit.toFixed(2)}</p>
+                                                <p className="text-[9px] font-black uppercase opacity-70">{r.arb.roi.toFixed(0)}% ROI</p>
+                                            </div>
+                                        </div>
+                                        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex gap-3">
+                                            {r.imageUrl && <img src={r.imageUrl} className="w-16 h-16 rounded-xl object-cover border border-slate-200 shrink-0"/>}
+                                            <div className="min-w-0">
+                                                <p className="text-[9px] font-black text-slate-800 uppercase leading-tight">{r.itemTitle}</p>
+                                                <p className="text-[9px] text-slate-500 mt-1 line-clamp-2">{r.itemDescription}</p>
+                                            </div>
+                                        </div>
+                                        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-2">Market Intel  -  {r.priceConfidence}</p>
+                                            <div className="flex gap-2">
+                                                <div className="flex-1 text-center bg-white rounded-xl py-2 border border-slate-200"><p className="text-[8px] text-slate-400 font-black uppercase">Low</p><p className="text-sm font-black text-slate-500">${(r.priceLow||0).toFixed(2)}</p></div>
+                                                <div className="flex-1 text-center bg-blue-50 border-2 border-blue-200 rounded-xl py-2"><p className="text-[8px] text-blue-500 font-black uppercase">Mid</p><p className="text-base font-black text-blue-700">${(r.priceMid||0).toFixed(2)}</p></div>
+                                                <div className="flex-1 text-center bg-white rounded-xl py-2 border border-slate-200"><p className="text-[8px] text-slate-400 font-black uppercase">High</p><p className="text-sm font-black text-slate-500">${(r.priceHigh||0).toFixed(2)}</p></div>
+                                            </div>
+                                        </div>
+                                        <div className="bg-white border border-slate-200 rounded-2xl p-4">
+                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-3">Cost Stack</p>
+                                            {r.shippingMode === "pickup" && <div className="mb-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-1.5 text-[9px] font-black text-amber-700 uppercase">Local Pickup  -  fees waived</div>}
+                                            {r.shippingMode === "free" && <div className="mb-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-1.5 text-[9px] font-black text-blue-700 uppercase">Free Shipping  -  USPS absorbed</div>}
+                                            <div className="space-y-1.5">
+                                                {renderCostStack(r)}
+                                                <div className="flex justify-between items-center pt-2 border-t-2 border-slate-200">
+                                                    <span className="text-[10px] font-black text-slate-800 uppercase">Net Profit</span>
+                                                    <span className={"text-base font-black " + (r.arb.netProfit >= 15 ? "text-emerald-600" : r.arb.netProfit >= 5 ? "text-amber-600" : "text-red-500")}>${r.arb.netProfit.toFixed(2)}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4">
+                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-2">Velocity</p>
+                                            <div className="flex items-center gap-4">
+                                                <div className="flex-1">
+                                                    <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
+                                                        <div className={"h-full rounded-full " + (r.sellThroughRate >= 60 ? "bg-emerald-400" : r.sellThroughRate >= 30 ? "bg-amber-400" : "bg-red-400")} style={{ width: Math.min(r.sellThroughRate, 100) + "%" }}/>
+                                                    </div>
+                                                    <p className="text-[9px] text-slate-500 mt-1">{r.sellThroughRate}% sell-through</p>
+                                                </div>
+                                                <div className="text-right shrink-0">
+                                                    <p className="text-base font-black text-slate-800">~{r.daysToSell}d</p>
+                                                    <p className="text-[8px] text-slate-400 uppercase">avg sell</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        {onSendToProcessing && (
+                                            <button
+                                                onClick={() => onSendToProcessing({
+                                                    title:    r.itemTitle,
+                                                    price:    r.priceMid,
+                                                    imageUrl: r.imageUrl,
+                                                })}
+                                                className="w-full py-3 bg-emerald-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-500 transition-all active:scale-95 flex items-center justify-center gap-2 shadow-md shadow-emerald-100"
+                                            >
+                                                <Icon name="Zap" size={13}/> Send to Processing
+                                            </button>
+                                        )}
+                                        <button onClick={reset} className="w-full py-3 bg-slate-100 text-slate-600 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all">
+                                            New Scout
+                                        </button>
+                                    </div>
+                                );
+                            })()}
+                        </div>
+                    </div>
+                );
+            }
+
 
             return (
                 <>
@@ -425,7 +971,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                                         </div>
                                     )}
 
-                                    {/* Input Panel — hide if viewing history */}
+                                    {/* Input Panel  -  hide if viewing history */}
                                     {activeHistory === null && (
                                         <>
                                             {/* Image Upload */}
@@ -495,8 +1041,8 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                                             )}
 
                                             {/* Run Button */}
-                                            <button onClick={runScout} disabled={isRunning || !scoutImage || !purchasePrice}
-                                                className={`w-full py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest transition-all active:scale-95 shadow-lg flex items-center justify-center gap-3 ${isRunning || !scoutImage || !purchasePrice ? 'bg-slate-200 text-slate-400' : 'bg-emerald-500 text-white shadow-emerald-100 hover:bg-emerald-400'}`}>
+                                            <button onClick={runScout} disabled={isRunning || (!scoutImage && !barcodePreload) || purchasePrice === ''}
+                                                className={`w-full py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest transition-all active:scale-95 shadow-lg flex items-center justify-center gap-3 ${isRunning || (!scoutImage && !barcodePreload) || purchasePrice === '' ? "bg-slate-200 text-slate-400" : 'bg-emerald-500 text-white shadow-emerald-100 hover:bg-emerald-400'}`}>
                                                 {isRunning ? <><Icon name="Loader2" size={16} className="animate-spin" /> {scoutStatus || 'Running Scout...'}</> : <><Icon name="Zap" size={16} /> Run Arbitrage Intel</>}
                                             </button>
                                         </>
@@ -509,7 +1055,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                                         </button>
                                     )}
 
-                                    {/* ── INTEL CARD ─────────────────────────────── */}
+                                    {/* -- INTEL CARD ------------------------------- */}
                                     {displayResult && (() => {
                                         const r = displayResult;
                                         return (
@@ -540,7 +1086,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
 
                                                 {/* Price Intel */}
                                                 <div className="bg-white border border-slate-200 rounded-2xl p-5">
-                                                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-4">eBay Market Intel — {r.priceConfidence} Confidence</p>
+                                                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-4">eBay Market Intel  -  {r.priceConfidence} Confidence</p>
                                                     <div className="flex items-end gap-3 mb-3">
                                                         <div className="text-center flex-1 bg-slate-50 rounded-xl p-3 border border-slate-200">
                                                             <p className="text-[8px] font-black text-slate-400 uppercase mb-1">Low</p>
@@ -587,12 +1133,12 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                                                     <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-4">Cost Stack Breakdown</p>
                                                     {r.shippingMode === 'pickup' && (
                                                         <div className="mb-3 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-[9px] font-black text-amber-700 uppercase tracking-widest flex items-center gap-2">
-                                                            <span>🤝</span> Local Pickup — eBay and payment fees waived
+                                                            <span>🤝</span> Local Pickup  -  eBay and payment fees waived
                                                         </div>
                                                     )}
                                                     {r.shippingMode === 'free' && (
                                                         <div className="mb-3 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 text-[9px] font-black text-blue-700 uppercase tracking-widest flex items-center gap-2">
-                                                            <span>🚚</span> Free Shipping — full USPS cost absorbed
+                                                            <span>🚚</span> Free Shipping  -  full USPS cost absorbed
                                                         </div>
                                                     )}
                                                     <div className="space-y-2.5">
@@ -609,7 +1155,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                                                             }
                                                             rows.push({ label: 'Packaging Materials', val: -r.arb.packaging });
                                                             if (mode === 'free') {
-                                                                rows.push({ label: 'USPS Zone 8 — Free to Buyer (' + r.weightOz + 'oz)', val: -usps });
+                                                                rows.push({ label: 'USPS Zone 8  -  Free to Buyer (' + r.weightOz + 'oz)', val: -usps });
                                                             } else if (mode === 'flat') {
                                                                 rows.push({ label: 'USPS Zone 8 (' + r.weightOz + 'oz)', val: -usps });
                                                                 const fc = r.arb.flatFeeCollected || 0;
@@ -633,11 +1179,11 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                                                     </div>
                                                 </div>
 
-                                                {/* Shipping Spec — hidden for local pickup */}
+                                                {/* Shipping Spec  -  hidden for local pickup */}
                                                 {r.shippingMode !== 'pickup' && (
                                                 <div className="bg-slate-50 border border-slate-100 rounded-2xl p-5">
                                                     <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-3">
-                                                        {r.shippingMode === 'free' ? 'Shipping Cost (Absorbed) — USPS Zone 8 (VA to CA)' : 'Shipping Estimate — USPS Zone 8 (VA to CA)'}
+                                                        {r.shippingMode === 'free' ? 'Shipping Cost (Absorbed)  -  USPS Zone 8 (VA to CA)' : 'Shipping Estimate  -  USPS Zone 8 (VA to CA)'}
                                                     </p>
                                                     <div className="grid grid-cols-4 gap-3">
                                                         {[
@@ -673,7 +1219,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
             );
         };
 
-        // ─── END ARBITRAGE SCOUT ─────────────────────────────────────────────────
+        // --- END ARBITRAGE SCOUT -------------------------------------------------
 
 
         const App = () => {
@@ -687,7 +1233,6 @@ Return ONLY valid JSON — no markdown, no preamble.`;
             const [listings, setListings] = useState([]);
             const [isProcessing, setIsProcessing] = useState(false);
             const [status, setStatus] = useState("");
-            const [activeTab, setActiveTab] = useState('process');
             const [processMode, setProcessMode] = useState('bulk');
             const [batchCondition, setBatchCondition] = useState('1000');
             const [errorMsg, setErrorMsg] = useState(null);
@@ -697,6 +1242,27 @@ Return ONLY valid JSON — no markdown, no preamble.`;
             const [pricingListingId, setPricingListingId] = useState(null);
 
             const dbRef = useRef(null);
+            const [showScanner,    setShowScanner]    = useState(false);
+            const [scanResult,     setScanResult]     = useState(null);  // { upc, ... }
+            const [scoutPreload,   setScoutPreload]   = useState(null);
+            const [barcodeListingData, setBarcodeListingData] = useState(null); // { title, image, price, upc }
+            const [activeTab,       setActiveTab]       = useState('process');  // keep single source
+            const [showSettings,    setShowSettings]    = useState(false);
+            const [settings,        setSettings]        = useState({
+                shippingProfile: '', paymentProfile: '', returnProfile: '',
+                storeName: '', location: '', postalCode: '', country: 'US'
+            });
+            const [settingsSaving,  setSettingsSaving]  = useState(false);
+            const [settingsSaved,   setSettingsSaved]   = useState(false);
+            const [showSchedulePicker, setShowSchedulePicker] = useState(false);
+            const [scheduleDateTime,   setScheduleDateTime]   = useState('');   // ISO string for picker
+            const [isDesktop,      setIsDesktop]      = useState(window.innerWidth >= 1024);
+
+            useEffect(() => {
+                const onResize = () => setIsDesktop(window.innerWidth >= 1024);
+                window.addEventListener('resize', onResize);
+                return () => window.removeEventListener('resize', onResize);
+            }, []);
 
             useEffect(() => {
                 const init = async () => {
@@ -720,6 +1286,19 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                     setListings(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
                 }, (err) => setErrorMsg("Sync error: " + err.message));
                 return () => unsubscribe();
+            }, [user]);
+
+            // Load settings from Firestore whenever user session is established
+            useEffect(() => {
+                if (!user || !dbRef.current) return;
+                const settingsDoc = `artifacts/jdinjax-console/users/${user.uid}/config/settings`;
+                dbRef.current.doc(settingsDoc).get()
+                    .then(snap => {
+                        if (snap.exists) {
+                            setSettings(s => ({ ...s, ...snap.data() }));
+                        }
+                    })
+                    .catch(e => console.warn('[Settings] Load failed:', e.message));
             }, [user]);
 
             const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(""), 3000); };
@@ -747,7 +1326,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
             const logout = () => firebase.auth().signOut().then(() => setUser(null));
 
             const nuclearReset = async () => {
-                if (!window.confirm("⚠️ EMERGENCY PURGE: Delete all drafts?")) return;
+                if (!window.confirm("EMERGENCY PURGE: Delete all drafts?")) return;
                 try {
                     const batch = dbRef.current.batch();
                     listings.forEach(l => batch.delete(dbRef.current.collection(getListingsPath(user.uid)).doc(l.id)));
@@ -766,7 +1345,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                     .replace(/\*(.+?)\*/g, '<em>$1</em>');
 
                 lines.forEach(line => {
-                    if (line.startsWith('•') || line.startsWith('-') || line.startsWith('*')) {
+                    if (line.startsWith('*') || line.startsWith('-') || line.startsWith('*')) {
                         if (!inList) { html += "<ul>"; inList = true; }
                         html += `<li>${applyInline(line.substring(1).trim())}</li>`;
                     } else {
@@ -780,6 +1359,19 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                 });
                 if (inList) html += "</ul>";
                 return html;
+            };
+
+            const saveSettings = async () => {
+                if (!user || !dbRef.current) return;
+                setSettingsSaving(true);
+                try {
+                    const settingsDoc = `artifacts/jdinjax-console/users/${user.uid}/config/settings`;
+                    await dbRef.current.doc(settingsDoc).set(settings, { merge: true });
+                    setSettingsSaved(true);
+                    setTimeout(() => setSettingsSaved(false), 2500);
+                    showToast('Settings saved.');
+                } catch(e) { showToast('Save failed: ' + e.message); }
+                finally { setSettingsSaving(false); }
             };
 
             const exportEbayCSV = () => {
@@ -804,7 +1396,13 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                     "Item photo URL",
                     "Condition ID",
                     "Description",
-                    "Format"
+                    "Format",
+                    "ShippingProfileName",
+                    "PaymentProfileName",
+                    "ReturnProfileName",
+                    "StoreName",
+                    "Location",
+                    "PostalCode"
                 ];
 
                 const rows = listings.map(l => {
@@ -818,13 +1416,19 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                         sku,                       // Custom Label (SKU)
                         l.categoryId || "",        // Category ID
                         `"${cleanTitle}"`,         // Title
-                        "",                        // UPC
+                        l.upc || "",               // UPC
                         Number(l.buyItNowPrice || 0).toFixed(2), // Price
                         "1",                       // Quantity
                         `"${(l.images || []).slice(0, 12).join('|')}"`,           // Item photo URL (up to 12)
                         l.conditionId || "1000",   // Condition ID
                         `"${escapedDesc}"`,        // Description
-                        "FixedPrice"               // Format
+                        "FixedPrice",              // Format
+                        settings.shippingProfile ? `"${settings.shippingProfile}"` : "",  // ShippingProfileName
+                        settings.paymentProfile  ? `"${settings.paymentProfile}"`  : "",  // PaymentProfileName
+                        settings.returnProfile   ? `"${settings.returnProfile}"`   : "",  // ReturnProfileName
+                        settings.storeName  ? `"${settings.storeName}"`  : "",  // StoreName
+                        settings.location   ? `"${settings.location}"`   : "",  // Location
+                        settings.postalCode ? `"${settings.postalCode}"` : ""   // PostalCode
                     ];
                 });
 
@@ -842,18 +1446,107 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                 showToast("CSV Exported (Template v1193).");
             };
 
+            const formatScheduleTime = (isoStr) => {
+                // eBay CSV ScheduleTime format: YYYY-MM-DD HH:MM:SS in UTC
+                const d = new Date(isoStr);
+                const yr  = d.getUTCFullYear();
+                const mo  = String(d.getUTCMonth() + 1).padStart(2, '0');
+                const dy  = String(d.getUTCDate()).padStart(2, '0');
+                const hr  = String(d.getUTCHours()).padStart(2, '0');
+                const mn  = String(d.getUTCMinutes()).padStart(2, '0');
+                const sc  = String(d.getUTCSeconds()).padStart(2, '0');
+                return `${yr}-${mo}-${dy} ${hr}:${mn}:${sc}`;
+            };
+
+            const formatScheduleTimeDisplay = (isoStr) => {
+                // Human-readable UTC display in toast
+                const d = new Date(isoStr);
+                return d.toUTCString().replace(' GMT', ' UTC');
+            };
+
+            const exportEbayAddCSV = (isoScheduleTime) => {
+                if (listings.length === 0) return;
+                const schedStr = formatScheduleTime(isoScheduleTime);
+
+                const headers = [
+                    "Action(SiteID=US|Country=US|Currency=USD|Version=1193|CC=UTF-8)",
+                    "Custom label (SKU)",
+                    "Category ID",
+                    "Title",
+                    "Price",
+                    "Quantity",
+                    "Item photo URL",
+                    "ConditionID",
+                    "Description",
+                    "Format",
+                    "ListingDuration",
+                    "Location",
+                    "PostalCode",
+                    "C:Brand",
+                    "C:Type",
+                    "ScheduleTime",
+                    "ShippingProfileName",
+                    "PaymentProfileName",
+                    "ReturnProfileName"
+                ];
+
+                const rows = listings.map(l => {
+                    const cleanTitle  = (l.title || "").substring(0, 80).replace(/"/g, '""');
+                    const htmlDesc    = `<div>${convertToHtml(l.markdownDescription)}</div>`;
+                    const escapedDesc = htmlDesc.replace(/"/g, '""');
+                    const sku         = l.sku || `BKA-${l.timestamp || Date.now()}`;
+                    return [
+                        "Add",
+                        sku,
+                        l.categoryId   || "",
+                        `"${cleanTitle}"`,
+                        Number(l.buyItNowPrice || 0).toFixed(2),
+                        "1",
+                        `"${(l.images || []).slice(0, 12).join('|')}"`,
+                        l.conditionId  || "1000",
+                        `"${escapedDesc}"`,
+                        "FixedPrice",
+                        "GTC",
+                        settings.location   ? `"${settings.location}"`   : "",
+                        settings.postalCode ? `"${settings.postalCode}"` : "",
+                        l.brand    || "",
+                        l.itemType || "",
+                        `"${schedStr}"`,   // quoted  -  contains spaces
+                        settings.shippingProfile ? `"${settings.shippingProfile}"` : "",
+                        settings.paymentProfile  ? `"${settings.paymentProfile}"`  : "",
+                        settings.returnProfile   ? `"${settings.returnProfile}"`   : ""
+                    ];
+                });
+
+                const csvContent = [
+                    headers.join(","),
+                    ...rows.map(r => r.join(","))
+                ].join("\r\n");
+
+                const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(blob);
+                link.download = `ebay_add_import_${Date.now()}.csv`;
+                link.click();
+                showToast("CSV Exported (Add  -  Scheduled: " + formatScheduleTimeDisplay(isoScheduleTime) + ")");
+                setShowSchedulePicker(false);
+            };
+
             const processImages = async (mode) => {
                 if (!user) return;
-                const step = mode === 'bulk' ? 4 : 1;
-                const total = Math.floor(images.length / step);
+                // Single mode: ALL images -> 1 ad. Bulk mode: every 4 images -> 1 ad.
+                const batches = mode === 'single'
+                    ? [images]                                          // one batch, all images
+                    : Array.from({ length: Math.floor(images.length / 4) }, (_, i) => images.slice(i * 4, i * 4 + 4));
+                const total = batches.length;
                 setIsProcessing(true);
                 try {
                     const listingsPath = getListingsPath(user.uid);
                     for (let i = 0; i < total; i++) {
-                        const batch = images.slice(i * step, (i * step) + step);
+                        const batch = batches[i];
                         setStatus(`Processing ${i+1}/${total}...`);
 
-                        // ── Compress all images in batch ONCE, reuse for Cloudinary + Gemini ──
+                        // -- Compress all images in batch ONCE, reuse for Cloudinary + Gemini --
                         const compressImage = (img, maxPx = 1400) => new Promise((resolve, reject) => {
                             const image = new Image();
                             image.onload = () => {
@@ -900,11 +1593,11 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                             return d.secure_url;
                         }));
                         const failedUploads = uploadResults.filter(r => r.status === 'rejected').length;
-                        if (failedUploads > 0) showToast(`⚠️ ${failedUploads} image(s) failed to upload — skipped.`);
+                        if (failedUploads > 0) showToast(`${failedUploads} image(s) failed to upload  -  skipped.`);
                         const urls = uploadResults.filter(r => r.status === 'fulfilled').map(r => r.value);
-                        if (urls.length === 0) { setStatus(`Batch ${i+1} skipped — all uploads failed.`); continue; }
+                        if (urls.length === 0) { setStatus(`Batch ${i+1} skipped  -  all uploads failed.`); continue; }
 
-                        // Reuse already-compressed b64 — no second FileReader pass needed
+                        // Reuse already-compressed b64  -  no second FileReader pass needed
                         const b64s = compressed.map(comp => ({ data: comp.b64, mimeType: comp.mimeType }));
 
                         const res = await fetch(PROXY_API_URL, {
@@ -923,7 +1616,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                         let finalSource = "UNMAPPED";
 
                         try {
-                            // Gemini dedicated category resolution — two-stage classification
+                            // Gemini dedicated category resolution  -  two-stage classification
                             const catRes = await fetch(CATEGORY_API_URL, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
@@ -952,20 +1645,20 @@ DESCRIPTION & TECHNICAL SPECIFICATIONS
 ${aiData.title}
 
 KEY FEATURES:
-${(aiData.keyFeatures || []).map(f => `• ${f}`).join('\n')}
+${(aiData.keyFeatures || []).map(f => `* ${f}`).join('\n')}
 
 WHAT'S INCLUDED:
-${(aiData.whatsIncluded || []).map(i => `• ${i}`).join('\n')}
+${(aiData.whatsIncluded || []).map(i => `* ${i}`).join('\n')}
 
 CONDITION & FLAWS:
-• Condition: ${currentCondition}
-• Visible Flaws: ${aiData.flaws || "None observed during technical inspection."}
+* Condition: ${currentCondition}
+* Visible Flaws: ${aiData.flaws || "None observed during technical inspection."}
 
 SHIPPING LOGISTICS:
-• Item Weight: ${aiData.weightItem || 'TBD'}
-• Packaging Weight: ${aiData.weightPackaging || 'TBD'}
-• Total Shipping Weight: ${aiData.weightTotal || 'TBD'}
-• Dimensions: ${aiData.dimensions || 'TBD'}
+* Item Weight: ${aiData.weightItem || 'TBD'}
+* Packaging Weight: ${aiData.weightPackaging || 'TBD'}
+* Total Shipping Weight: ${aiData.weightTotal || 'TBD'}
+* Dimensions: ${aiData.dimensions || 'TBD'}
 
 *Making an Offer 
 Please don't hesitate to make a reasonable offer. A majority of our sales are concluded this way and it it doesn't hurt to ask. NOTE: However, I most likely won't counteroffer "low ball" offers....it will simply be declined. 
@@ -991,7 +1684,7 @@ We take our reputation seriously, we buy and sell online, so we understand the v
                             markdownDescription: fullDescription
                         });
                     }
-                    setImages(images.slice(total * step)); setActiveTab('listings'); showToast(`${total} Ads Generated.`);
+                    setImages([]); setActiveTab('listings'); showToast(`${total} Ad${total !== 1 ? 's' : ''} Generated.`);
                 } catch (e) { setErrorMsg(e.message); } finally { setIsProcessing(false); setStatus(""); }
             };
 
@@ -1045,8 +1738,509 @@ We take our reputation seriously, we buy and sell online, so we understand the v
 
             const sortedListings = [...listings].sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
 
+            const handleScan = (upc) => {
+                setShowScanner(false);
+                setScanResult({ upc });
+            };
+
+            const handleSendToScout = (item, upc) => {
+                setScanResult(null);
+                setScoutPreload({ title: item.title, upc, price: item.price });
+            };
+
+            const handleSendToListing = (item, upc) => {
+                setScanResult(null);
+                setBarcodeListingData({ title: item.title, image: item.image, price: item.price, upc });
+                setActiveTab('process');
+                showToast('Barcode item loaded  -  review and generate listing.');
+            };
+
+            // -- Process barcode item into listing (no photo required) -----------------
+            const processBarcodeItem = async () => {
+                if (!barcodeListingData || !user) return;
+                setIsProcessing(true);
+                setActiveTab('process');
+                try {
+                    const listingsPath = getListingsPath(user.uid);
+                    setStatus('Generating listing from barcode data...');
+
+                    // Use SerpApi image URL directly  -  proxy fetch to b64 for Gemini
+                    let imageUrls = [];
+                    let b64Parts = [];
+                    if (barcodeListingData.image) {
+                        try {
+                            const imgRes = await fetch('/api/proxy-image', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ url: barcodeListingData.image })
+                            });
+                            if (imgRes.ok) {
+                                const { b64, mimeType, cloudinaryUrl } = await imgRes.json();
+                                if (cloudinaryUrl) imageUrls = [cloudinaryUrl];
+                                if (b64) b64Parts = [{ inlineData: { mimeType, data: b64 } }];
+                            }
+                        } catch(e) { console.warn('[Barcode Listing] Image proxy failed:', e.message); }
+                    }
+
+                    const contextHint = barcodeListingData.title
+                        ? 'Item: ' + barcodeListingData.title + (barcodeListingData.price ? '  -  Market price: ' + barcodeListingData.price : '') + '. UPC: ' + (barcodeListingData.upc || '') + '. Generate a complete eBay listing.'
+                        : 'Generate a complete eBay listing from the item image.';
+
+                    const res = await fetch(PROXY_API_URL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            model: 'gemini-2.5-flash',
+                            contents: [{ role: 'user', parts: [{ text: contextHint }, ...b64Parts] }],
+                            systemInstruction: { parts: [{ text: JDINJAX_SYSTEM_PROMPT }] },
+                            generationConfig: { responseMimeType: 'application/json', responseSchema: JSON_SCHEMA }
+                        })
+                    });
+                    const result = await res.json();
+                    const aiData = JSON.parse(cleanJson(result.candidates[0].content.parts[0].text));
+
+                    // Category resolve
+                    let finalSource = 'UNMAPPED';
+                    try {
+                        const catRes = await fetch(CATEGORY_API_URL, {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ title: aiData.title, keyFeatures: aiData.keyFeatures || [], description: aiData.markdownDescription || '' })
+                        });
+                        if (catRes.ok) {
+                            const catData = await catRes.json();
+                            aiData.categoryId = catData.categoryId;
+                            aiData.categoryPath = catData.categoryPath;
+                            finalSource = catData.confidence === 'High' ? 'AI Verified' : 'AI Predicted';
+                        }
+                    } catch(e) { console.warn('[Barcode Listing] Category resolve failed:', e.message); }
+
+                    aiData.categorySource = finalSource;
+                    const currentCondition = EBAY_CONDITIONS.find(ec => ec.id === batchCondition)?.label || 'Used';
+                    const fullDescription = `
+DESCRIPTION & TECHNICAL SPECIFICATIONS
+
+${aiData.title}
+
+KEY FEATURES:
+${(aiData.keyFeatures || []).map(f => `* ${f}`).join('\n')}
+
+WHAT'S INCLUDED:
+${(aiData.whatsIncluded || []).map(i => `* ${i}`).join('\n')}
+
+CONDITION & FLAWS:
+* Condition: ${currentCondition}
+* Visible Flaws: ${aiData.flaws || "None observed during technical inspection."}
+
+SHIPPING LOGISTICS:
+* Item Weight: ${aiData.weightItem || 'TBD'}
+* Packaging Weight: ${aiData.weightPackaging || 'TBD'}
+* Total Shipping Weight: ${aiData.weightTotal || 'TBD'}
+* Dimensions: ${aiData.dimensions || 'TBD'}
+
+*Making an Offer 
+Please don't hesitate to make a reasonable offer. A majority of our sales are concluded this way and it it doesn't hurt to ask. NOTE: However, I most likely won't counteroffer "low ball" offers....it will simply be declined. 
+
+**Return Policy (Please read)
+Buyer is responsible for return shipping on any item that is not damaged, defective, or as described. As a reseller of items sourced from numerous places, we cannot control the manufacturing quality of an item. However, we CAN control how the items are sold, pricing, and time to ship of those items to you. If you are unsatisfied with your order in anyway, please contact us and we will work with you to resolve it to your satisfaction. 
+
+*Shipping
+Items are shipped as fast as possible after payment is received. We pride ourselves on getting your purchase to you FAST! This typically results in same day shipping if payment is received before noon (Mon-Fri).
+
+*Delivery
+We Do Not Ship Outside of the Continental U.S. or to P.O Boxes
+
+*Feedback
+We take our reputation seriously, we buy and sell online, so we understand the value of trust. If you are unsatisfied with your order, please give us an opportunity to resolve it to your satisfaction before leaving a negative feedback.`.trim();
+
+                    await dbRef.current.collection(listingsPath).add({
+                        ...aiData,
+                        images: imageUrls,
+                        conditionId: batchCondition,
+                        timestamp: Date.now(),
+                        sku: 'BKA-' + Date.now(),
+                        markdownDescription: fullDescription,
+                        upc: barcodeListingData.upc || '',
+                        buyItNowPrice: aiData.buyItNowPrice || (barcodeListingData.price ? parseFloat(barcodeListingData.price.replace(/[^0-9.]/g,'')) || 0 : 0)
+                    });
+
+                    setBarcodeListingData(null);
+                    setActiveTab('listings');
+                    showToast('Barcode listing generated successfully.');
+                } catch(e) { setErrorMsg('Barcode listing failed: ' + e.message); }
+                finally { setIsProcessing(false); setStatus(''); }
+            };
+
+            // -- Shared content blocks ------------------------------------------------
+
+            const renderSettingsTab = () => (
+                <section className="space-y-6 max-w-xl">
+                    <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden">
+                        <div className="px-8 py-5 border-b border-slate-100 flex items-center gap-3">
+                            <Icon name="Shield" size={16} className="text-blue-600"/>
+                            <div>
+                                <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">eBay Account</p>
+                                <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight">Business Policies</h3>
+                            </div>
+                        </div>
+                        <div className="p-8 space-y-5">
+                            {[
+                                { key: 'shippingProfile', label: 'Shipping Profile Name', icon: 'Truck',      placeholder: 'e.g. Standard Shipping Policy' },
+                                { key: 'paymentProfile',  label: 'Payment Profile Name',  icon: 'CreditCard', placeholder: 'e.g. eBay Managed Payments' },
+                                { key: 'returnProfile',   label: 'Return Profile Name',   icon: 'RotateCcw',  placeholder: 'e.g. 30 Day Returns' },
+                            ].map(({ key, label, icon, placeholder }) => (
+                                <div key={key}>
+                                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 flex items-center gap-2">
+                                        <Icon name={icon} size={11}/> {label}
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={settings[key] || ''}
+                                        onChange={e => setSettings(s => ({ ...s, [key]: e.target.value }))}
+                                        placeholder={placeholder}
+                                        className="w-full px-4 py-3 rounded-2xl border border-slate-200 text-sm font-bold text-slate-700 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 transition-all bg-slate-50 placeholder-slate-300"
+                                    />
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden">
+                        <div className="px-8 py-5 border-b border-slate-100 flex items-center gap-3">
+                            <Icon name="Store" size={16} className="text-emerald-600"/>
+                            <div>
+                                <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Listing Defaults</p>
+                                <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight">Seller Identity</h3>
+                            </div>
+                        </div>
+                        <div className="p-8 space-y-5">
+                            {[
+                                { key: 'storeName',  label: 'Store Name',   icon: 'Store',   placeholder: 'e.g. Black Knight Armament' },
+                                { key: 'location',   label: 'Location',     icon: 'MapPin',  placeholder: 'e.g. Lorton, VA' },
+                                { key: 'postalCode', label: 'Postal Code',  icon: 'Hash',    placeholder: 'e.g. 22079' },
+                            ].map(({ key, label, icon, placeholder }) => (
+                                <div key={key}>
+                                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 flex items-center gap-2">
+                                        <Icon name={icon} size={11}/> {label}
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={settings[key] || ''}
+                                        onChange={e => setSettings(s => ({ ...s, [key]: e.target.value }))}
+                                        placeholder={placeholder}
+                                        className="w-full px-4 py-3 rounded-2xl border border-slate-200 text-sm font-bold text-slate-700 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 transition-all bg-slate-50 placeholder-slate-300"
+                                    />
+                                </div>
+                            ))}
+
+                        </div>
+                    </div>
+
+                    <button
+                        onClick={saveSettings}
+                        disabled={settingsSaving}
+                        className={"w-full py-4 rounded-2xl font-black text-[11px] uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-3 shadow-lg " + (settingsSaved ? "bg-emerald-500 text-white shadow-emerald-100" : settingsSaving ? "bg-slate-300 text-slate-500" : "bg-blue-600 text-white hover:bg-blue-500 shadow-blue-100")}
+                    >
+                        {settingsSaving
+                            ? <><Icon name="Loader2" size={14} className="animate-spin"/> Saving...</>
+                            : settingsSaved
+                            ? <><Icon name="Check" size={14}/> Saved to Account</>
+                            : <><Icon name="Save" size={14}/> Save Settings</>}
+                    </button>
+                </section>
+            );
+
+            const renderProcessTab = () => (
+                <section className="space-y-6">
+                    {/* Barcode preload card */}
+                    {barcodeListingData && (
+                        <div className="bg-emerald-50 border-2 border-emerald-200 rounded-[2rem] p-6 flex items-center gap-5 shadow-sm animate-in slide-in-from-top-4">
+                            {barcodeListingData.image && (
+                                <img src={barcodeListingData.image} className="w-20 h-20 rounded-2xl object-cover border border-emerald-200 shrink-0 bg-white"/>
+                            )}
+                            <div className="flex-1 min-w-0">
+                                <p className="text-[8px] font-black text-emerald-600 uppercase tracking-widest mb-1 flex items-center gap-2">
+                                    <span>📦</span> Barcode Item Loaded {barcodeListingData.upc ? ' | UPC: ' + barcodeListingData.upc : ''}
+                                </p>
+                                <p className="text-sm font-black text-slate-800 leading-tight line-clamp-2">{barcodeListingData.title || 'Unknown Item'}</p>
+                                {barcodeListingData.price && <p className="text-emerald-600 font-black text-sm mt-1">{barcodeListingData.price}</p>}
+                            </div>
+                            <div className="flex flex-col gap-2 shrink-0">
+                                <button onClick={processBarcodeItem} disabled={isProcessing}
+                                    className={"px-5 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all active:scale-95 flex items-center gap-2 shadow-md " + (isProcessing ? "bg-slate-300 text-slate-500" : "bg-emerald-500 text-white hover:bg-emerald-400 shadow-emerald-100")}>
+                                    {isProcessing ? <><Icon name="Loader2" size={13} className="animate-spin"/> {status}</> : <><Icon name="Zap" size={13}/> Generate Ad</>}
+                                </button>
+                                <button onClick={() => setBarcodeListingData(null)} className="px-5 py-2 rounded-2xl text-[10px] font-black uppercase text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all border border-slate-200">
+                                    Clear
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                    <div className="flex flex-col md:flex-row justify-between gap-4">
+                        <div className="flex bg-white rounded-2xl p-1 border border-slate-200 shadow-sm w-fit">
+                            <button onClick={() => setProcessMode('single')} className={`px-5 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${processMode === 'single' ? 'bg-slate-800 text-white shadow-md' : 'text-slate-500'}`}>Single Ad</button>
+                            <button onClick={() => setProcessMode('bulk')} className={`px-5 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${processMode === 'bulk' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500'}`}>Bulk (4:1)</button>
+                        </div>
+                        <div className="flex items-center gap-3 bg-white px-5 py-2 rounded-2xl border border-slate-200 shadow-sm">
+                            <span className="text-[9px] font-black uppercase text-slate-400">Batch Condition</span>
+                            <select value={batchCondition} onChange={(e) => setBatchCondition(e.target.value)} className="bg-transparent text-[10px] font-black uppercase text-blue-600 focus:outline-none">{EBAY_CONDITIONS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select>
+                        </div>
+                        <button onClick={nuclearReset} className="px-5 py-2 bg-red-50 text-red-600 rounded-xl text-[9px] font-black border border-red-100 uppercase transition-all hover:bg-red-100 flex items-center gap-2 shadow-sm"><Icon name="Zap" size={12}/> Purge</button>
+                    </div>
+                    <div className="bg-white border-2 border-dashed border-slate-300 rounded-[2.5rem] p-12 text-center relative group hover:border-blue-400 transition-all shadow-sm">
+                        <input type="file" multiple accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer z-10" onChange={(e) => setImages([...images, ...Array.from(e.target.files).map(file => ({ id: Math.random().toString(36), url: URL.createObjectURL(file), file }))])} />
+                        <Icon name="Upload" size={48} className="text-blue-500 mb-4" />
+                        <h3 className="text-lg font-black uppercase tracking-tight leading-none">Load Ad Assets</h3>
+                        <p className="text-slate-400 text-xs mt-3 italic max-w-xs mx-auto">{processMode === 'single' ? "Single Mode: All uploaded images -> 1 listing." : "Bulk Mode: Every 4 images -> 1 listing."}</p>
+                    </div>
+                    {images.length > 0 && (
+                        <div className="bg-white rounded-[2rem] border border-slate-200 overflow-hidden shadow-sm animate-in slide-in-from-bottom-4">
+                            <div className="p-4 grid grid-cols-4 sm:grid-cols-8 gap-3 max-h-64 overflow-y-auto no-scrollbar">
+                                {images.map(img => (
+                                    <div key={img.id} className="aspect-square rounded-xl overflow-hidden border border-slate-100 relative group">
+                                        <img src={img.url} className="w-full h-full object-cover" />
+                                        <button onClick={() => setImages(images.filter(i => i.id !== img.id))} className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"><Icon name="Trash2" size={12}/></button>
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="p-6 bg-slate-50 border-t"><button disabled={isProcessing} onClick={() => processImages(processMode)} className={`w-full py-5 rounded-2xl font-black text-xs uppercase shadow-lg shadow-blue-100 active:scale-95 transition-all ${isProcessing ? 'bg-slate-400' : 'bg-blue-600 text-white'}`}>{isProcessing ? status : 'Generate Inventory Ads'}</button></div>
+                        </div>
+                    )}
+                </section>
+            );
+
+            const renderListingsTab = () => (
+                <div className="space-y-6">
+                    <div className="flex flex-col md:flex-row justify-between items-center bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm gap-4">
+                        <div className="flex items-center gap-4">
+                            <p className="text-sm font-black text-slate-800 uppercase tracking-widest">{listings.length} Ready Drafts</p>
+                            <div className="flex flex-col items-start gap-2">
+                                <div className="flex gap-2">
+                                    <button onClick={exportEbayCSV} disabled={listings.length === 0}
+                                        className="px-5 py-3 bg-slate-700 text-white rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 shadow-md hover:bg-slate-600 transition-all disabled:bg-slate-200 active:scale-95">
+                                        <Icon name="FileText" size={13}/> Export Draft
+                                    </button>
+                                    <button onClick={() => { if (!scheduleDateTime) { const d = new Date(); d.setDate(d.getDate()+7); d.setSeconds(0,0); setScheduleDateTime(d.toISOString().slice(0,16)); } setShowSchedulePicker(true); }} disabled={listings.length === 0}
+                                        className="px-5 py-3 bg-blue-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 shadow-md hover:bg-blue-500 transition-all disabled:bg-slate-200 active:scale-95 shadow-blue-100">
+                                        <Icon name="CalendarClock" size={13}/> Export Add
+                                    </button>
+                                </div>
+                                {(!settings.shippingProfile || !settings.paymentProfile || !settings.returnProfile) && (
+                                    <button onClick={() => setActiveTab('settings')} className="text-[8px] font-black text-amber-500 uppercase tracking-widest flex items-center gap-1 hover:text-amber-600 transition-colors">
+                                        <Icon name="AlertTriangle" size={9}/> Business policies not configured
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                        <button onClick={nuclearReset} className="px-6 py-3 bg-red-50 text-red-600 rounded-xl text-[10px] font-black uppercase flex items-center gap-2 border border-red-100 shadow-sm transition-all hover:bg-red-100 active:scale-95"><Icon name="Zap" size={14}/> Emergency Reset</button>
+                    </div>
+                    {sortedListings.map(l => (
+                        <div key={l.id} className="bg-white rounded-[2rem] border border-slate-200 flex flex-col md:flex-row overflow-hidden shadow-sm hover:border-blue-300 transition-all animate-in fade-in duration-500 listing-card">
+                            <div className="md:w-72 h-72 md:h-auto shrink-0 bg-slate-50 border-r border-slate-100 relative group">
+                                <img src={l.images?.[0]} className="w-full h-full object-cover" />
+                                <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-md text-white text-[9px] font-black px-3 py-1 rounded-full uppercase tracking-widest">{l.images?.length || 0} Assets</div>
+                            </div>
+                            <div className="p-8 flex-grow">
+                                <div className="flex justify-between items-start mb-4">
+                                    {editingCategoryId === l.id ? (
+                                        <div className="flex flex-col gap-3 w-full mr-4 bg-blue-50/50 p-5 rounded-3xl border border-blue-200 shadow-inner">
+                                            <input className="text-xs font-bold border border-blue-200 rounded-xl px-4 py-3 bg-white" value={tempCategoryData.path} onChange={(e) => setTempCategoryData({...tempCategoryData, path: e.target.value})} placeholder="Path" />
+                                            <div className="flex gap-2">
+                                                <input className="text-sm font-black border border-blue-200 rounded-xl px-4 py-3 bg-white flex-grow" value={tempCategoryData.id} onChange={(e) => setTempCategoryData({...tempCategoryData, id: e.target.value})} placeholder="Leaf ID" />
+                                                <button onClick={async () => { await dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({ categoryId: tempCategoryData.id, categoryPath: tempCategoryData.path, categorySource: 'Manual Overide' }); setEditingCategoryId(null); showToast("Saved."); }} className="bg-blue-600 text-white px-5 rounded-xl font-black uppercase text-[10px] shadow-md transition-all active:scale-95">Save</button>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="flex flex-col gap-1 items-start">
+                                            <span className={`text-[10px] font-black px-4 py-1.5 rounded-full uppercase tracking-widest border flex items-center gap-2 group/cat shadow-sm ${l.categorySource === 'AI Verified' ? 'bg-blue-50 text-blue-600 border-blue-100' : l.categorySource === 'AI Predicted' ? 'bg-amber-50 text-amber-600 border-amber-100' : 'bg-red-50 text-red-600 border-red-100'}`}>
+                                                {l.categoryPath || 'UNMAPPED - ACTION REQUIRED'}
+                                                <button onClick={() => { setEditingCategoryId(l.id); setTempCategoryData({ id: l.categoryId || '', path: l.categoryPath || '' }); }} className="opacity-0 group-hover/cat:opacity-100 hover:text-blue-800 transition-opacity"><Icon name="Edit2" size={10}/></button>
+                                            </span>
+                                            <span className={`text-[8px] font-black uppercase ml-2 ${l.categorySource === 'AI Predicted' ? 'text-amber-400 italic' : l.categorySource === 'AI Verified' ? 'text-blue-400' : 'text-red-400 animate-pulse'}`}>
+                                                {l.categorySource === 'AI Predicted' ? 'CSV Match Failed - Using AI Suggestion' : l.categorySource === 'AI Verified' ? 'Gemini Verified' : 'Action Required: Assign Category'}
+                                            </span>
+                                        </div>
+                                    )}
+                                    {!editingCategoryId && (
+                                        <div className="flex flex-col items-end">
+                                            <span className="text-2xl font-black text-slate-900 tracking-tighter leading-none">${Number(l.buyItNowPrice || 0).toFixed(2)}</span>
+                                            <input type="text" defaultValue={l.sku || ''} placeholder="SKU"
+                                                onBlur={async (e) => { const val = e.target.value.trim(); if (val && val !== l.sku) { await dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({ sku: val }); showToast("SKU Updated."); }}}
+                                                onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+                                                className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1 bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-400 focus:text-blue-600 focus:outline-none w-full max-w-[140px] transition-colors cursor-text" />
+                                        </div>
+                                    )}
+                                </div>
+                                <h2 className="text-base font-black text-slate-900 uppercase tracking-tight leading-tight mb-1">{l.title}</h2>
+                                {l.markdownDescription && (
+                                    <details className="mb-6 group">
+                                        <summary className="text-[10px] font-black text-slate-400 uppercase tracking-widest cursor-pointer flex items-center gap-2 select-none hover:text-blue-500 transition-colors">
+                                            <Icon name="ChevronRight" size={12} className="transition-transform group-open:rotate-90"/>
+                                            Description
+                                        </summary>
+                                        <div className="mt-3 p-4 bg-slate-50 rounded-2xl border border-slate-100 text-xs text-slate-600 leading-relaxed whitespace-pre-wrap max-h-60 overflow-y-auto">
+                                            {l.markdownDescription}
+                                        </div>
+                                    </details>
+                                )}
+                                <div className="bg-slate-50 p-4 rounded-2xl mb-6 border border-slate-100 shadow-sm">
+                                    <span className="text-[9px] font-black text-slate-400 uppercase mb-2 block tracking-widest text-center">Listing Condition</span>
+                                    <select value={l.conditionId || '1000'} onChange={e => dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({conditionId: e.target.value})} className="w-full bg-transparent text-xs font-black uppercase text-blue-600 cursor-pointer text-center focus:outline-none">{EBAY_CONDITIONS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select>
+                                </div>
+                                {l.priceResearch && (
+                                    <div className="bg-gradient-to-br from-blue-50 to-slate-50 rounded-2xl p-5 border border-blue-100 mb-6 shadow-sm">
+                                        <div className="flex items-end gap-4 mb-3">
+                                            <div className="text-center"><span className="text-[8px] text-slate-400 font-black uppercase block mb-1">Low</span><span className="text-sm font-black text-slate-500">${Number(l.priceResearch?.low || 0).toFixed(2)}</span></div>
+                                            <div className="flex-1 text-center bg-white rounded-2xl px-4 py-3 border border-blue-200 shadow-sm"><span className="text-[8px] text-blue-500 font-black uppercase block mb-1">Recommended</span><span className="text-2xl font-black text-blue-700">${Number(l.priceResearch?.mid || 0).toFixed(2)}</span></div>
+                                            <div className="text-center"><span className="text-[8px] text-slate-400 font-black uppercase block mb-1">High</span><span className="text-sm font-black text-slate-500">${Number(l.priceResearch?.high || 0).toFixed(2)}</span></div>
+                                            <span className="text-[8px] font-black px-2 py-1 rounded-lg uppercase bg-green-100 text-green-700 shadow-sm">{l.priceResearch?.confidence || 'N/A'}</span>
+                                        </div>
+                                        <p className="text-[10px] text-slate-600 italic leading-relaxed border-l-2 border-blue-200 pl-3">{l.priceResearch?.basis}</p>
+                                    </div>
+                                )}
+                                <div className="flex items-center justify-between border-t border-slate-100 pt-6">
+                                    <div className="flex gap-4">
+                                        <button onClick={() => researchPrice(l)} disabled={pricingListingId === l.id} className="bg-blue-600 text-white px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md flex items-center gap-2 transition-all active:scale-95 shadow-lg shadow-blue-50/50">{pricingListingId === l.id ? <Icon name="Loader2" className="animate-spin" size={14}/> : <Icon name="TrendingUp" size={14}/>} Price Intel</button>
+                                        <button onClick={async () => { await navigator.clipboard.writeText(convertToHtml(l.markdownDescription || '')); showToast("HTML Copied  -  Ready for eBay."); }} className="px-5 py-2.5 rounded-xl text-[10px] font-black uppercase border border-slate-200 flex items-center gap-2 hover:bg-slate-50 transition-all shadow-sm active:scale-95"><Icon name="Clipboard" size={14}/> Copy HTML</button>
+                                    </div>
+                                    <button onClick={() => dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).delete()} className="p-3 text-red-500 hover:bg-red-50 rounded-xl transition-all active:scale-90"><Icon name="Trash2" size={22}/></button>
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            );
+
+            // -- DESKTOP 3-PANEL LAYOUT -----------------------------------------------
+            if (isDesktop) {
+                return (
+                    <>
+                    {showScanner && <BarcodeScanner onScan={handleScan} onClose={() => setShowScanner(false)} />}
+                    {scanResult && <ScanResult upc={scanResult.upc} onClose={() => setScanResult(null)} onSendToScout={handleSendToScout} onSendToListing={handleSendToListing} showToast={showToast} />}
+                    {toast && <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest shadow-2xl animate-in slide-in-from-top-4">{toast}</div>}
+
+                    {/* Schedule Picker Modal */}
+                    {showSchedulePicker && (
+                        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+                            <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-sm overflow-hidden">
+                                <div className="px-8 py-6 border-b border-slate-100">
+                                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1">Export as Add</p>
+                                    <h3 className="text-base font-black text-slate-800 uppercase tracking-tight">Schedule Listing Start</h3>
+                                </div>
+                                <div className="p-8 space-y-5">
+                                    <div>
+                                        <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 block">
+                                            Start Date & Time
+                                        </label>
+                                        <input
+                                            type="datetime-local"
+                                            value={scheduleDateTime}
+                                            onChange={e => setScheduleDateTime(e.target.value)}
+                                            className="w-full px-4 py-3 rounded-2xl border border-slate-200 text-sm font-bold text-slate-700 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 bg-slate-50 transition-all"
+                                        />
+                                        <p className="text-[9px] text-slate-400 mt-2 font-bold">Default: 1 week from now. All listings use the same start time.</p>
+                                    </div>
+                                    <div className="flex gap-3">
+                                        <button
+                                            onClick={() => exportEbayAddCSV(scheduleDateTime)}
+                                            className="flex-1 py-4 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-blue-500 transition-all active:scale-95 shadow-lg flex items-center justify-center gap-2"
+                                        >
+                                            <Icon name="Download" size={13}/> Export Add CSV
+                                        </button>
+                                        <button
+                                            onClick={() => setShowSchedulePicker(false)}
+                                            className="px-5 py-4 rounded-2xl border border-slate-200 text-[10px] font-black uppercase text-slate-400 hover:bg-slate-50 transition-all active:scale-95"
+                                        >
+                                            Cancel
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="desktop-layout">
+                        {/* LEFT PANEL  -  Nav + Stats */}
+                        <div className="panel-left flex flex-col">
+                            <div className="px-5 py-5 border-b border-slate-100">
+                                <div className="flex items-center gap-2 mb-1">
+                                    <Icon name="Package" size={18} className="text-blue-600"/>
+                                    <span className="text-sm font-black text-slate-800 uppercase tracking-tight">eBay Scout</span>
+                                </div>
+                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest truncate">{user.email}</p>
+                            </div>
+                            <nav className="px-3 py-4 space-y-1 flex-1">
+                                <button onClick={() => setActiveTab('process')} className={"w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all " + (activeTab === 'process' ? "bg-blue-600 text-white shadow-md" : "text-slate-500 hover:bg-slate-50")}>
+                                    <Icon name="Upload" size={15}/> Processor
+                                </button>
+                                <button onClick={() => setActiveTab('listings')} className={"w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all " + (activeTab === 'listings' ? "bg-blue-600 text-white shadow-md" : "text-slate-500 hover:bg-slate-50")}>
+                                    <Icon name="LayoutGrid" size={15}/> Inventory
+                                    <span className="ml-auto bg-blue-100 text-blue-600 text-[9px] font-black px-2 py-0.5 rounded-full">{listings.length}</span>
+                                </button>
+                                <button onClick={() => setActiveTab('settings')} className={"w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all " + (activeTab === 'settings' ? "bg-slate-800 text-white shadow-md" : "text-slate-500 hover:bg-slate-50")}>
+                                    <Icon name="Settings" size={15}/> Settings
+                                </button>
+                                <div className="pt-4 border-t border-slate-100 mt-4">
+                                    <button onClick={() => setShowScanner(true)} className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest text-emerald-600 hover:bg-emerald-50 transition-all">
+                                        <Icon name="ScanLine" size={15}/> Scan Barcode
+                                    </button>
+                                </div>
+                            </nav>
+                            <div className="px-3 py-4 border-t border-slate-100 space-y-2">
+                                <div className="bg-slate-50 rounded-2xl px-4 py-3">
+                                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Version</p>
+                                    <p className="text-[10px] font-black text-slate-600 mt-0.5">v{APP_VERSION}</p>
+                                </div>
+                                <button onClick={logout} className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest text-red-400 hover:bg-red-50 transition-all">
+                                    <Icon name="LogOut" size={15}/> Sign Out
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* CENTER PANEL  -  Main workspace */}
+                        <div className="panel-center">
+                            <div className="px-8 py-6 border-b border-slate-200 bg-white flex items-center justify-between sticky top-0 z-10">
+                                <div>
+                                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">{activeTab === 'process' ? 'Listing Processor' : activeTab === 'settings' ? 'Account Configuration' : 'Inventory'}</p>
+                                    <h2 className="text-base font-black text-slate-800 uppercase tracking-tight">{activeTab === 'process' ? 'Generate Ads' : activeTab === 'settings' ? 'Settings' : listings.length + ' Drafts Ready'}</h2>
+                                </div>
+                                <button onClick={() => setShowScanner(true)} className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-400 transition-all active:scale-95 shadow-md shadow-emerald-100">
+                                    <Icon name="ScanLine" size={14}/> Scan
+                                </button>
+                            </div>
+                            <div className="p-8">
+                                {activeTab === 'process' ? renderProcessTab() : activeTab === 'settings' ? renderSettingsTab() : renderListingsTab()}
+                            </div>
+                            <footer className="py-6 text-center text-[9px] font-black uppercase tracking-[0.3em] text-slate-300 border-t">© 2026 BLACK KNIGHT ARMAMENT</footer>
+                        </div>
+
+                        {/* RIGHT PANEL  -  Scout always visible */}
+                        <div className="panel-right">
+                            <ArbitrageScout
+                                proxyUrl={PROXY_API_URL}
+                                ebayConditions={EBAY_CONDITIONS}
+                                showToast={showToast}
+                                dbRef={dbRef}
+                                user={user}
+                                inline={true}
+                                scanPreload={scoutPreload}
+                                onScanRequest={() => setShowScanner(true)}
+                                onSendToProcessing={(item) => {
+                                    setBarcodeListingData({ title: item.title, image: item.imageUrl, price: item.price ? String(item.price) : '', upc: '' });
+                                    setActiveTab('process');
+                                    showToast('Scout item sent to Processing.');
+                                }}
+                            />
+                        </div>
+                    </div>
+                    </>
+                );
+            }
+
+            // -- MOBILE LAYOUT (unchanged) --------------------------------------------
             return (
                 <>
+                {showScanner && <BarcodeScanner onScan={handleScan} onClose={() => setShowScanner(false)} />}
+                {scanResult && <ScanResult upc={scanResult.upc} onClose={() => setScanResult(null)} onSendToScout={handleSendToScout} onSendToListing={handleSendToListing} showToast={showToast} />}
                 <div className="min-h-screen p-4 md:p-8 max-w-6xl mx-auto animate-in fade-in duration-700">
                     {toast && <div className="fixed top-8 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest shadow-2xl animate-in slide-in-from-top-4">{toast}</div>}
                     <header className="flex flex-col md:flex-row justify-between items-center mb-10 gap-4">
@@ -1060,164 +2254,31 @@ We take our reputation seriously, we buy and sell online, so we understand the v
                         <nav className="flex items-center bg-white rounded-xl shadow-sm p-1 border border-slate-200">
                             <button onClick={() => setActiveTab('process')} className={`px-6 py-2 rounded-xl text-xs font-black transition-all ${activeTab === 'process' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500'}`}>PROCESSOR</button>
                             <button onClick={() => setActiveTab('listings')} className={`px-6 py-2 rounded-xl text-xs font-black transition-all ${activeTab === 'listings' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500'}`}>INVENTORY ({listings.length})</button>
+                            <button onClick={() => setShowScanner(true)} className="p-2 text-emerald-500 hover:bg-emerald-50 rounded-xl transition-all" title="Scan Barcode"><Icon name="ScanLine" size={20}/></button>
                             <div className="w-[1px] h-6 bg-slate-200 mx-2"></div>
                             <button onClick={logout} className="p-2 text-slate-400 hover:text-red-500 transition-colors" title="Secure Logout"><Icon name="LogOut" size={20}/></button>
                         </nav>
                     </header>
                     <main>
-                        {activeTab === 'process' ? (
-                            <section className="space-y-6">
-                                <div className="flex flex-col md:flex-row justify-between gap-4">
-                                    <div className="flex bg-white rounded-2xl p-1 border border-slate-200 shadow-sm w-fit">
-                                        <button onClick={() => setProcessMode('single')} className={`px-5 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${processMode === 'single' ? 'bg-slate-800 text-white shadow-md' : 'text-slate-500'}`}>Single Ad</button>
-                                        <button onClick={() => setProcessMode('bulk')} className={`px-5 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${processMode === 'bulk' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500'}`}>Bulk (4:1)</button>
-                                    </div>
-                                    <div className="flex items-center gap-3 bg-white px-5 py-2 rounded-2xl border border-slate-200 shadow-sm">
-                                        <span className="text-[9px] font-black uppercase text-slate-400">Batch Condition</span>
-                                        <select value={batchCondition} onChange={(e) => setBatchCondition(e.target.value)} className="bg-transparent text-[10px] font-black uppercase text-blue-600 focus:outline-none">{EBAY_CONDITIONS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select>
-                                    </div>
-                                    <button onClick={nuclearReset} className="px-5 py-2 bg-red-50 text-red-600 rounded-xl text-[9px] font-black border border-red-100 uppercase transition-all hover:bg-red-100 flex items-center gap-2 shadow-sm"><Icon name="Zap" size={12}/> Purge</button>
-                                </div>
-                                <div className="bg-white border-2 border-dashed border-slate-300 rounded-[2.5rem] p-12 text-center relative group hover:border-blue-400 transition-all shadow-sm">
-                                    <input type="file" multiple accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer z-10" onChange={(e) => setImages([...images, ...Array.from(e.target.files).map(file => ({ id: Math.random().toString(36), url: URL.createObjectURL(file), file }))])} />
-                                    <Icon name="Upload" size={48} className="text-blue-500 mb-4" />
-                                    <h3 className="text-lg font-black uppercase tracking-tight leading-none">Load Ad Assets</h3>
-                                    <p className="text-slate-400 text-xs mt-3 italic max-w-xs mx-auto">{processMode === 'single' ? "Single Mode: 1 photo per unique listing." : "Bulk Mode: 4 photos per technical listing."}</p>
-                                </div>
-                                {images.length > 0 && (
-                                    <div className="bg-white rounded-[2rem] border border-slate-200 overflow-hidden shadow-sm animate-in slide-in-from-bottom-4">
-                                        <div className="p-4 grid grid-cols-4 sm:grid-cols-8 gap-3 max-h-64 overflow-y-auto no-scrollbar">
-                                            {images.map(img => (
-                                                <div key={img.id} className="aspect-square rounded-xl overflow-hidden border border-slate-100 relative group">
-                                                    <img src={img.url} className="w-full h-full object-cover" />
-                                                    <button onClick={() => setImages(images.filter(i => i.id !== img.id))} className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"><Icon name="Trash2" size={12}/></button>
-                                                </div>
-                                            ))}
-                                        </div>
-                                        <div className="p-6 bg-slate-50 border-t"><button disabled={isProcessing} onClick={() => processImages(processMode)} className={`w-full py-5 rounded-2xl font-black text-xs uppercase shadow-lg shadow-blue-100 active:scale-95 transition-all ${isProcessing ? 'bg-slate-400' : 'bg-blue-600 text-white'}`}>{isProcessing ? status : `Generate Inventory Ads`}</button></div>
-                                    </div>
-                                )}
-                            </section>
-                        ) : (
-                            <div className="space-y-6">
-                                <div className="flex flex-col md:flex-row justify-between items-center bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm gap-4">
-                                    <div className="flex items-center gap-4">
-                                        <p className="text-sm font-black text-slate-800 uppercase tracking-widest">{listings.length} Ready Drafts</p>
-                                        <button onClick={exportEbayCSV} disabled={listings.length === 0} className="px-6 py-3 bg-green-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 shadow-md hover:bg-green-700 transition-all disabled:bg-slate-200 active:scale-95"><Icon name="Download" size={14}/> Export CSV</button>
-                                    </div>
-                                    <button onClick={nuclearReset} className="px-6 py-3 bg-red-50 text-red-600 rounded-xl text-[10px] font-black uppercase flex items-center gap-2 border border-red-100 shadow-sm transition-all hover:bg-red-100 active:scale-95"><Icon name="Zap" size={14}/> Emergency Reset</button>
-                                </div>
-                                {sortedListings.map(l => (
-                                    <div key={l.id} className="bg-white rounded-[2rem] border border-slate-200 flex flex-col md:flex-row overflow-hidden shadow-sm hover:border-blue-300 transition-all animate-in fade-in duration-500 listing-card">
-                                        <div className="md:w-72 h-72 md:h-auto shrink-0 bg-slate-50 border-r border-slate-100 relative group">
-                                            <img src={l.images?.[0]} className="w-full h-full object-cover" />
-                                            <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-md text-white text-[9px] font-black px-3 py-1 rounded-full uppercase tracking-widest">{l.images?.length || 0} Assets</div>
-                                        </div>
-                                        <div className="p-8 flex-grow">
-                                            <div className="flex justify-between items-start mb-4">
-                                                {editingCategoryId === l.id ? (
-                                                    <div className="flex flex-col gap-3 w-full mr-4 bg-blue-50/50 p-5 rounded-3xl border border-blue-200 shadow-inner">
-                                                        <input className="text-xs font-bold border border-blue-200 rounded-xl px-4 py-3 bg-white" value={tempCategoryData.path} onChange={(e) => setTempCategoryData({...tempCategoryData, path: e.target.value})} placeholder="Path" />
-                                                        <div className="flex gap-2">
-                                                            <input className="text-sm font-black border border-blue-200 rounded-xl px-4 py-3 bg-white flex-grow" value={tempCategoryData.id} onChange={(e) => setTempCategoryData({...tempCategoryData, id: e.target.value})} placeholder="Leaf ID" />
-                                                            <button onClick={async () => { await dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({ categoryId: tempCategoryData.id, categoryPath: tempCategoryData.path, categorySource: 'Manual Overide' }); setEditingCategoryId(null); showToast("Saved."); }} className="bg-blue-600 text-white px-5 rounded-xl font-black uppercase text-[10px] shadow-md transition-all active:scale-95">Save</button>
-                                                        </div>
-                                                    </div>
-                                                ) : (
-                                                    <div className="flex flex-col gap-1 items-start">
-                                                        <span className={`text-[10px] font-black px-4 py-1.5 rounded-full uppercase tracking-widest border flex items-center gap-2 group/cat shadow-sm ${
-                                                            l.categorySource === 'AI Verified' ? 'bg-blue-50 text-blue-600 border-blue-100' : 
-                                                            l.categorySource === 'AI Predicted' ? 'bg-amber-50 text-amber-600 border-amber-100' : 
-                                                            'bg-red-50 text-red-600 border-red-100'
-                                                        }`}>
-                                                            {l.categoryPath || 'UNMAPPED - ACTION REQUIRED'}
-                                                            <button onClick={() => { setEditingCategoryId(l.id); setTempCategoryData({ id: l.categoryId || '', path: l.categoryPath || '' }); }} className="opacity-0 group-hover/cat:opacity-100 hover:text-blue-800 transition-opacity"><Icon name="Edit2" size={10}/></button>
-                                                        </span>
-                                                        <span className={`text-[8px] font-black uppercase ml-2 ${
-                                                            l.categorySource === 'AI Predicted' ? 'text-amber-400 italic' : 
-                                                            l.categorySource === 'AI Verified' ? 'text-blue-400' : 'text-red-400 animate-pulse'
-                                                        }`}>
-                                                            {l.categorySource === 'AI Predicted' ? 'CSV Match Failed - Using AI Suggestion' : 
-                                                             l.categorySource === 'AI Verified' ? 'Gemini Verified' : 'Action Required: Assign Category'}
-                                                        </span>
-                                                    </div>
-                                                )}
-                                                {!editingCategoryId && (
-                                                    <div className="flex flex-col items-end">
-                                                        <span className="text-2xl font-black text-slate-900 tracking-tighter leading-none">${Number(l.buyItNowPrice || 0).toFixed(2)}</span>
-                                                        <input
-                                                            type="text"
-                                                            defaultValue={l.sku || ''}
-                                                            placeholder="SKU"
-                                                            onBlur={async (e) => {
-                                                                const val = e.target.value.trim();
-                                                                if (val && val !== l.sku) {
-                                                                    await dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({ sku: val });
-                                                                    showToast("SKU Updated.");
-                                                                }
-                                                            }}
-                                                            onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
-                                                            className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1 bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-400 focus:text-blue-600 focus:outline-none w-full max-w-[140px] transition-colors cursor-text"
-                                                        />
-                                                    </div>
-                                                )}
-                                            </div>
-                                            <h3 className="text-xl font-black text-slate-900 uppercase leading-tight mb-4 tracking-tight">{l.title || "Untitled Ad"}</h3>
-                                            
-                                            <div className="bg-slate-50 border border-slate-200 rounded-3xl p-5 mb-6 shadow-inner">
-                                                <div className="flex items-center gap-2 mb-3 border-b border-slate-200 pb-2">
-                                                    <Icon name="FileText" size={14} className="text-blue-500" />
-                                                    <span className="text-[10px] font-black text-slate-700 uppercase tracking-widest">Description Intel</span>
-                                                </div>
-                                                <div className="whitespace-pre-wrap text-[11px] font-mono text-slate-600 h-48 overflow-y-auto no-scrollbar leading-relaxed">
-                                                    {l.markdownDescription || "No technical logistics generated."}
-                                                </div>
-                                            </div>
-
-                                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 bg-slate-50 p-5 rounded-3xl border border-slate-200 mb-6 shadow-inner">
-                                                <div><p className="text-[8px] font-black text-slate-400 uppercase mb-1 text-center">Item Wt</p><p className="text-xs font-bold text-slate-800 text-center">{l.weightItem || 'N/A'}</p></div>
-                                                <div><p className="text-[8px] font-black text-slate-400 uppercase mb-1 text-center">Pack Wt</p><p className="text-xs font-bold text-slate-800 text-center">{l.weightPackaging || 'N/A'}</p></div>
-                                                <div><p className="text-[8px] font-black text-slate-400 uppercase mb-1 text-center">Total Wt</p><p className="text-xs font-bold text-slate-800 text-center">{l.weightTotal || 'N/A'}</p></div>
-                                                <div><p className="text-[8px] font-black text-slate-400 uppercase mb-1 text-center">Dims</p><p className="text-xs font-bold text-slate-800 text-center">{l.dimensions || 'N/A'}</p></div>
-                                            </div>
-                                            <div className="bg-slate-50 p-4 rounded-2xl mb-6 border border-slate-100 shadow-sm">
-                                                <span className="text-[9px] font-black text-slate-400 uppercase mb-2 block tracking-widest text-center">Listing Condition</span>
-                                                <select value={l.conditionId || '1000'} onChange={e => dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({conditionId: e.target.value})} className="w-full bg-transparent text-xs font-black uppercase text-blue-600 cursor-pointer text-center focus:outline-none">{EBAY_CONDITIONS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select>
-                                            </div>
-                                            {l.priceResearch && (
-                                                <div className="bg-gradient-to-br from-blue-50 to-slate-50 rounded-2xl p-5 border border-blue-100 mb-6 shadow-sm">
-                                                    <div className="flex items-end gap-4 mb-3">
-                                                        <div className="text-center"><span className="text-[8px] text-slate-400 font-black uppercase block mb-1">Low</span><span className="text-sm font-black text-slate-500">${Number(l.priceResearch?.low || 0).toFixed(2)}</span></div>
-                                                        <div className="flex-1 text-center bg-white rounded-2xl px-4 py-3 border border-blue-200 shadow-sm"><span className="text-[8px] text-blue-500 font-black uppercase block mb-1">Recommended</span><span className="text-2xl font-black text-blue-700">${Number(l.priceResearch?.mid || 0).toFixed(2)}</span></div>
-                                                        <div className="text-center"><span className="text-[8px] text-slate-400 font-black uppercase block mb-1">High</span><span className="text-sm font-black text-slate-500">${Number(l.priceResearch?.high || 0).toFixed(2)}</span></div>
-                                                        <span className="text-[8px] font-black px-2 py-1 rounded-lg uppercase bg-green-100 text-green-700 shadow-sm">{l.priceResearch?.confidence || 'N/A'}</span>
-                                                    </div>
-                                                    <p className="text-[10px] text-slate-600 italic leading-relaxed border-l-2 border-blue-200 pl-3">{l.priceResearch?.basis}</p>
-                                                </div>
-                                            )}
-                                            <div className="flex items-center justify-between border-t border-slate-100 pt-6">
-                                                <div className="flex gap-4">
-                                                    <button onClick={() => researchPrice(l)} disabled={pricingListingId === l.id} className="bg-blue-600 text-white px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md flex items-center gap-2 transition-all active:scale-95 shadow-lg shadow-blue-50/50">{pricingListingId === l.id ? <Icon name="Loader2" className="animate-spin" size={14}/> : <Icon name="TrendingUp" size={14}/>} Price Intel</button>
-                                                    <button onClick={async () => { await navigator.clipboard.writeText(convertToHtml(l.markdownDescription || '')); showToast("HTML Copied — Ready for eBay."); }} className="px-5 py-2.5 rounded-xl text-[10px] font-black uppercase border border-slate-200 flex items-center gap-2 hover:bg-slate-50 transition-all shadow-sm active:scale-95"><Icon name="Clipboard" size={14}/> Copy HTML</button>
-                                                </div>
-                                                <button onClick={() => dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).delete()} className="p-3 text-red-500 hover:bg-red-50 rounded-xl transition-all active:scale-90"><Icon name="Trash2" size={22}/></button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
+                        {activeTab === 'process' ? renderProcessTab() : activeTab === 'settings' ? renderSettingsTab() : renderListingsTab()}
                     </main>
-                    <footer className="mt-20 py-8 border-t text-center text-[9px] font-black uppercase tracking-[0.4em] text-slate-400 opacity-60 italic">© 2026 eBay Scout • BLACK KNIGHT ARMAMENT • v{APP_VERSION}</footer>
+                    <footer className="mt-20 py-8 border-t text-center text-[9px] font-black uppercase tracking-[0.4em] text-slate-400 opacity-60 italic">© 2026 eBay Scout * BLACK KNIGHT ARMAMENT * v{APP_VERSION}</footer>
                 </div>
-
-                {/* Arbitrage Scout FAB + Modal */}
+                {/* Mobile Scout FAB */}
                 <ArbitrageScout
                     proxyUrl={PROXY_API_URL}
                     ebayConditions={EBAY_CONDITIONS}
                     showToast={showToast}
                     dbRef={dbRef}
                     user={user}
+                    inline={false}
+                    scanPreload={scoutPreload}
+                    onScanRequest={() => setShowScanner(true)}
+                    onSendToProcessing={(item) => {
+                        setBarcodeListingData({ title: item.title, image: item.imageUrl, price: item.price ? String(item.price) : '', upc: '' });
+                        setActiveTab('process');
+                        showToast('Scout item sent to Processing.');
+                    }}
                 />
                 </>
             );
