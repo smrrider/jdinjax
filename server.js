@@ -1,6 +1,6 @@
 /**
  * JDINJAX eBay Listing Pro Console — Unified Single-Port Server
- * Version: 5.4.0 (Image Compression + Category Cache)
+ * Version: 5.5.0 (Timeouts + Dedup + Cache Optimized)
  * MISSION: Secure multi-user logistics, CSV mapping, and signed uploads.
  */
 
@@ -12,7 +12,7 @@ const crypto  = require('crypto');
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
-const APP_VERSION = "5.4.0";
+const APP_VERSION = "5.5.0";
 
 // ─── CATEGORY RESOLUTION ENGINE ─────────────────────────────────────────
 
@@ -231,8 +231,6 @@ app.post("/api/category-resolve", async (req, res) => {
 /**
  * GEMINI PROXY
  */
-// ── Barcode Search ────────────────────────────────────────────────────────
-
 // ── Barcode Search ────────────────────────────────────────────────────────────
 app.post('/api/barcode-search', async (req, res) => {
     const { upc, engine = 'ebay' } = req.body;
@@ -247,8 +245,15 @@ app.post('/api/barcode-search', async (req, res) => {
             params.set('engine', 'ebay');
             params.set('_nkw', upc);
         }
-        const response = await fetch('https://serpapi.com/search?' + params.toString());
-        const data = await response.json();
+        const barcodeCtrl = new AbortController();
+        const barcodeTO = setTimeout(() => barcodeCtrl.abort(), 10000);
+        let data;
+        try {
+            const barcodeResp = await fetch('https://serpapi.com/search?' + params.toString(), { signal: barcodeCtrl.signal });
+            data = await barcodeResp.json();
+        } finally {
+            clearTimeout(barcodeTO);
+        }
         console.log('[Barcode] engine=' + engine + ' upc=' + upc + ' keys=' + Object.keys(data).join(','));
 
         let results = [];
@@ -281,7 +286,14 @@ app.post('/api/proxy-image', async (req, res) => {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL required' });
     try {
-        const imgRes = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        const imgCtrl = new AbortController();
+        const imgTO = setTimeout(() => imgCtrl.abort(), 8000);
+        let imgRes;
+        try {
+            imgRes = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: imgCtrl.signal });
+        } finally {
+            clearTimeout(imgTO);
+        }
         if (!imgRes.ok) throw new Error('Image fetch failed: ' + imgRes.status);
         const arrayBuffer = await imgRes.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
@@ -295,7 +307,6 @@ app.post('/api/proxy-image', async (req, res) => {
             const apiKey    = process.env.CLOUDINARY_API_KEY;
             const apiSecret = process.env.CLOUDINARY_API_SECRET;
             if (cloudName && apiKey && apiSecret) {
-                const crypto = require('crypto');
                 const timestamp = Math.round(Date.now() / 1000);
                 const folder = 'jdinjax/barcode';
                 const sigStr = 'folder=' + folder + '&timestamp=' + timestamp + apiSecret;
@@ -325,12 +336,20 @@ app.post('/api/gemini', async (req, res) => {
     const { model = 'gemini-2.5-flash', ...payload } = req.body;
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`;
     try {
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        const data = await response.json();
+        const gemCtrl = new AbortController();
+        const gemTO = setTimeout(() => gemCtrl.abort(), 30000);
+        let data;
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+                signal: gemCtrl.signal
+            });
+            data = await response.json();
+        } finally {
+            clearTimeout(gemTO);
+        }
         res.json(data);
     } catch (err) { res.status(502).json({ error: { message: err.message } }); }
 });
