@@ -148,7 +148,17 @@ const fetchSerpApiCandidates = async (title) => {
     const key = process.env.SERPAPI_KEY;
     if (!key) throw new Error("SERPAPI_KEY not configured");
     const params = new URLSearchParams({ engine: "ebay", _nkw: title, ebay_domain: "ebay.com", api_key: key });
-    const response = await fetch("https://serpapi.com/search?" + params.toString());
+    // 12-second timeout — SerpAPI observed at ~7.7s, 12s gives reliable headroom
+    const controller = new AbortController();
+    const t0 = Date.now();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    let response;
+    try {
+        response = await fetch("https://serpapi.com/search?" + params.toString(), { signal: controller.signal });
+    } finally {
+        clearTimeout(timeout);
+    }
+    console.log("[Cat] SerpAPI responded in " + (Date.now() - t0) + "ms");
     if (!response.ok) throw new Error("SerpApi HTTP " + response.status);
     const data = await response.json();
     const cats = (data.categories || []).filter(c => c.id && c.name);
@@ -165,6 +175,9 @@ const resolveViaGeminiOnly = async (title, keyFeatures, description) => {
     return result;
 };
 
+// In-flight request deduplication — bulk batches with similar titles share one API call
+const _inflightCategoryReqs = new Map();
+
 app.post("/api/category-resolve", async (req, res) => {
     const { title, keyFeatures = [], description = "" } = req.body;
     if (!title) return res.status(400).json({ error: "Title required." });
@@ -172,28 +185,46 @@ app.post("/api/category-resolve", async (req, res) => {
     // ── Cache hit — instant return, no API calls ──────────────────────────────
     const cached = cacheGet(title);
     if (cached) {
-        console.log("[eBay Scout] Cache hit: " + title.substring(0, 40) + " → " + cached.categoryId);
+        console.log("[Cat] Cache hit: " + title.substring(0, 40));
         return res.json(cached);
     }
 
-    // ── Stage 1: Hybrid (SerpApi candidates + Gemini selection) ──────────────
-    try {
-        const candidates = await fetchSerpApiCandidates(title);
-        const result = await geminiPick(title, keyFeatures, description, candidates);
-        console.log("[eBay Scout] Hybrid result: " + result.categoryId + " -> " + result.categoryPath);
-        cacheSet(title, result);
-        return res.json(result);
-    } catch (err) {
-        console.warn("[eBay Scout] Hybrid failed (" + err.message + ") — Gemini-only fallback");
+    // ── In-flight dedup — second request for same title waits on first ────────
+    const key = title.toLowerCase().trim();
+    if (_inflightCategoryReqs.has(key)) {
+        console.log("[Cat] Dedup wait: " + title.substring(0, 40));
+        try {
+            const result = await _inflightCategoryReqs.get(key);
+            return res.json(result);
+        } catch(e) { /* fall through to fresh attempt */ }
     }
 
-    // ── Stage 2: Pure Gemini fallback ────────────────────────────────────────
-    try {
+    // ── Stage 1: Hybrid (SerpApi 3s timeout + Gemini pick) ───────────────────
+    const resolvePromise = (async () => {
+        try {
+            const candidates = await fetchSerpApiCandidates(title);
+            const result = await geminiPick(title, keyFeatures, description, candidates);
+            console.log("[Cat] Hybrid: " + result.categoryId + " " + result.categoryPath);
+            cacheSet(title, result);
+            return result;
+        } catch (err) {
+            console.warn("[Cat] Hybrid failed (" + err.message + ") — Gemini fallback");
+        }
+
+        // ── Stage 2: Pure Gemini fallback ────────────────────────────────────
         const result = await resolveViaGeminiOnly(title, keyFeatures, description);
         cacheSet(title, result);
+        return result;
+    })();
+
+    _inflightCategoryReqs.set(key, resolvePromise);
+    try {
+        const result = await resolvePromise;
         return res.json(result);
     } catch (err) {
         res.status(502).json({ error: "Category resolution failed", detail: err.message });
+    } finally {
+        _inflightCategoryReqs.delete(key);
     }
 });
 
