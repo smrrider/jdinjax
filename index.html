@@ -591,12 +591,18 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 scoutReaderRef.current = reader;
                 // Poll for video element — modal renders async; fixed delay unreliable on mobile
                 let _attempts = 0;
+                console.log('[ScoutCam] startScoutCam called, ZXing:', !!window.ZXing);
                 const _waitForVideo = () => {
-                    if (!scoutReaderRef.current) return; // cam was stopped before video mounted
+                    console.log('[ScoutCam] poll attempt', _attempts, '| readerRef:', !!scoutReaderRef.current, '| videoRef:', !!scoutVideoRef.current);
+                    if (!scoutReaderRef.current) { console.log('[ScoutCam] aborted — readerRef cleared'); return; }
                     if (!scoutVideoRef.current) {
-                        if (++_attempts > 25) { setScoutCamError('Camera timed out — try again.'); setScoutCamActive(false); return; }
+                        if (++_attempts > 25) { 
+                            console.error('[ScoutCam] TIMEOUT after 25 attempts');
+                            setScoutCamError('Camera timed out — try again.'); setScoutCamActive(false); return; 
+                        }
                         return setTimeout(_waitForVideo, 100);
                     }
+                    console.log('[ScoutCam] video element found, attaching decoder');
                     reader.decodeFromVideoDevice(null, scoutVideoRef.current, async (result, err) => {
                         if (result) {
                             const upc = result.getText();
@@ -1173,7 +1179,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                     className={"flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 " + (scoutInputMode === 'upload' ? "bg-emerald-500 text-white shadow-md" : "bg-slate-100 text-slate-500 hover:bg-slate-200")}>
                                                     <Icon name="ImagePlus" size={12}/> Upload
                                                 </button>
-                                                <button onClick={() => { setScoutInputMode('scan'); setScoutScanResults(null); setTimeout(startScoutCam, 80); }}
+                                                <button onClick={() => { console.log('[ScoutCam] modal scan btn clicked, inline=false'); setScoutInputMode('scan'); setScoutScanResults(null); setTimeout(startScoutCam, 80); }}
                                                     className={"flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 " + (scoutInputMode === 'scan' ? "bg-emerald-500 text-white shadow-md" : "bg-slate-100 text-slate-500 hover:bg-slate-200")}>
                                                     <Icon name="ScanLine" size={12}/> Scan
                                                 </button>
