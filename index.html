@@ -543,14 +543,9 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const [flatShippingFee, setFlatShippingFee] = useState('6.95');
             const [barcodePreload,  setBarcodePreload]  = useState(null);
             const [errorMsg,      setErrorMsg]       = useState(null);
-            const [scoutInputMode,   setScoutInputMode]  = useState('upload'); // 'upload' | 'scan'
-            const [scoutCamActive,   setScoutCamActive]  = useState(false);
-            const [scoutCamError,    setScoutCamError]   = useState(null);
-            const [scoutScanUpc,     setScoutScanUpc]    = useState(null);
-            const [scoutScanResults, setScoutScanResults]= useState(null);
-            const [scoutManualTitle, setScoutManualTitle]= useState('');
-            const scoutVideoRef  = useRef(null);
-            const scoutReaderRef = useRef(null);
+            const [scoutScanResults, setScoutScanResults] = useState(null);
+            const [scoutManualTitle, setScoutManualTitle] = useState('');
+            const [showScoutScanner, setShowScoutScanner] = useState(false);
 
             // Load Scout history from Firestore on mount
             useEffect(() => {
@@ -577,74 +572,26 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             }, [scanPreload]);
 
             // ── Scout inline camera helpers ──────────────────────────────────────────
-            const stopScoutCam = () => {
-                if (scoutReaderRef.current) { try { scoutReaderRef.current.reset(); } catch(e){} scoutReaderRef.current = null; }
-                setScoutCamActive(false);
-                setScoutCamError(null);
-            };
 
-            // ── useEffect: attach/detach camera when scoutInputMode changes ──
-            // This fires AFTER React has committed the DOM — video element is guaranteed mounted
-            React.useEffect(() => {
-                if (scoutInputMode !== 'scan' || scoutScanResults) {
-                    // Not in scan mode — ensure camera is off
-                    if (scoutReaderRef.current) { try { scoutReaderRef.current.reset(); } catch(e){} scoutReaderRef.current = null; }
-                    return;
-                }
-                if (!window.ZXing) { setScoutCamError('Scanner library not loaded.'); return; }
-                if (!scoutVideoRef.current) { setScoutCamError('Camera not ready — try again.'); return; }
 
-                setScoutCamError(null);
-                setScoutCamActive(true);
-                const reader = new window.ZXing.BrowserMultiFormatReader();
-                scoutReaderRef.current = reader;
-
+            const handleScoutScan = async (upc) => {
+                setShowScoutScanner(false);
+                setScoutScanResults({ loading: true, items: [], noResults: false });
                 const BARCODE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-                    ? 'http://127.0.0.1:3001/api/barcode-search'
-                    : '/api/barcode-search';
-
-                reader.decodeFromVideoDevice(null, scoutVideoRef.current, async (result, err) => {
-                    if (result) {
-                        const upc = result.getText();
-                        try { reader.reset(); } catch(e) {}
-                        scoutReaderRef.current = null;
-                        setScoutCamActive(false);
-                        setScoutScanResults({ loading: true, items: [], noResults: false });
-                        setScoutScanUpc(upc);
-                        setScoutInputMode('upload');
-                        try {
-                            const res = await fetch(BARCODE_URL, {
-                                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ upc, engine: 'ebay' })
-                            });
-                            const data = await res.json();
-                            const items = data.results || [];
-                            setScoutScanResults({ loading: false, items, noResults: items.length === 0 });
-                        } catch(e) {
-                            setScoutScanResults({ loading: false, items: [], noResults: true });
-                        }
-                    }
-                    if (err && !(err instanceof window.ZXing.NotFoundException)) console.warn('[ScoutCam]', err);
-                }).catch(e => { setScoutCamError('Camera access denied. Check browser permissions.'); setScoutCamActive(false); });
-
-                // Cleanup: stop camera when mode changes or component unmounts
-                return () => {
-                    if (scoutReaderRef.current) { try { scoutReaderRef.current.reset(); } catch(e){} scoutReaderRef.current = null; }
-                };
-            }, [scoutInputMode, scoutScanResults]);
-
-            const startScoutCam = () => {
-                // Just set mode — useEffect handles camera attachment after DOM commit
-                setScoutCamError(null);
-                setScoutScanResults(null);
-                setScoutInputMode('scan');
+                    ? 'http://127.0.0.1:3001/api/barcode-search' : '/api/barcode-search';
+                try {
+                    const res = await fetch(BARCODE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ upc, engine: 'ebay' }) });
+                    const data = await res.json();
+                    const items = data.results || [];
+                    setScoutScanResults({ loading: false, items, noResults: items.length === 0 });
+                } catch(e) { setScoutScanResults({ loading: false, items: [], noResults: true }); }
             };
 
             const reset = () => {
                 setScoutImage(null); setCondition('3000'); setPurchasePrice('');
                 setShippingMode('flat'); setFlatShippingFee('6.95');
                 setResult(null); setErrorMsg(null); setScoutStatus(''); setActiveHistory(null);
-                stopScoutCam(); setScoutInputMode('upload'); setScoutScanUpc(null); setScoutScanResults(null); setScoutManualTitle('');
+                setScoutScanResults(null); setScoutManualTitle('');
             };
 
             const purgeHistory = async () => {
@@ -668,7 +615,6 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const runScout = async () => {
                 const hasBarcode = !!barcodePreload;
                 if (!scoutImage && !hasBarcode) { setErrorMsg("Upload an image or scan a barcode first."); return; }
-                if (purchasePrice === '' || purchasePrice === null || purchasePrice === undefined) { setErrorMsg("Enter a purchase price."); return; }
                 setIsRunning(true); setErrorMsg(null); setResult(null);
                 try {
                     // Skip compression if no image  -  barcode text-only path
@@ -818,6 +764,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 };
 
                 return (
+                    <>
                     <div className="flex flex-col h-full">
                         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between shrink-0 bg-white">
                             <div className="flex items-center gap-2">
@@ -880,243 +827,208 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
 
                             {!displayResult && activeHistory === null && (
                                 <div className="space-y-3">
-                                    {/* ── Scan | Upload toggle ── */}
-                                    <div className="flex gap-2 mb-2">
-                                        <button onClick={() => { stopScoutCam(); setScoutInputMode('upload'); setScoutScanResults(null); }}
-                                            className={"flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 " + (scoutInputMode === 'upload' ? "bg-emerald-500 text-white shadow-md" : "bg-slate-100 text-slate-500 hover:bg-slate-200")}>
-                                            <Icon name="ImagePlus" size={12}/> Upload
-                                        </button>
-                                        <button onClick={() => { startScoutCam(); }}
-                                            className={"flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 " + (scoutInputMode === 'scan' ? "bg-emerald-500 text-white shadow-md" : "bg-slate-100 text-slate-500 hover:bg-slate-200")}>
-                                            <Icon name="ScanLine" size={12}/> Scan
-                                        </button>
+                                    {/* Image upload */}
+                                    <div className="relative border-2 border-dashed border-slate-300 rounded-2xl overflow-hidden hover:border-emerald-400 transition-colors">
+                                        <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer z-10"
+                                            onChange={(e) => { if (e.target.files[0]) setScoutImage({ file: e.target.files[0], url: URL.createObjectURL(e.target.files[0]) }); }} />
+                                        {scoutImage ? (
+                                            <div className="relative">
+                                                <img src={scoutImage.url} className="w-full h-40 object-contain bg-slate-50"/>
+                                                <div className="absolute bottom-2 right-2 bg-emerald-500 text-white text-[9px] font-black px-2 py-1 rounded-full uppercase">Tap to Replace</div>
+                                            </div>
+                                        ) : (
+                                            <div className="py-8 text-center">
+                                                <Icon name="ImagePlus" size={32} className="text-slate-300 mb-2"/>
+                                                <p className="text-xs font-black text-slate-400 uppercase">Load Item Photo</p>
+                                            </div>
+                                        )}
                                     </div>
 
-                                    {/* ── Upload mode ── */}
-                                    {scoutInputMode === 'upload' && (
-                                        <div className="relative border-2 border-dashed border-slate-300 rounded-2xl overflow-hidden hover:border-emerald-400 transition-colors">
-                                            <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer z-10"
-                                                onChange={(e) => { if (e.target.files[0]) setScoutImage({ file: e.target.files[0], url: URL.createObjectURL(e.target.files[0]) }); }} />
-                                            {scoutImage ? (
-                                                <div className="relative">
-                                                    <img src={scoutImage.url} className="w-full h-40 object-contain bg-slate-50"/>
-                                                    <div className="absolute bottom-2 right-2 bg-emerald-500 text-white text-[9px] font-black px-2 py-1 rounded-full uppercase">Tap to Replace</div>
-                                                </div>
-                                            ) : (
-                                                <div className="py-8 text-center">
-                                                    <Icon name="ImagePlus" size={32} className="text-slate-300 mb-2"/>
-                                                    <p className="text-xs font-black text-slate-400 uppercase">Load Item Photo</p>
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
+                                    {/* Scan Barcode button */}
+                                    <button onClick={() => setShowScoutScanner(true)}
+                                        className="w-full py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 bg-slate-100 text-slate-600 hover:bg-emerald-50 hover:text-emerald-600 active:scale-95">
+                                        <Icon name="ScanLine" size={12}/> Scan Barcode
+                                    </button>
 
-                                    {/* ── Scan mode — camera viewport ── */}
-                                    {scoutInputMode === 'scan' && !scoutScanResults && (
-                                        <div className="rounded-2xl overflow-hidden border-2 border-slate-200">
-                                            {scoutCamError ? (
-                                                <div className="bg-red-50 px-4 py-6 text-center">
-                                                    <p className="text-red-500 text-xs font-bold">{scoutCamError}</p>
-                                                    <button onClick={() => { setScoutCamError(null); setScoutInputMode('upload'); }} className="mt-3 px-4 py-2 bg-red-500 text-white rounded-xl text-[10px] font-black uppercase">Back to Upload</button>
-                                                </div>
-                                            ) : (
-                                                <div className="scanner-viewport" style={{height:'180px'}}>
-                                                    <video ref={scoutVideoRef} className="w-full h-full object-cover" />
-                                                    <div className="scanner-corner tl"/><div className="scanner-corner tr"/>
-                                                    <div className="scanner-corner bl"/><div className="scanner-corner br"/>
-                                                    <div className="scan-line"/>
-                                                </div>
-                                            )}
-                                            {!scoutCamError && (
-                                                <p className="text-slate-400 text-[9px] font-black uppercase tracking-widest text-center py-2 bg-slate-50">
-                                                    UPC · EAN · QR — auto-detects
-                                                </p>
-                                            )}
-                                        </div>
-                                    )}
-
-                                    {/* ── Scan results picker (auto-routes to Scout) ── */}
-                                    {scoutInputMode === 'scan' && scoutScanResults && (() => {
+                                    {/* Scan results */}
+                                    {scoutScanResults && (() => {
                                         const { loading, items, noResults } = scoutScanResults;
                                         if (loading) return (
                                             <div className="rounded-2xl border-2 border-slate-200 py-8 text-center">
-                                                <div className="inline-block w-6 h-6 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin mb-2"/>
-                                                <p className="text-slate-400 text-[10px] font-black uppercase">Looking up barcode...</p>
+                                                <Icon name="Loader2" size={24} className="animate-spin text-emerald-500 mx-auto mb-2"/>
+                                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Looking up barcode...</p>
                                             </div>
                                         );
-                                        if (noResults || items.length === 0) return (
+                                        if (noResults) return (
                                             <div className="rounded-2xl border-2 border-slate-200 p-4 space-y-3">
-                                                <p className="text-slate-500 text-[10px] font-black uppercase tracking-widest text-center">No results — enter title manually</p>
-                                                <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 flex items-center gap-2">
-                                                    <Icon name="PenLine" size={14} className="text-slate-400 shrink-0"/>
-                                                    <input type="text" value={scoutManualTitle} onChange={e => setScoutManualTitle(e.target.value)}
-                                                        placeholder="Type item name..." autoFocus
-                                                        className="flex-1 bg-transparent text-slate-800 text-xs font-bold placeholder-slate-400 focus:outline-none"/>
+                                                <p className="text-slate-500 text-xs font-bold text-center">No results found</p>
+                                                <input type="text" value={scoutManualTitle} onChange={e => setScoutManualTitle(e.target.value)} placeholder="Enter item title manually..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-emerald-400"/>
+                                                <div className="flex gap-2">
+                                                    <button onClick={() => { if(scoutManualTitle.trim()) { setBarcodePreload({ title: scoutManualTitle.trim() }); setScoutScanResults(null); }}} className="flex-1 py-2 bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase">Use This Title</button>
+                                                    <button onClick={() => { setScoutScanResults(null); setShowScoutScanner(true); }} className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase">Scan Again</button>
                                                 </div>
-                                                <button disabled={scoutManualTitle.trim().length < 3}
-                                                    onClick={() => {
-                                                        setBarcodePreload({ title: scoutManualTitle.trim(), upc: scoutScanUpc || '', price: '' });
-                                                        setScoutScanResults(null); setScoutScanUpc(null); setScoutManualTitle(''); setScoutInputMode('upload');
-                                                        showToast('Manual title loaded — run Scout.');
-                                                    }}
-                                                    className={"w-full py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all active:scale-95 " + (scoutManualTitle.trim().length >= 3 ? "bg-emerald-500 text-white hover:bg-emerald-400" : "bg-slate-200 text-slate-400 cursor-not-allowed")}>
-                                                    Use This Title
-                                                </button>
-                                                <button onClick={() => { setScoutScanResults(null); startScoutCam(); }}
-                                                    className="w-full py-2.5 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all">
-                                                    Scan Again
-                                                </button>
                                             </div>
                                         );
                                         return (
                                             <div className="rounded-2xl border-2 border-slate-200 overflow-hidden">
-                                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest px-3 pt-3 pb-1">Select item — auto-sends to Scout</p>
-                                                <div className="divide-y divide-slate-100 max-h-52 overflow-y-auto">
-                                                    {items.map((item, i) => (
-                                                        <button key={i} onClick={() => {
-                                                            setBarcodePreload({ title: item.title, upc: scoutScanUpc || '', price: item.price });
-                                                            if (item.price) {
-                                                                const n = parseFloat(item.price.replace(/[^0-9.]/g,''));
-                                                                if (n > 0) setPurchasePrice(String(n.toFixed(2)));
-                                                            }
-                                                            setScoutScanResults(null); setScoutScanUpc(null); setScoutInputMode('upload');
-                                                            showToast('Barcode item loaded — run Scout.');
-                                                        }} className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-emerald-50 transition-colors text-left">
-                                                            {item.image && <img src={item.image} className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0"/>}
-                                                            <div className="min-w-0 flex-1">
-                                                                <p className="text-[10px] font-black text-slate-800 leading-tight line-clamp-2">{item.title}</p>
-                                                                {item.price && <p className="text-[9px] font-black text-emerald-600 mt-0.5">{item.price}</p>}
-                                                            </div>
-                                                            <Icon name="ChevronRight" size={14} className="text-slate-300 shrink-0"/>
-                                                        </button>
-                                                    ))}
-                                                </div>
+                                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest text-center py-2 bg-slate-50 border-b border-slate-100">Select item</p>
+                                                {(items||[]).map((item,i) => (
+                                                    <button key={i} onClick={() => { setBarcodePreload(item); setScoutScanResults(null); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-emerald-50 border-b border-slate-100 last:border-0 transition-colors text-left">
+                                                        <div className="flex-1 min-w-0">
+                                                            <p className="text-xs font-bold text-slate-800 truncate">{item.title}</p>
+                                                            {item.price && <p className="text-[10px] text-emerald-600 font-black">{item.price}</p>}
+                                                        </div>
+                                                        <Icon name="ChevronRight" size={14} className="text-slate-300 shrink-0"/>
+                                                    </button>
+                                                ))}
+                                            <button onClick={() => onSendToProcessing && onSendToProcessing({ title: r.itemTitle, imageUrl: r.imageUrl, price: r.priceMid })}
+                                                className="w-full mt-4 py-4 bg-blue-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-500 transition-all active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-blue-100">
+                                                <Icon name="PackagePlus" size={13}/> Send to Add Processor
+                                            </button>
                                             </div>
                                         );
                                     })()}
+
+                                    {/* Condition + Price Row */}
                                     <div className="grid grid-cols-2 gap-3">
-                                        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3">
-                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Condition</p>
-                                            <select value={condition} onChange={e => setCondition(e.target.value)} className="w-full bg-transparent text-[10px] font-black text-slate-800 focus:outline-none uppercase cursor-pointer">
+                                        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-2">Item Condition</p>
+                                            <select value={condition} onChange={e => setCondition(e.target.value)}
+                                                className="w-full bg-transparent text-[11px] font-black text-slate-800 focus:outline-none uppercase cursor-pointer">
                                                 {ebayConditions.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
                                             </select>
                                         </div>
-                                        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3">
-                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Purchase Price</p>
+                                        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-2">Purchase Price</p>
                                             <div className="flex items-center gap-1">
-                                                <span className="text-slate-400 font-black">$</span>
-                                                <input type="number" step="0.01" min="0" value={purchasePrice} onChange={e => setPurchasePrice(e.target.value)} placeholder="0.00"
-                                                    className="w-full bg-transparent text-[10px] font-black text-slate-800 focus:outline-none placeholder-slate-300"/>
+                                                <span className="text-slate-400 font-black text-sm">$</span>
+                                                <input type="number" step="0.01" min="0" value={purchasePrice}
+                                                    onChange={e => setPurchasePrice(e.target.value)}
+                                                    placeholder="0.00"
+                                                    className="w-full bg-transparent text-[11px] font-black text-slate-800 focus:outline-none placeholder-slate-300" />
                                             </div>
                                         </div>
                                     </div>
+
+                                    {/* Shipping Mode */}
                                     <div className="grid grid-cols-2 gap-3">
-                                        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3">
-                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Buyer Shipping</p>
-                                            <select value={shippingMode} onChange={e => setShippingMode(e.target.value)} className="w-full bg-transparent text-[10px] font-black text-slate-800 focus:outline-none uppercase cursor-pointer">
+                                        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-2">Buyer Shipping</p>
+                                            <select value={shippingMode} onChange={e => setShippingMode(e.target.value)}
+                                                className="w-full bg-transparent text-[11px] font-black text-slate-800 focus:outline-none uppercase cursor-pointer">
                                                 <option value="flat">Flat Fee</option>
                                                 <option value="free">Free Shipping</option>
                                                 <option value="pickup">Local Pickup</option>
                                             </select>
                                         </div>
-                                        <div className={shippingMode !== "flat" ? "bg-slate-100 border border-slate-200 rounded-2xl p-3 opacity-40" : "bg-slate-50 border border-slate-200 rounded-2xl p-3"}>
-                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Flat Fee</p>
+                                        <div className={shippingMode !== "flat" ? "bg-slate-100 border border-slate-200 rounded-2xl p-4 opacity-40 pointer-events-none" : "bg-slate-50 border border-slate-200 rounded-2xl p-4"}>
+                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-2">Flat Fee Charged</p>
                                             <div className="flex items-center gap-1">
-                                                <span className="text-slate-400 font-black">$</span>
-                                                <input type="number" step="0.01" min="0" value={flatShippingFee} onChange={e => setFlatShippingFee(e.target.value)} disabled={shippingMode !== "flat"}
-                                                    className="w-full bg-transparent text-[10px] font-black text-slate-800 focus:outline-none"/>
+                                                <span className="text-slate-400 font-black text-sm">$</span>
+                                                <input type="number" step="0.01" min="0" value={flatShippingFee}
+                                                    onChange={e => setFlatShippingFee(e.target.value)}
+                                                    disabled={shippingMode !== "flat"}
+                                                    className="w-full bg-transparent text-[11px] font-black text-slate-800 focus:outline-none" />
                                             </div>
                                         </div>
                                     </div>
-                                    {errorMsg && <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-2 text-xs font-bold text-red-600">{errorMsg}</div>}
-                                    <button onClick={runScout} disabled={isRunning || (!scoutImage && !barcodePreload) || purchasePrice === ''}
-                                        className={"w-full py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 shadow-lg flex items-center justify-center gap-2 " + (isRunning || (!scoutImage && !barcodePreload) || purchasePrice === '' ? "bg-slate-200 text-slate-400" : "bg-emerald-500 text-white shadow-emerald-100 hover:bg-emerald-400")}>
-                                        {isRunning ? <><Icon name="Loader2" size={14} className="animate-spin"/> {scoutStatus || "Running..."}</> : <><Icon name="Zap" size={14}/> Run Intel</>}
+
+                                    {errorMsg && (
+                                        <div className="bg-red-50 border border-red-200 rounded-2xl px-5 py-3 text-xs font-bold text-red-600">{errorMsg}</div>
+                                    )}
+
+                                    {/* Run Button */}
+                                    <button onClick={runScout} disabled={isRunning || (!scoutImage && !barcodePreload)}
+                                        className={`w-full py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest transition-all active:scale-95 shadow-lg flex items-center justify-center gap-3 ${isRunning || (!scoutImage && !barcodePreload) ? "bg-slate-200 text-slate-400" : 'bg-emerald-500 text-white shadow-emerald-100 hover:bg-emerald-400'}`}>
+                                        {isRunning ? <><Icon name="Loader2" size={16} className="animate-spin" /> {scoutStatus || 'Running Scout...'}</> : <><Icon name="Zap" size={16} /> Run Arbitrage Intel</>}
                                     </button>
                                 </div>
                             )}
 
+                            {/* Intel Card */}
                             {displayResult && (() => {
                                 const r = displayResult;
                                 return (
-                                    <div className="space-y-3 animate-in fade-in slide-in-from-bottom-4">
-                                        {activeHistory !== null && (
-                                            <button onClick={() => setActiveHistory(null)} className="flex items-center gap-2 text-[10px] font-black text-slate-500 uppercase tracking-widest hover:text-slate-800 mb-2">
-                                                <Icon name="ChevronLeft" size={14}/> New Scout
-                                            </button>
-                                        )}
-                                        <div className={"rounded-2xl border-2 px-5 py-4 flex items-center justify-between " + r.verdict.css}>
+                                    <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-400">
+                                        <div className={`rounded-2xl border-2 px-5 py-4 flex items-center justify-between ${r.verdict.css}`}>
                                             <div>
                                                 <p className="text-xl font-black leading-none">{r.verdict.label}</p>
-                                                <p className="text-[9px] font-black uppercase tracking-widest mt-1 opacity-70">Verdict</p>
+                                                <p className="text-[10px] font-black uppercase tracking-widest mt-1 opacity-70">Arbitrage Verdict</p>
                                             </div>
                                             <div className="text-right">
-                                                <p className="text-2xl font-black">${r.arb.netProfit.toFixed(2)}</p>
-                                                <p className="text-[9px] font-black uppercase opacity-70">{r.arb.roi.toFixed(0)}% ROI</p>
+                                                <p className="text-2xl font-black leading-none">${r.arb.netProfit.toFixed(2)}</p>
+                                                <p className="text-[9px] font-black uppercase tracking-widest mt-1 opacity-70">Net Profit · {r.arb.roi.toFixed(0)}% ROI</p>
                                             </div>
                                         </div>
                                         <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex gap-3">
-                                            {r.imageUrl && <img src={r.imageUrl} className="w-16 h-16 rounded-xl object-cover border border-slate-200 shrink-0"/>}
+                                            {r.imageUrl && <img src={r.imageUrl} className="w-16 h-16 rounded-xl object-cover border border-slate-200 shrink-0" />}
                                             <div className="min-w-0">
-                                                <p className="text-[9px] font-black text-slate-800 uppercase leading-tight">{r.itemTitle}</p>
-                                                <p className="text-[9px] text-slate-500 mt-1 line-clamp-2">{r.itemDescription}</p>
+                                                <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1">Item Identified</p>
+                                                <p className="text-xs font-black text-slate-900 leading-tight uppercase">{r.itemTitle}</p>
+                                                <span className="text-[9px] font-black text-blue-500 bg-blue-50 border border-blue-100 px-2 py-1 rounded-lg mt-2 inline-block uppercase">{r.condition}</span>
                                             </div>
                                         </div>
-                                        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
-                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-2">Market Intel  -  {r.priceConfidence}</p>
-                                            <div className="flex gap-2">
-                                                <div className="flex-1 text-center bg-white rounded-xl py-2 border border-slate-200"><p className="text-[8px] text-slate-400 font-black uppercase">Low</p><p className="text-sm font-black text-slate-500">${(r.priceLow||0).toFixed(2)}</p></div>
-                                                <div className="flex-1 text-center bg-blue-50 border-2 border-blue-200 rounded-xl py-2"><p className="text-[8px] text-blue-500 font-black uppercase">Mid</p><p className="text-base font-black text-blue-700">${(r.priceMid||0).toFixed(2)}</p></div>
-                                                <div className="flex-1 text-center bg-white rounded-xl py-2 border border-slate-200"><p className="text-[8px] text-slate-400 font-black uppercase">High</p><p className="text-sm font-black text-slate-500">${(r.priceHigh||0).toFixed(2)}</p></div>
+                                        <div className="bg-white border border-slate-200 rounded-2xl p-4">
+                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-3">eBay Market Intel</p>
+                                            <div className="flex items-end gap-2 mb-3">
+                                                <div className="text-center flex-1 bg-slate-50 rounded-xl p-2 border border-slate-200">
+                                                    <p className="text-[8px] font-black text-slate-400 uppercase mb-1">Low</p>
+                                                    <p className="text-sm font-black text-slate-500">${Number(r.priceLow||0).toFixed(2)}</p>
+                                                </div>
+                                                <div className="text-center flex-1 bg-blue-50 rounded-xl p-2 border-2 border-blue-200">
+                                                    <p className="text-[8px] font-black text-blue-500 uppercase mb-1">Mid</p>
+                                                    <p className="text-base font-black text-blue-700">${Number(r.priceMid||0).toFixed(2)}</p>
+                                                </div>
+                                                <div className="text-center flex-1 bg-slate-50 rounded-xl p-2 border border-slate-200">
+                                                    <p className="text-[8px] font-black text-slate-400 uppercase mb-1">High</p>
+                                                    <p className="text-sm font-black text-slate-500">${Number(r.priceHigh||0).toFixed(2)}</p>
+                                                </div>
                                             </div>
                                         </div>
                                         <div className="bg-white border border-slate-200 rounded-2xl p-4">
                                             <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-3">Cost Stack</p>
-                                            {r.shippingMode === "pickup" && <div className="mb-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-1.5 text-[9px] font-black text-amber-700 uppercase">Local Pickup  -  fees waived</div>}
-                                            {r.shippingMode === "free" && <div className="mb-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-1.5 text-[9px] font-black text-blue-700 uppercase">Free Shipping  -  USPS absorbed</div>}
-                                            <div className="space-y-1.5">
-                                                {renderCostStack(r)}
-                                                <div className="flex justify-between items-center pt-2 border-t-2 border-slate-200">
-                                                    <span className="text-[10px] font-black text-slate-800 uppercase">Net Profit</span>
-                                                    <span className={"text-base font-black " + (r.arb.netProfit >= 15 ? "text-emerald-600" : r.arb.netProfit >= 5 ? "text-amber-600" : "text-red-500")}>${r.arb.netProfit.toFixed(2)}</span>
-                                                </div>
+                                            <div className="space-y-1">{renderCostStack(r)}</div>
+                                            <div className="flex justify-between items-center pt-2 mt-2 border-t-2 border-slate-200">
+                                                <span className="text-[11px] font-black text-slate-800 uppercase">Net Profit</span>
+                                                <span className={'text-base font-black ' + (r.arb.netProfit >= 15 ? 'text-emerald-600' : r.arb.netProfit >= 5 ? 'text-amber-600' : 'text-red-500')}>
+                                                    ${r.arb.netProfit.toFixed(2)}
+                                                </span>
                                             </div>
                                         </div>
-                                        <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4">
-                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-2">Velocity</p>
+                                        <div className="bg-white border border-slate-200 rounded-2xl p-4">
+                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-3">Market Velocity</p>
                                             <div className="flex items-center gap-4">
                                                 <div className="flex-1">
-                                                    <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
-                                                        <div className={"h-full rounded-full " + (r.sellThroughRate >= 60 ? "bg-emerald-400" : r.sellThroughRate >= 30 ? "bg-amber-400" : "bg-red-400")} style={{ width: Math.min(r.sellThroughRate, 100) + "%" }}/>
+                                                    <div className="flex justify-between mb-1">
+                                                        <span className="text-[9px] font-black text-slate-400 uppercase">Sell-Through</span>
+                                                        <span className="text-[9px] font-black text-slate-700">{r.sellThroughRate}%</span>
                                                     </div>
-                                                    <p className="text-[9px] text-slate-500 mt-1">{r.sellThroughRate}% sell-through</p>
+                                                    <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                                                        <div className={`h-full rounded-full ${r.sellThroughRate >= 60 ? 'bg-emerald-400' : r.sellThroughRate >= 30 ? 'bg-amber-400' : 'bg-red-400'}`}
+                                                            style={{ width: `${Math.min(r.sellThroughRate,100)}%` }} />
+                                                    </div>
                                                 </div>
                                                 <div className="text-right shrink-0">
-                                                    <p className="text-base font-black text-slate-800">~{r.daysToSell}d</p>
-                                                    <p className="text-[8px] text-slate-400 uppercase">avg sell</p>
+                                                    <p className="text-base font-black text-slate-800 leading-none">~{r.daysToSell}d</p>
+                                                    <p className="text-[8px] font-black text-slate-400 uppercase mt-0.5">Days to Sell</p>
                                                 </div>
                                             </div>
                                         </div>
-                                        {onSendToProcessing && (
-                                            <button
-                                                onClick={() => onSendToProcessing({
-                                                    title:    r.itemTitle,
-                                                    price:    r.priceMid,
-                                                    imageUrl: r.imageUrl,
-                                                })}
-                                                className="w-full py-3 bg-emerald-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-500 transition-all active:scale-95 flex items-center justify-center gap-2 shadow-md shadow-emerald-100"
-                                            >
-                                                <Icon name="Zap" size={13}/> Send to Processing
-                                            </button>
-                                        )}
-                                        <button onClick={reset} className="w-full py-3 bg-slate-100 text-slate-600 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all">
-                                            New Scout
+                                        <button onClick={() => onSendToProcessing && onSendToProcessing({ title: r.itemTitle, imageUrl: r.imageUrl, price: r.priceMid })}
+                                            className="w-full py-4 bg-blue-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-500 transition-all active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-blue-100">
+                                            <Icon name="PackagePlus" size={13}/> Send to Add Processor
+                                        </button>
+                                        <button onClick={() => { setResult(null); setScoutImage(null); setBarcodePreload(null); setPurchasePrice(''); }}
+                                            className="w-full py-3 bg-slate-100 text-slate-600 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all active:scale-95">
+                                            <Icon name="RotateCcw" size={12} className="inline mr-1"/> New Scout
                                         </button>
                                     </div>
                                 );
                             })()}
                         </div>
                     </div>
+                    {showScoutScanner && <BarcodeScanner onScan={handleScoutScan} onClose={() => setShowScoutScanner(false)} />}
+                    </>
                 );
             }
 
@@ -1178,82 +1090,37 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                     {/* Input Panel  -  hide if viewing history */}
                                     {activeHistory === null && (
                                         <>
-                                            {/* ── Scan | Upload toggle ── */}
-                                            <div className="flex gap-2 mb-2">
-                                                <button onClick={() => { stopScoutCam(); setScoutInputMode('upload'); setScoutScanResults(null); }}
-                                                    className={"flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 " + (scoutInputMode === 'upload' ? "bg-emerald-500 text-white shadow-md" : "bg-slate-100 text-slate-500 hover:bg-slate-200")}>
-                                                    <Icon name="ImagePlus" size={12}/> Upload
-                                                </button>
-                                                <button onClick={() => { console.log('[ScoutCam] modal scan btn clicked, inline=false'); startScoutCam(); }}
-                                                    className={"flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 " + (scoutInputMode === 'scan' ? "bg-emerald-500 text-white shadow-md" : "bg-slate-100 text-slate-500 hover:bg-slate-200")}>
-                                                    <Icon name="ScanLine" size={12}/> Scan
-                                                </button>
-                                            </div>
-
-                                            {/* ── Upload mode ── */}
-                                            {scoutInputMode === 'upload' && (
-                                                <div className="relative border-2 border-dashed border-slate-300 rounded-2xl overflow-hidden hover:border-emerald-400 transition-colors">
-                                                    <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer z-10"
-                                                        onChange={(e) => { if (e.target.files[0]) setScoutImage({ file: e.target.files[0], url: URL.createObjectURL(e.target.files[0]) }); }} />
-                                                    {scoutImage ? (
-                                                        <div className="relative">
-                                                            <img src={scoutImage.url} className="w-full h-52 object-contain bg-slate-50" />
-                                                            <div className="absolute bottom-3 right-3 bg-emerald-500 text-white text-[9px] font-black px-3 py-1.5 rounded-full uppercase tracking-widest">Tap to Replace</div>
-                                                        </div>
-                                                    ) : (
-                                                        <div className="py-12 text-center">
-                                                            <Icon name="Camera" size={40} className="text-slate-300 mb-3" />
-                                                            <p className="text-sm font-black text-slate-400 uppercase">Load Item Photo</p>
-                                                            <p className="text-[10px] text-slate-300 mt-1">Single image for item identification</p>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            )}
-
-                                            {/* ── Scan mode — camera viewport ── */}
-                                            {scoutInputMode === 'scan' && !scoutScanResults && (
-                                                <div className="rounded-2xl overflow-hidden border-2 border-slate-200">
-                                                    {scoutCamError ? (
-                                                        <div className="bg-red-50 px-4 py-6 text-center">
-                                                            <p className="text-red-500 text-xs font-bold">{scoutCamError}</p>
-                                                            <button onClick={() => { setScoutCamError(null); setScoutInputMode('upload'); }} className="mt-3 px-4 py-2 bg-red-500 text-white rounded-xl text-[10px] font-black uppercase">Back to Upload</button>
-                                                        </div>
-                                                    ) : (
-                                                        <div className="scanner-viewport" style={{height:'180px'}}>
-                                                            <video ref={scoutVideoRef} className="w-full h-full object-cover" />
-                                                            <div className="scanner-corner tl"/><div className="scanner-corner tr"/>
-                                                            <div className="scanner-corner bl"/><div className="scanner-corner br"/>
-                                                            <div className="scan-line"/>
-                                                        </div>
-                                                    )}
-                                                    {!scoutCamError && (
-                                                        <p className="text-slate-400 text-[9px] font-black uppercase tracking-widest text-center py-2 bg-slate-50">
-                                                            UPC · EAN · QR — auto-detects
-                                                        </p>
-                                                    )}
-                                                </div>
-                                            )}
-
-                                            {/* ── Scan results picker ── */}
-                                            {scoutInputMode === 'scan' && scoutScanResults && (() => {
-                                                const { loading, items, noResults } = scoutScanResults;
-                                                if (loading) return (
-                                                    <div className="rounded-2xl border-2 border-slate-200 py-8 text-center">
-                                                        <Icon name="Loader2" size={24} className="animate-spin text-emerald-500 mx-auto mb-2"/>
-                                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Looking up barcode...</p>
+                                            {/* ── {/* ── Image upload + Scan Barcode button ── */}
+                                            <div className="relative border-2 border-dashed border-slate-300 rounded-2xl overflow-hidden hover:border-emerald-400 transition-colors">
+                                                <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer z-10"
+                                                    onChange={(e) => { if (e.target.files[0]) setScoutImage({ file: e.target.files[0], url: URL.createObjectURL(e.target.files[0]) }); }} />
+                                                {scoutImage ? (
+                                                    <div className="relative">
+                                                        <img src={scoutImage.url} className="w-full h-52 object-contain bg-slate-50"/>
+                                                        <div className="absolute bottom-3 right-3 bg-emerald-500 text-white text-[9px] font-black px-3 py-1.5 rounded-full uppercase tracking-widest">Tap to Replace</div>
                                                     </div>
-                                                );
+                                                ) : (
+                                                    <div className="py-12 text-center">
+                                                        <Icon name="Camera" size={40} className="text-slate-300 mb-3"/>
+                                                        <p className="text-sm font-black text-slate-400 uppercase">Load Item Photo</p>
+                                                        <p className="text-[10px] text-slate-300 mt-1">Single image for item identification</p>
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <button onClick={() => setShowScoutScanner(true)}
+                                                className="w-full py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 bg-slate-100 text-slate-600 hover:bg-emerald-50 hover:text-emerald-600 active:scale-95">
+                                                <Icon name="ScanLine" size={12}/> Scan Barcode
+                                            </button>
+                                            {scoutScanResults && (() => {
+                                                const { loading, items, noResults } = scoutScanResults;
+                                                if (loading) return (<div className="rounded-2xl border-2 border-slate-200 py-8 text-center"><Icon name="Loader2" size={24} className="animate-spin text-emerald-500 mx-auto mb-2"/><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Looking up barcode...</p></div>);
                                                 if (noResults) return (
                                                     <div className="rounded-2xl border-2 border-slate-200 p-4 space-y-3">
                                                         <p className="text-slate-500 text-xs font-bold text-center">No results found</p>
-                                                        <input type="text" value={scoutManualTitle} onChange={e => setScoutManualTitle(e.target.value)}
-                                                            placeholder="Enter item title manually..."
-                                                            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-emerald-400"/>
+                                                        <input type="text" value={scoutManualTitle} onChange={e => setScoutManualTitle(e.target.value)} placeholder="Enter item title manually..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-emerald-400"/>
                                                         <div className="flex gap-2">
-                                                            <button onClick={() => { if(scoutManualTitle.trim()) { setBarcodePreload({ title: scoutManualTitle.trim() }); setScoutScanResults(null); setScoutInputMode('upload'); }}}
-                                                                className="flex-1 py-2 bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase">Use This Title</button>
-                                                            <button onClick={() => { setScoutScanResults(null); startScoutCam(); }}
-                                                                className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase">Scan Again</button>
+                                                            <button onClick={() => { if(scoutManualTitle.trim()) { setBarcodePreload({ title: scoutManualTitle.trim() }); setScoutScanResults(null); }}} className="flex-1 py-2 bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase">Use This Title</button>
+                                                            <button onClick={() => { setScoutScanResults(null); setShowScoutScanner(true); }} className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase">Scan Again</button>
                                                         </div>
                                                     </div>
                                                 );
@@ -1261,12 +1128,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                     <div className="rounded-2xl border-2 border-slate-200 overflow-hidden">
                                                         <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest text-center py-2 bg-slate-50 border-b border-slate-100">Select item</p>
                                                         {(items||[]).map((item,i) => (
-                                                            <button key={i} onClick={() => { setBarcodePreload(item); setScoutScanResults(null); setScoutInputMode('upload'); }}
-                                                                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-emerald-50 border-b border-slate-100 last:border-0 transition-colors text-left">
-                                                                <div className="flex-1 min-w-0">
-                                                                    <p className="text-xs font-bold text-slate-800 truncate">{item.title}</p>
-                                                                    {item.price && <p className="text-[10px] text-emerald-600 font-black">{item.price}</p>}
-                                                                </div>
+                                                            <button key={i} onClick={() => { setBarcodePreload(item); setScoutScanResults(null); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-emerald-50 border-b border-slate-100 last:border-0 transition-colors text-left">
+                                                                <div className="flex-1 min-w-0"><p className="text-xs font-bold text-slate-800 truncate">{item.title}</p>{item.price && <p className="text-[10px] text-emerald-600 font-black">{item.price}</p>}</div>
                                                                 <Icon name="ChevronRight" size={14} className="text-slate-300 shrink-0"/>
                                                             </button>
                                                         ))}
@@ -1274,7 +1137,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                 );
                                             })()}
 
-                                            {/* Condition + Price Row */}
+                                            Condition + Price Row */}
                                             <div className="grid grid-cols-2 gap-4">
                                                 <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
                                                     <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-2">Item Condition</p>
@@ -1323,10 +1186,13 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                             )}
 
                                             {/* Run Button */}
-                                            <button onClick={runScout} disabled={isRunning || (!scoutImage && !barcodePreload) || purchasePrice === ''}
-                                                className={`w-full py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest transition-all active:scale-95 shadow-lg flex items-center justify-center gap-3 ${isRunning || (!scoutImage && !barcodePreload) || purchasePrice === '' ? "bg-slate-200 text-slate-400" : 'bg-emerald-500 text-white shadow-emerald-100 hover:bg-emerald-400'}`}>
+                                            <button onClick={runScout} disabled={isRunning || (!scoutImage && !barcodePreload)}
+                                                className={`w-full py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest transition-all active:scale-95 shadow-lg flex items-center justify-center gap-3 ${isRunning || (!scoutImage && !barcodePreload) ? "bg-slate-200 text-slate-400" : 'bg-emerald-500 text-white shadow-emerald-100 hover:bg-emerald-400'}`}>
                                                 {isRunning ? <><Icon name="Loader2" size={16} className="animate-spin" /> {scoutStatus || 'Running Scout...'}</> : <><Icon name="Zap" size={16} /> Run Arbitrage Intel</>}
                                             </button>
+                                            {(!scoutImage && !barcodePreload) && (
+                                                <p className="text-[10px] text-slate-400 text-center uppercase tracking-widest">Load an image or scan a barcode to run</p>
+                                            )}
                                         </>
                                     )}
 
@@ -1497,6 +1363,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                             </div>
                         </div>
                     )}
+                    {/* BarcodeScanner: z-9999 overlay, must render inside <> but outside modal div to avoid scroll clipping */}
+                    {showScoutScanner && <BarcodeScanner onScan={handleScoutScan} onClose={() => setShowScoutScanner(false)} />}
                 </>
             );
         };
