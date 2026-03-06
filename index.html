@@ -511,6 +511,14 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const [flatShippingFee, setFlatShippingFee] = useState('6.95');
             const [barcodePreload,  setBarcodePreload]  = useState(null);
             const [errorMsg,      setErrorMsg]       = useState(null);
+            const [scoutInputMode,   setScoutInputMode]  = useState('upload'); // 'upload' | 'scan'
+            const [scoutCamActive,   setScoutCamActive]  = useState(false);
+            const [scoutCamError,    setScoutCamError]   = useState(null);
+            const [scoutScanUpc,     setScoutScanUpc]    = useState(null);
+            const [scoutScanResults, setScoutScanResults]= useState(null);
+            const [scoutManualTitle, setScoutManualTitle]= useState('');
+            const scoutVideoRef  = useRef(null);
+            const scoutReaderRef = useRef(null);
 
             // Load Scout history from Firestore on mount
             useEffect(() => {
@@ -536,10 +544,57 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 }
             }, [scanPreload]);
 
+            // ── Scout inline camera helpers ──────────────────────────────────────────
+            const stopScoutCam = () => {
+                if (scoutReaderRef.current) { try { scoutReaderRef.current.reset(); } catch(e){} scoutReaderRef.current = null; }
+                setScoutCamActive(false);
+                setScoutCamError(null);
+            };
+
+            const startScoutCam = () => {
+                if (!window.ZXing) { setScoutCamError('Scanner library not loaded.'); return; }
+                setScoutCamError(null);
+                setScoutCamActive(true);
+                const reader = new window.ZXing.BrowserMultiFormatReader();
+                scoutReaderRef.current = reader;
+                setTimeout(() => {
+                    if (!scoutVideoRef.current) return;
+                    reader.decodeFromVideoDevice(null, scoutVideoRef.current, async (result, err) => {
+                        if (result) {
+                            const upc = result.getText();
+                            // Stop reader BEFORE changing mode to avoid removeChild crash
+                            try { reader.reset(); } catch(e) {}
+                            scoutReaderRef.current = null;
+                            setScoutCamActive(false);
+                            // Fetch barcode data, then switch mode
+                            setScoutScanResults({ loading: true, items: [], noResults: false });
+                            setScoutScanUpc(upc);
+                            setScoutInputMode('upload'); // switch away from camera AFTER reader stopped
+                            const BARCODE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+                                ? 'http://127.0.0.1:3001/api/barcode-search'
+                                : '/api/barcode-search';
+                            try {
+                                const res = await fetch(BARCODE_URL, {
+                                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ upc, engine: 'ebay' })
+                                });
+                                const data = await res.json();
+                                const items = data.results || [];
+                                setScoutScanResults({ loading: false, items, noResults: items.length === 0 });
+                            } catch(e) {
+                                setScoutScanResults({ loading: false, items: [], noResults: true });
+                            }
+                        }
+                        if (err && !(err instanceof window.ZXing.NotFoundException)) console.warn('[ScoutCam]', err);
+                    }).catch(e => { setScoutCamError('Camera access denied. Check browser permissions.'); setScoutCamActive(false); });
+                }, 150);
+            };
+
             const reset = () => {
                 setScoutImage(null); setCondition('3000'); setPurchasePrice('');
                 setShippingMode('flat'); setFlatShippingFee('6.95');
                 setResult(null); setErrorMsg(null); setScoutStatus(''); setActiveHistory(null);
+                stopScoutCam(); setScoutInputMode('upload'); setScoutScanUpc(null); setScoutScanResults(null); setScoutManualTitle('');
             };
 
             const purgeHistory = async () => {
@@ -775,21 +830,120 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
 
                             {!displayResult && activeHistory === null && (
                                 <div className="space-y-3">
-                                    <div className="relative border-2 border-dashed border-slate-300 rounded-2xl overflow-hidden hover:border-emerald-400 transition-colors">
-                                        <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer z-10"
-                                            onChange={(e) => { if (e.target.files[0]) setScoutImage({ file: e.target.files[0], url: URL.createObjectURL(e.target.files[0]) }); }} />
-                                        {scoutImage ? (
-                                            <div className="relative">
-                                                <img src={scoutImage.url} className="w-full h-40 object-contain bg-slate-50"/>
-                                                <div className="absolute bottom-2 right-2 bg-emerald-500 text-white text-[9px] font-black px-2 py-1 rounded-full uppercase">Tap to Replace</div>
-                                            </div>
-                                        ) : (
-                                            <div className="py-8 text-center">
-                                                <Icon name="Camera" size={32} className="text-slate-300 mb-2"/>
-                                                <p className="text-xs font-black text-slate-400 uppercase">Load Item Photo</p>
-                                            </div>
-                                        )}
+                                    {/* ── Scan | Upload toggle ── */}
+                                    <div className="flex gap-2 mb-2">
+                                        <button onClick={() => { stopScoutCam(); setScoutInputMode('upload'); setScoutScanResults(null); }}
+                                            className={"flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 " + (scoutInputMode === 'upload' ? "bg-emerald-500 text-white shadow-md" : "bg-slate-100 text-slate-500 hover:bg-slate-200")}>
+                                            <Icon name="ImagePlus" size={12}/> Upload
+                                        </button>
+                                        <button onClick={() => { setScoutInputMode('scan'); setScoutScanResults(null); setTimeout(startScoutCam, 80); }}
+                                            className={"flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 " + (scoutInputMode === 'scan' ? "bg-emerald-500 text-white shadow-md" : "bg-slate-100 text-slate-500 hover:bg-slate-200")}>
+                                            <Icon name="ScanLine" size={12}/> Scan
+                                        </button>
                                     </div>
+
+                                    {/* ── Upload mode ── */}
+                                    {scoutInputMode === 'upload' && (
+                                        <div className="relative border-2 border-dashed border-slate-300 rounded-2xl overflow-hidden hover:border-emerald-400 transition-colors">
+                                            <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer z-10"
+                                                onChange={(e) => { if (e.target.files[0]) setScoutImage({ file: e.target.files[0], url: URL.createObjectURL(e.target.files[0]) }); }} />
+                                            {scoutImage ? (
+                                                <div className="relative">
+                                                    <img src={scoutImage.url} className="w-full h-40 object-contain bg-slate-50"/>
+                                                    <div className="absolute bottom-2 right-2 bg-emerald-500 text-white text-[9px] font-black px-2 py-1 rounded-full uppercase">Tap to Replace</div>
+                                                </div>
+                                            ) : (
+                                                <div className="py-8 text-center">
+                                                    <Icon name="ImagePlus" size={32} className="text-slate-300 mb-2"/>
+                                                    <p className="text-xs font-black text-slate-400 uppercase">Load Item Photo</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* ── Scan mode — camera viewport ── */}
+                                    {scoutInputMode === 'scan' && !scoutScanResults && (
+                                        <div className="rounded-2xl overflow-hidden border-2 border-slate-200">
+                                            {scoutCamError ? (
+                                                <div className="bg-red-50 px-4 py-6 text-center">
+                                                    <p className="text-red-500 text-xs font-bold">{scoutCamError}</p>
+                                                    <button onClick={() => { setScoutCamError(null); setScoutInputMode('upload'); }} className="mt-3 px-4 py-2 bg-red-500 text-white rounded-xl text-[10px] font-black uppercase">Back to Upload</button>
+                                                </div>
+                                            ) : (
+                                                <div className="scanner-viewport" style={{height:'180px'}}>
+                                                    <video ref={scoutVideoRef} className="w-full h-full object-cover" />
+                                                    <div className="scanner-corner tl"/><div className="scanner-corner tr"/>
+                                                    <div className="scanner-corner bl"/><div className="scanner-corner br"/>
+                                                    <div className="scan-line"/>
+                                                </div>
+                                            )}
+                                            {!scoutCamError && (
+                                                <p className="text-slate-400 text-[9px] font-black uppercase tracking-widest text-center py-2 bg-slate-50">
+                                                    UPC · EAN · QR — auto-detects
+                                                </p>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* ── Scan results picker (auto-routes to Scout) ── */}
+                                    {scoutInputMode === 'scan' && scoutScanResults && (() => {
+                                        const { loading, items, noResults } = scoutScanResults;
+                                        if (loading) return (
+                                            <div className="rounded-2xl border-2 border-slate-200 py-8 text-center">
+                                                <div className="inline-block w-6 h-6 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin mb-2"/>
+                                                <p className="text-slate-400 text-[10px] font-black uppercase">Looking up barcode...</p>
+                                            </div>
+                                        );
+                                        if (noResults || items.length === 0) return (
+                                            <div className="rounded-2xl border-2 border-slate-200 p-4 space-y-3">
+                                                <p className="text-slate-500 text-[10px] font-black uppercase tracking-widest text-center">No results — enter title manually</p>
+                                                <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 flex items-center gap-2">
+                                                    <Icon name="PenLine" size={14} className="text-slate-400 shrink-0"/>
+                                                    <input type="text" value={scoutManualTitle} onChange={e => setScoutManualTitle(e.target.value)}
+                                                        placeholder="Type item name..." autoFocus
+                                                        className="flex-1 bg-transparent text-slate-800 text-xs font-bold placeholder-slate-400 focus:outline-none"/>
+                                                </div>
+                                                <button disabled={scoutManualTitle.trim().length < 3}
+                                                    onClick={() => {
+                                                        setBarcodePreload({ title: scoutManualTitle.trim(), upc: scoutScanUpc || '', price: '' });
+                                                        setScoutScanResults(null); setScoutScanUpc(null); setScoutManualTitle(''); setScoutInputMode('upload');
+                                                        showToast('Manual title loaded — run Scout.');
+                                                    }}
+                                                    className={"w-full py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all active:scale-95 " + (scoutManualTitle.trim().length >= 3 ? "bg-emerald-500 text-white hover:bg-emerald-400" : "bg-slate-200 text-slate-400 cursor-not-allowed")}>
+                                                    Use This Title
+                                                </button>
+                                                <button onClick={() => { setScoutScanResults(null); setTimeout(startScoutCam, 80); }}
+                                                    className="w-full py-2.5 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all">
+                                                    Scan Again
+                                                </button>
+                                            </div>
+                                        );
+                                        return (
+                                            <div className="rounded-2xl border-2 border-slate-200 overflow-hidden">
+                                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest px-3 pt-3 pb-1">Select item — auto-sends to Scout</p>
+                                                <div className="divide-y divide-slate-100 max-h-52 overflow-y-auto">
+                                                    {items.map((item, i) => (
+                                                        <button key={i} onClick={() => {
+                                                            setBarcodePreload({ title: item.title, upc: scoutScanUpc || '', price: item.price });
+                                                            if (item.price) {
+                                                                const n = parseFloat(item.price.replace(/[^0-9.]/g,''));
+                                                                if (n > 0) setPurchasePrice(String(n.toFixed(2)));
+                                                            }
+                                                            setScoutScanResults(null); setScoutScanUpc(null); setScoutInputMode('upload');
+                                                            showToast('Barcode item loaded — run Scout.');
+                                                        }} className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-emerald-50 transition-colors text-left">
+                                                            {item.image && <img src={item.image} className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0"/>}
+                                                            <div className="min-w-0 flex-1">
+                                                                <p className="text-[10px] font-black text-slate-800 leading-tight line-clamp-2">{item.title}</p>
+                                                                {item.price && <p className="text-[9px] font-black text-emerald-600 mt-0.5">{item.price}</p>}
+                                                            </div>
+                                                            <Icon name="ChevronRight" size={14} className="text-slate-300 shrink-0"/>
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        );
+                                    })()}
                                     <div className="grid grid-cols-2 gap-3">
                                         <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3">
                                             <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Condition</p>
@@ -1236,7 +1390,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const [processMode, setProcessMode] = useState('bulk');
             const [batchCondition, setBatchCondition] = useState('1000');
             const [errorMsg, setErrorMsg] = useState(null);
-            const [toast, setToast] = useState("");
+            const [toast, setToast] = useState(null); // { msg, type }
             const [editingCategoryId, setEditingCategoryId] = useState(null);
             const [tempCategoryData, setTempCategoryData] = useState({ id: '', path: '' });
             const [pricingListingId, setPricingListingId] = useState(null);
@@ -1301,7 +1455,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     .catch(e => console.warn('[Settings] Load failed:', e.message));
             }, [user]);
 
-            const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(""), 3000); };
+            const showToast = (msg, type = 'default') => { setToast({ msg, type }); setTimeout(() => setToast(null), 4000); };
             const cleanJson = (text) => text.replace(/```json|```/g, '').trim();
 
             const handleAuth = async (e) => {
@@ -1534,9 +1688,24 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
 
             const processImages = async (mode) => {
                 if (!user) return;
+
+                // ── Bulk mode: enforce strict multiples of 4 ──────────────────────────────
+                if (mode === 'bulk') {
+                    if (images.length === 0) {
+                        showToast('No images loaded. Add images before processing.', 'error');
+                        return;
+                    }
+                    if (images.length % 4 !== 0) {
+                        const loaded = images.length;
+                        const needed = 4 - (loaded % 4);
+                        showToast(`Bulk requires batches of 4. You have ${loaded} image${loaded !== 1 ? 's' : ''} — add ${needed} more.`, 'error');
+                        return;
+                    }
+                }
+
                 // Single mode: ALL images -> 1 ad. Bulk mode: every 4 images -> 1 ad.
                 const batches = mode === 'single'
-                    ? [images]                                          // one batch, all images
+                    ? [images]
                     : Array.from({ length: Math.floor(images.length / 4) }, (_, i) => images.slice(i * 4, i * 4 + 4));
                 const total = batches.length;
                 setIsProcessing(true);
@@ -1547,7 +1716,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         setStatus(`Processing ${i+1}/${total}...`);
 
                         // -- Compress all images in batch ONCE, reuse for Cloudinary + Gemini --
-                        const compressImage = (img, maxPx = 1400) => new Promise((resolve, reject) => {
+                        const compressImage = (img, maxPx = 1024) => new Promise((resolve, reject) => {
                             const image = new Image();
                             image.onload = () => {
                                 let w = image.width, h = image.height;
@@ -1573,7 +1742,11 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         });
                         const compressed = await Promise.all(batch.map(img => compressImage(img)));
 
-                        const uploadResults = await Promise.allSettled(compressed.map(async (comp, idx) => {
+                        // HIGH OPT: Fire Cloudinary uploads + Gemini call in parallel
+                        // Both only need compressed data — neither waits on the other
+                        const primaryB64 = { data: compressed[0].b64, mimeType: compressed[0].mimeType };
+
+                        const uploadPromise = Promise.allSettled(compressed.map(async (comp, idx) => {
                             const timestamp = Math.round((new Date()).getTime() / 1000);
                             const signRes = await fetch(SIGN_API_URL, {
                                 method: 'POST',
@@ -1582,7 +1755,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                             });
                             const { signature, folder } = await signRes.json();
                             const fd = new FormData();
-                            fd.append("file", comp.blob);  // compressed blob, not raw file
+                            fd.append("file", comp.blob);
                             fd.append("api_key", CLOUDINARY_CONFIG.apiKey);
                             fd.append("timestamp", timestamp);
                             fd.append("signature", signature);
@@ -1592,25 +1765,30 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                             if (!d.secure_url) throw new Error(`Upload failed: ${d.error?.message || 'Unknown error'}`);
                             return d.secure_url;
                         }));
-                        const failedUploads = uploadResults.filter(r => r.status === 'rejected').length;
-                        if (failedUploads > 0) showToast(`${failedUploads} image(s) failed to upload  -  skipped.`);
-                        const urls = uploadResults.filter(r => r.status === 'fulfilled').map(r => r.value);
-                        if (urls.length === 0) { setStatus(`Batch ${i+1} skipped  -  all uploads failed.`); continue; }
 
-                        // Reuse already-compressed b64  -  no second FileReader pass needed
-                        const b64s = compressed.map(comp => ({ data: comp.b64, mimeType: comp.mimeType }));
-
-                        const res = await fetch(PROXY_API_URL, {
+                        const geminiPromise = fetch(PROXY_API_URL, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
                                 model: "gemini-2.5-flash",
-                                contents: [{ role: "user", parts: [{ text: "Technical eBay JSON data." }, ...b64s.map(b => ({ inlineData: { mimeType: b.mimeType, data: b.data } }))] }],
+                                contents: [{ role: "user", parts: [{ text: "Technical eBay JSON data." }, { inlineData: { mimeType: primaryB64.mimeType, data: primaryB64.data } }] }],
                                 systemInstruction: { parts: [{ text: JDINJAX_SYSTEM_PROMPT }] },
                                 generationConfig: { responseMimeType: "application/json", responseSchema: JSON_SCHEMA }
                             })
                         });
-                        const result = await res.json();
+                        // Await both in parallel — whichever finishes first waits for the other
+                        const [uploadResults, geminiRes] = await Promise.all([uploadPromise, geminiPromise]);
+
+                        const failedUploads = uploadResults.filter(r => r.status === 'rejected').length;
+                        if (failedUploads > 0) showToast(`${failedUploads} image(s) failed to upload  -  skipped.`);
+                        const urls = uploadResults.filter(r => r.status === 'fulfilled').map(r => r.value);
+                        if (urls.length === 0) { showToast(`Batch ${i+1}: all uploads failed — check Cloudinary config.`, 'error'); continue; }
+
+                        const result = await geminiRes.json();
+                        if (!result.candidates?.[0]?.content?.parts?.[0]?.text) {
+                            console.error('[Gemini] Bad response:', JSON.stringify(result).substring(0, 300));
+                            throw new Error('Gemini returned no candidates — check model or API key.');
+                        }
                         const aiData = JSON.parse(cleanJson(result.candidates[0].content.parts[0].text));
 
                         let finalSource = "UNMAPPED";
@@ -1685,7 +1863,7 @@ We take our reputation seriously, we buy and sell online, so we understand the v
                         });
                     }
                     setImages([]); setActiveTab('listings'); showToast(`${total} Ad${total !== 1 ? 's' : ''} Generated.`);
-                } catch (e) { setErrorMsg(e.message); } finally { setIsProcessing(false); setStatus(""); }
+                } catch (e) { showToast(e.message || 'Processing failed — check console.', 'error'); console.error('[processImages]', e); } finally { setIsProcessing(false); setStatus(""); }
             };
 
             const researchPrice = async (listing) => {
@@ -2116,7 +2294,7 @@ We take our reputation seriously, we buy and sell online, so we understand the v
                     <>
                     {showScanner && <BarcodeScanner onScan={handleScan} onClose={() => setShowScanner(false)} />}
                     {scanResult && <ScanResult upc={scanResult.upc} onClose={() => setScanResult(null)} onSendToScout={handleSendToScout} onSendToListing={handleSendToListing} showToast={showToast} />}
-                    {toast && <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest shadow-2xl animate-in slide-in-from-top-4">{toast}</div>}
+                    {toast && <div className={`fixed top-6 left-1/2 -translate-x-1/2 z-50 px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest shadow-2xl animate-in slide-in-from-top-4 ${toast.type === 'error' ? 'bg-red-600 text-white' : 'bg-slate-900 text-white'}`}>{toast.msg}</div>}
 
                     {/* Schedule Picker Modal */}
                     {showSchedulePicker && (
