@@ -583,57 +583,64 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 setScoutCamError(null);
             };
 
-            const startScoutCam = () => {
+            // ── useEffect: attach/detach camera when scoutInputMode changes ──
+            // This fires AFTER React has committed the DOM — video element is guaranteed mounted
+            React.useEffect(() => {
+                if (scoutInputMode !== 'scan' || scoutScanResults) {
+                    // Not in scan mode — ensure camera is off
+                    if (scoutReaderRef.current) { try { scoutReaderRef.current.reset(); } catch(e){} scoutReaderRef.current = null; }
+                    return;
+                }
                 if (!window.ZXing) { setScoutCamError('Scanner library not loaded.'); return; }
+                if (!scoutVideoRef.current) { setScoutCamError('Camera not ready — try again.'); return; }
+
                 setScoutCamError(null);
                 setScoutCamActive(true);
                 const reader = new window.ZXing.BrowserMultiFormatReader();
                 scoutReaderRef.current = reader;
-                // Poll for video element — modal renders async; fixed delay unreliable on mobile
-                let _attempts = 0;
-                console.log('[ScoutCam] startScoutCam called, ZXing:', !!window.ZXing);
-                const _waitForVideo = () => {
-                    console.log('[ScoutCam] poll attempt', _attempts, '| readerRef:', !!scoutReaderRef.current, '| videoRef:', !!scoutVideoRef.current);
-                    if (!scoutReaderRef.current) { console.log('[ScoutCam] aborted — readerRef cleared'); return; }
-                    if (!scoutVideoRef.current) {
-                        if (++_attempts > 25) { 
-                            console.error('[ScoutCam] TIMEOUT after 25 attempts');
-                            setScoutCamError('Camera timed out — try again.'); setScoutCamActive(false); return; 
+
+                const BARCODE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+                    ? 'http://127.0.0.1:3001/api/barcode-search'
+                    : '/api/barcode-search';
+
+                reader.decodeFromVideoDevice(null, scoutVideoRef.current, async (result, err) => {
+                    if (result) {
+                        const upc = result.getText();
+                        try { reader.reset(); } catch(e) {}
+                        scoutReaderRef.current = null;
+                        setScoutCamActive(false);
+                        setScoutScanResults({ loading: true, items: [], noResults: false });
+                        setScoutScanUpc(upc);
+                        setScoutInputMode('upload');
+                        try {
+                            const res = await fetch(BARCODE_URL, {
+                                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ upc, engine: 'ebay' })
+                            });
+                            const data = await res.json();
+                            const items = data.results || [];
+                            setScoutScanResults({ loading: false, items, noResults: items.length === 0 });
+                        } catch(e) {
+                            setScoutScanResults({ loading: false, items: [], noResults: true });
                         }
-                        return setTimeout(_waitForVideo, 100);
                     }
-                    console.log('[ScoutCam] video element found, attaching decoder');
-                    reader.decodeFromVideoDevice(null, scoutVideoRef.current, async (result, err) => {
-                        if (result) {
-                            const upc = result.getText();
-                            // Stop reader BEFORE changing mode to avoid removeChild crash
-                            try { reader.reset(); } catch(e) {}
-                            scoutReaderRef.current = null;
-                            setScoutCamActive(false);
-                            // Fetch barcode data, then switch mode
-                            setScoutScanResults({ loading: true, items: [], noResults: false });
-                            setScoutScanUpc(upc);
-                            setScoutInputMode('upload'); // switch away from camera AFTER reader stopped
-                            const BARCODE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-                                ? 'http://127.0.0.1:3001/api/barcode-search'
-                                : '/api/barcode-search';
-                            try {
-                                const res = await fetch(BARCODE_URL, {
-                                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ upc, engine: 'ebay' })
-                                });
-                                const data = await res.json();
-                                const items = data.results || [];
-                                setScoutScanResults({ loading: false, items, noResults: items.length === 0 });
-                            } catch(e) {
-                                setScoutScanResults({ loading: false, items: [], noResults: true });
-                            }
-                        }
-                        if (err && !(err instanceof window.ZXing.NotFoundException)) console.warn('[ScoutCam]', err);
-                    }).catch(e => { setScoutCamError('Camera access denied. Check browser permissions.'); setScoutCamActive(false); });
+                    if (err && !(err instanceof window.ZXing.NotFoundException)) console.warn('[ScoutCam]', err);
+                }).catch(e => { setScoutCamError('Camera access denied. Check browser permissions.'); setScoutCamActive(false); });
+
+                // Cleanup: stop camera when mode changes or component unmounts
+                return () => {
+                    if (scoutReaderRef.current) { try { scoutReaderRef.current.reset(); } catch(e){} scoutReaderRef.current = null; }
                 };
-                setTimeout(_waitForVideo, 50);
+            }, [scoutInputMode, scoutScanResults]);
+
+            const startScoutCam = () => {
+                // Just set mode — useEffect handles camera attachment after DOM commit
+                setScoutCamError(null);
+                setScoutScanResults(null);
+                setScoutInputMode('scan');
             };
+
+                        };
 
             const reset = () => {
                 setScoutImage(null); setCondition('3000'); setPurchasePrice('');
@@ -881,7 +888,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                             className={"flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 " + (scoutInputMode === 'upload' ? "bg-emerald-500 text-white shadow-md" : "bg-slate-100 text-slate-500 hover:bg-slate-200")}>
                                             <Icon name="ImagePlus" size={12}/> Upload
                                         </button>
-                                        <button onClick={() => { setScoutInputMode('scan'); setScoutScanResults(null); setTimeout(startScoutCam, 80); }}
+                                        <button onClick={() => { startScoutCam(); }}
                                             className={"flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 " + (scoutInputMode === 'scan' ? "bg-emerald-500 text-white shadow-md" : "bg-slate-100 text-slate-500 hover:bg-slate-200")}>
                                             <Icon name="ScanLine" size={12}/> Scan
                                         </button>
@@ -957,7 +964,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                     className={"w-full py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all active:scale-95 " + (scoutManualTitle.trim().length >= 3 ? "bg-emerald-500 text-white hover:bg-emerald-400" : "bg-slate-200 text-slate-400 cursor-not-allowed")}>
                                                     Use This Title
                                                 </button>
-                                                <button onClick={() => { setScoutScanResults(null); setTimeout(startScoutCam, 80); }}
+                                                <button onClick={() => { setScoutScanResults(null); startScoutCam(); }}
                                                     className="w-full py-2.5 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all">
                                                     Scan Again
                                                 </button>
@@ -1179,7 +1186,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                     className={"flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 " + (scoutInputMode === 'upload' ? "bg-emerald-500 text-white shadow-md" : "bg-slate-100 text-slate-500 hover:bg-slate-200")}>
                                                     <Icon name="ImagePlus" size={12}/> Upload
                                                 </button>
-                                                <button onClick={() => { console.log('[ScoutCam] modal scan btn clicked, inline=false'); setScoutInputMode('scan'); setScoutScanResults(null); setTimeout(startScoutCam, 80); }}
+                                                <button onClick={() => { console.log('[ScoutCam] modal scan btn clicked, inline=false'); startScoutCam(); }}
                                                     className={"flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 " + (scoutInputMode === 'scan' ? "bg-emerald-500 text-white shadow-md" : "bg-slate-100 text-slate-500 hover:bg-slate-200")}>
                                                     <Icon name="ScanLine" size={12}/> Scan
                                                 </button>
@@ -1247,7 +1254,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                         <div className="flex gap-2">
                                                             <button onClick={() => { if(scoutManualTitle.trim()) { setBarcodePreload({ title: scoutManualTitle.trim() }); setScoutScanResults(null); setScoutInputMode('upload'); }}}
                                                                 className="flex-1 py-2 bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase">Use This Title</button>
-                                                            <button onClick={() => { setScoutScanResults(null); setTimeout(startScoutCam, 80); }}
+                                                            <button onClick={() => { setScoutScanResults(null); startScoutCam(); }}
                                                                 className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase">Scan Again</button>
                                                         </div>
                                                     </div>
