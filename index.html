@@ -528,7 +528,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             return                       { label: 'NO-GO',    css: 'verdict-nogo',     tag: 'NO-GO' };
         };
 
-        const ArbitrageScout = ({ proxyUrl, ebayConditions, showToast, dbRef, user, inline = false, scanPreload = null, onScanRequest, onSendToProcessing, onBarcodeScanned }) => {
+        const ArbitrageScout = ({ proxyUrl, ebayConditions, showToast, dbRef, user, inline = false, scanPreload = null, onScanRequest, onSendToProcessing }) => {
             const [isOpen,        setIsOpen]        = useState(false);
             const [scoutImage,    setScoutImage]     = useState(null);
             const [condition,     setCondition]      = useState('3000');
@@ -574,19 +574,32 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             // ── Scout inline camera helpers ──────────────────────────────────────────
 
 
-            const handleScoutScan = (upc) => {
+            const handleScoutScan = async (upc) => {
                 setShowScoutScanner(false);
-                if (onBarcodeScanned) {
-                    onBarcodeScanned(upc);
-                } else {
-                    // Fallback: inline fetch if no parent handler
-                    setScoutScanResults({ loading: true, items: [], noResults: false });
-                    const BARCODE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-                        ? 'http://127.0.0.1:3001/api/barcode-search' : '/api/barcode-search';
-                    fetch(BARCODE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ upc, engine: 'ebay' }) })
-                        .then(r => r.json())
-                        .then(data => { const items = data.results || []; setScoutScanResults({ loading: false, items, noResults: items.length === 0 }); })
-                        .catch(e => setScoutScanResults({ loading: false, items: [], noResults: true }));
+                setScoutScanResults({ loading: true, items: [], noResults: false, engine: 'ebay' });
+                const BARCODE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+                    ? 'http://127.0.0.1:3001/api/barcode-search' : '/api/barcode-search';
+                try {
+                    const res = await fetch(BARCODE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ upc, engine: 'ebay' }) });
+                    const data = await res.json();
+                    const items = data.results || [];
+                    setScoutScanResults({ loading: false, items, noResults: items.length === 0, engine: 'ebay', upc });
+                } catch(e) {
+                    setScoutScanResults({ loading: false, items: [], noResults: true, engine: 'ebay', upc });
+                }
+            };
+
+            const scoutSearchEngine = async (eng, upc) => {
+                setScoutScanResults(prev => ({ ...prev, loading: true, engine: eng }));
+                const BARCODE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+                    ? 'http://127.0.0.1:3001/api/barcode-search' : '/api/barcode-search';
+                try {
+                    const res = await fetch(BARCODE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ upc, engine: eng }) });
+                    const data = await res.json();
+                    const items = data.results || [];
+                    setScoutScanResults(prev => ({ ...prev, loading: false, items, noResults: items.length === 0 }));
+                } catch(e) {
+                    setScoutScanResults(prev => ({ ...prev, loading: false, items: [], noResults: true }));
                 }
             };
 
@@ -855,39 +868,47 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
 
                                     {/* Scan results */}
                                     {scoutScanResults && (() => {
-                                        const { loading, items, noResults } = scoutScanResults;
-                                        if (loading) return (
-                                            <div className="rounded-2xl border-2 border-slate-200 py-8 text-center">
-                                                <Icon name="Loader2" size={24} className="animate-spin text-emerald-500 mx-auto mb-2"/>
-                                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Looking up barcode...</p>
-                                            </div>
-                                        );
-                                        if (noResults) return (
-                                            <div className="rounded-2xl border-2 border-slate-200 p-4 space-y-3">
-                                                <p className="text-slate-500 text-xs font-bold text-center">No results found</p>
-                                                <input type="text" value={scoutManualTitle} onChange={e => setScoutManualTitle(e.target.value)} placeholder="Enter item title manually..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-emerald-400"/>
-                                                <div className="flex gap-2">
-                                                    <button onClick={() => { if(scoutManualTitle.trim()) { setBarcodePreload({ title: scoutManualTitle.trim() }); setScoutScanResults(null); }}} className="flex-1 py-2 bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase">Use This Title</button>
-                                                    <button onClick={() => { setScoutScanResults(null); setShowScoutScanner(true); }} className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase">Scan Again</button>
-                                                </div>
-                                            </div>
-                                        );
+                                        const { loading, items, noResults, engine, upc } = scoutScanResults;
                                         return (
                                             <div className="rounded-2xl border-2 border-slate-200 overflow-hidden">
-                                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest text-center py-2 bg-slate-50 border-b border-slate-100">Select item</p>
-                                                {(items||[]).map((item,i) => (
-                                                    <button key={i} onClick={() => { setBarcodePreload(item); setScoutScanResults(null); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-emerald-50 border-b border-slate-100 last:border-0 transition-colors text-left">
-                                                        <div className="flex-1 min-w-0">
-                                                            <p className="text-xs font-bold text-slate-800 truncate">{item.title}</p>
-                                                            {item.price && <p className="text-[10px] text-emerald-600 font-black">{item.price}</p>}
+                                                {/* Engine toggle */}
+                                                <div className="flex border-b border-slate-100">
+                                                    {['ebay','amazon'].map(eng => (
+                                                        <button key={eng} onClick={() => scoutSearchEngine(eng, upc)}
+                                                            className={"flex-1 py-2.5 text-[10px] font-black uppercase tracking-widest transition-all " + (engine===eng ? (eng==='ebay' ? 'bg-blue-600 text-white' : 'bg-orange-500 text-white') : 'bg-slate-50 text-slate-400 hover:bg-slate-100')}>
+                                                            {eng === 'ebay' ? 'eBay' : 'Amazon'}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                                {loading ? (
+                                                    <div className="py-8 text-center">
+                                                        <Icon name="Loader2" size={24} className="animate-spin text-emerald-500 mx-auto mb-2"/>
+                                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Searching {engine}...</p>
+                                                    </div>
+                                                ) : noResults ? (
+                                                    <div className="p-4 space-y-3">
+                                                        <p className="text-slate-500 text-xs font-bold text-center">No results — try the other marketplace or enter manually</p>
+                                                        <input type="text" value={scoutManualTitle} onChange={e => setScoutManualTitle(e.target.value)} placeholder="Enter item title manually..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-emerald-400"/>
+                                                        <div className="flex gap-2">
+                                                            <button onClick={() => { if(scoutManualTitle.trim()) { setBarcodePreload({ title: scoutManualTitle.trim() }); setScoutScanResults(null); }}} className="flex-1 py-2 bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase">Use Title</button>
+                                                            <button onClick={() => { setScoutScanResults(null); setShowScoutScanner(true); }} className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase">Scan Again</button>
                                                         </div>
-                                                        <Icon name="ChevronRight" size={14} className="text-slate-300 shrink-0"/>
-                                                    </button>
-                                                ))}
-                                            <button onClick={() => onSendToProcessing && onSendToProcessing({ title: r.itemTitle, imageUrl: r.imageUrl, price: r.priceMid })}
-                                                className="w-full mt-4 py-4 bg-blue-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-500 transition-all active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-blue-100">
-                                                <Icon name="PackagePlus" size={13}/> Send to Add Processor
-                                            </button>
+                                                    </div>
+                                                ) : (
+                                                    <div className="max-h-60 overflow-y-auto no-scrollbar">
+                                                        {(items||[]).map((item,i) => (
+                                                            <button key={i} onClick={() => { setBarcodePreload(item); setScoutScanResults(null); }}
+                                                                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-emerald-50 border-b border-slate-100 last:border-0 transition-colors text-left active:scale-[0.98]">
+                                                                {item.image && <img src={item.image} className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0" onError={(e) => e.target.style.display='none'}/>}
+                                                                <div className="flex-1 min-w-0">
+                                                                    <p className="text-xs font-bold text-slate-800 leading-snug line-clamp-2">{item.title}</p>
+                                                                    {item.price && <p className="text-[10px] text-emerald-600 font-black mt-0.5">{item.price}</p>}
+                                                                </div>
+                                                                <Icon name="ChevronRight" size={14} className="text-slate-300 shrink-0"/>
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                )}
                                             </div>
                                         );
                                     })()}
@@ -1115,30 +1136,50 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                 <Icon name="ScanLine" size={12}/> Scan Barcode
                                             </button>
                                             {scoutScanResults && (() => {
-                                                const { loading, items, noResults } = scoutScanResults;
-                                                if (loading) return (<div className="rounded-2xl border-2 border-slate-200 py-8 text-center"><Icon name="Loader2" size={24} className="animate-spin text-emerald-500 mx-auto mb-2"/><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Looking up barcode...</p></div>);
-                                                if (noResults) return (
-                                                    <div className="rounded-2xl border-2 border-slate-200 p-4 space-y-3">
-                                                        <p className="text-slate-500 text-xs font-bold text-center">No results found</p>
+                                        const { loading, items, noResults, engine, upc } = scoutScanResults;
+                                        return (
+                                            <div className="rounded-2xl border-2 border-slate-200 overflow-hidden">
+                                                {/* Engine toggle */}
+                                                <div className="flex border-b border-slate-100">
+                                                    {['ebay','amazon'].map(eng => (
+                                                        <button key={eng} onClick={() => scoutSearchEngine(eng, upc)}
+                                                            className={"flex-1 py-2.5 text-[10px] font-black uppercase tracking-widest transition-all " + (engine===eng ? (eng==='ebay' ? 'bg-blue-600 text-white' : 'bg-orange-500 text-white') : 'bg-slate-50 text-slate-400 hover:bg-slate-100')}>
+                                                            {eng === 'ebay' ? 'eBay' : 'Amazon'}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                                {loading ? (
+                                                    <div className="py-8 text-center">
+                                                        <Icon name="Loader2" size={24} className="animate-spin text-emerald-500 mx-auto mb-2"/>
+                                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Searching {engine}...</p>
+                                                    </div>
+                                                ) : noResults ? (
+                                                    <div className="p-4 space-y-3">
+                                                        <p className="text-slate-500 text-xs font-bold text-center">No results — try the other marketplace or enter manually</p>
                                                         <input type="text" value={scoutManualTitle} onChange={e => setScoutManualTitle(e.target.value)} placeholder="Enter item title manually..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-emerald-400"/>
                                                         <div className="flex gap-2">
-                                                            <button onClick={() => { if(scoutManualTitle.trim()) { setBarcodePreload({ title: scoutManualTitle.trim() }); setScoutScanResults(null); }}} className="flex-1 py-2 bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase">Use This Title</button>
+                                                            <button onClick={() => { if(scoutManualTitle.trim()) { setBarcodePreload({ title: scoutManualTitle.trim() }); setScoutScanResults(null); }}} className="flex-1 py-2 bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase">Use Title</button>
                                                             <button onClick={() => { setScoutScanResults(null); setShowScoutScanner(true); }} className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase">Scan Again</button>
                                                         </div>
                                                     </div>
-                                                );
-                                                return (
-                                                    <div className="rounded-2xl border-2 border-slate-200 overflow-hidden">
-                                                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest text-center py-2 bg-slate-50 border-b border-slate-100">Select item</p>
+                                                ) : (
+                                                    <div className="max-h-60 overflow-y-auto no-scrollbar">
                                                         {(items||[]).map((item,i) => (
-                                                            <button key={i} onClick={() => { setBarcodePreload(item); setScoutScanResults(null); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-emerald-50 border-b border-slate-100 last:border-0 transition-colors text-left">
-                                                                <div className="flex-1 min-w-0"><p className="text-xs font-bold text-slate-800 truncate">{item.title}</p>{item.price && <p className="text-[10px] text-emerald-600 font-black">{item.price}</p>}</div>
+                                                            <button key={i} onClick={() => { setBarcodePreload(item); setScoutScanResults(null); }}
+                                                                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-emerald-50 border-b border-slate-100 last:border-0 transition-colors text-left active:scale-[0.98]">
+                                                                {item.image && <img src={item.image} className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0" onError={(e) => e.target.style.display='none'}/>}
+                                                                <div className="flex-1 min-w-0">
+                                                                    <p className="text-xs font-bold text-slate-800 leading-snug line-clamp-2">{item.title}</p>
+                                                                    {item.price && <p className="text-[10px] text-emerald-600 font-black mt-0.5">{item.price}</p>}
+                                                                </div>
                                                                 <Icon name="ChevronRight" size={14} className="text-slate-300 shrink-0"/>
                                                             </button>
                                                         ))}
                                                     </div>
-                                                );
-                                            })()}
+                                                )}
+                                            </div>
+                                        );
+                                    })()}
 
                                             {/* Condition + Price Row */}
                                             <div className="grid grid-cols-2 gap-4">
@@ -2402,7 +2443,6 @@ We take our reputation seriously, we buy and sell online, so we understand the v
                                 inline={true}
                                 scanPreload={scoutPreload}
                                 onScanRequest={() => setShowScanner(true)}
-                                onBarcodeScanned={(upc) => { setScanResult({ upc, destination: 'scout' }); }}
                                 onSendToProcessing={(item) => {
                                     setBarcodeListingData({ title: item.title, image: item.imageUrl, price: item.price ? String(item.price) : '', upc: '' });
                                     setActiveTab('process');
@@ -2453,7 +2493,6 @@ We take our reputation seriously, we buy and sell online, so we understand the v
                     inline={false}
                     scanPreload={scoutPreload}
                     onScanRequest={() => setShowScanner(true)}
-                    onBarcodeScanned={(upc) => { setScanResult({ upc, destination: 'scout' }); }}
                     onSendToProcessing={(item) => {
                         setBarcodeListingData({ title: item.title, image: item.imageUrl, price: item.price ? String(item.price) : '', upc: '' });
                         setActiveTab('process');
