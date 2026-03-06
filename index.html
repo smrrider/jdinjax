@@ -1160,23 +1160,101 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                     {/* Input Panel  -  hide if viewing history */}
                                     {activeHistory === null && (
                                         <>
-                                            {/* Image Upload */}
-                                            <div className="relative border-2 border-dashed border-slate-300 rounded-2xl overflow-hidden hover:border-emerald-400 transition-colors">
-                                                <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer z-10"
-                                                    onChange={(e) => { if (e.target.files[0]) setScoutImage({ file: e.target.files[0], url: URL.createObjectURL(e.target.files[0]) }); }} />
-                                                {scoutImage ? (
-                                                    <div className="relative">
-                                                        <img src={scoutImage.url} className="w-full h-52 object-contain bg-slate-50" />
-                                                        <div className="absolute bottom-3 right-3 bg-emerald-500 text-white text-[9px] font-black px-3 py-1.5 rounded-full uppercase tracking-widest">Tap to Replace</div>
-                                                    </div>
-                                                ) : (
-                                                    <div className="py-12 text-center">
-                                                        <Icon name="Camera" size={40} className="text-slate-300 mb-3" />
-                                                        <p className="text-sm font-black text-slate-400 uppercase">Load Item Photo</p>
-                                                        <p className="text-[10px] text-slate-300 mt-1">Single image for item identification</p>
-                                                    </div>
-                                                )}
+                                            {/* ── Scan | Upload toggle ── */}
+                                            <div className="flex gap-2 mb-2">
+                                                <button onClick={() => { stopScoutCam(); setScoutInputMode('upload'); setScoutScanResults(null); }}
+                                                    className={"flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 " + (scoutInputMode === 'upload' ? "bg-emerald-500 text-white shadow-md" : "bg-slate-100 text-slate-500 hover:bg-slate-200")}>
+                                                    <Icon name="ImagePlus" size={12}/> Upload
+                                                </button>
+                                                <button onClick={() => { setScoutInputMode('scan'); setScoutScanResults(null); setTimeout(startScoutCam, 80); }}
+                                                    className={"flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 " + (scoutInputMode === 'scan' ? "bg-emerald-500 text-white shadow-md" : "bg-slate-100 text-slate-500 hover:bg-slate-200")}>
+                                                    <Icon name="ScanLine" size={12}/> Scan
+                                                </button>
                                             </div>
+
+                                            {/* ── Upload mode ── */}
+                                            {scoutInputMode === 'upload' && (
+                                                <div className="relative border-2 border-dashed border-slate-300 rounded-2xl overflow-hidden hover:border-emerald-400 transition-colors">
+                                                    <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer z-10"
+                                                        onChange={(e) => { if (e.target.files[0]) setScoutImage({ file: e.target.files[0], url: URL.createObjectURL(e.target.files[0]) }); }} />
+                                                    {scoutImage ? (
+                                                        <div className="relative">
+                                                            <img src={scoutImage.url} className="w-full h-52 object-contain bg-slate-50" />
+                                                            <div className="absolute bottom-3 right-3 bg-emerald-500 text-white text-[9px] font-black px-3 py-1.5 rounded-full uppercase tracking-widest">Tap to Replace</div>
+                                                        </div>
+                                                    ) : (
+                                                        <div className="py-12 text-center">
+                                                            <Icon name="Camera" size={40} className="text-slate-300 mb-3" />
+                                                            <p className="text-sm font-black text-slate-400 uppercase">Load Item Photo</p>
+                                                            <p className="text-[10px] text-slate-300 mt-1">Single image for item identification</p>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+
+                                            {/* ── Scan mode — camera viewport ── */}
+                                            {scoutInputMode === 'scan' && !scoutScanResults && (
+                                                <div className="rounded-2xl overflow-hidden border-2 border-slate-200">
+                                                    {scoutCamError ? (
+                                                        <div className="bg-red-50 px-4 py-6 text-center">
+                                                            <p className="text-red-500 text-xs font-bold">{scoutCamError}</p>
+                                                            <button onClick={() => { setScoutCamError(null); setScoutInputMode('upload'); }} className="mt-3 px-4 py-2 bg-red-500 text-white rounded-xl text-[10px] font-black uppercase">Back to Upload</button>
+                                                        </div>
+                                                    ) : (
+                                                        <div className="scanner-viewport" style={{height:'180px'}}>
+                                                            <video ref={scoutVideoRef} className="w-full h-full object-cover" />
+                                                            <div className="scanner-corner tl"/><div className="scanner-corner tr"/>
+                                                            <div className="scanner-corner bl"/><div className="scanner-corner br"/>
+                                                            <div className="scan-line"/>
+                                                        </div>
+                                                    )}
+                                                    {!scoutCamError && (
+                                                        <p className="text-slate-400 text-[9px] font-black uppercase tracking-widest text-center py-2 bg-slate-50">
+                                                            UPC · EAN · QR — auto-detects
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            )}
+
+                                            {/* ── Scan results picker ── */}
+                                            {scoutInputMode === 'scan' && scoutScanResults && (() => {
+                                                const { loading, items, noResults } = scoutScanResults;
+                                                if (loading) return (
+                                                    <div className="rounded-2xl border-2 border-slate-200 py-8 text-center">
+                                                        <Icon name="Loader2" size={24} className="animate-spin text-emerald-500 mx-auto mb-2"/>
+                                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Looking up barcode...</p>
+                                                    </div>
+                                                );
+                                                if (noResults) return (
+                                                    <div className="rounded-2xl border-2 border-slate-200 p-4 space-y-3">
+                                                        <p className="text-slate-500 text-xs font-bold text-center">No results found</p>
+                                                        <input type="text" value={scoutManualTitle} onChange={e => setScoutManualTitle(e.target.value)}
+                                                            placeholder="Enter item title manually..."
+                                                            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-emerald-400"/>
+                                                        <div className="flex gap-2">
+                                                            <button onClick={() => { if(scoutManualTitle.trim()) { setBarcodePreload({ title: scoutManualTitle.trim() }); setScoutScanResults(null); setScoutInputMode('upload'); }}}
+                                                                className="flex-1 py-2 bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase">Use This Title</button>
+                                                            <button onClick={() => { setScoutScanResults(null); setTimeout(startScoutCam, 80); }}
+                                                                className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase">Scan Again</button>
+                                                        </div>
+                                                    </div>
+                                                );
+                                                return (
+                                                    <div className="rounded-2xl border-2 border-slate-200 overflow-hidden">
+                                                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest text-center py-2 bg-slate-50 border-b border-slate-100">Select item</p>
+                                                        {(items||[]).map((item,i) => (
+                                                            <button key={i} onClick={() => { setBarcodePreload(item); setScoutScanResults(null); setScoutInputMode('upload'); }}
+                                                                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-emerald-50 border-b border-slate-100 last:border-0 transition-colors text-left">
+                                                                <div className="flex-1 min-w-0">
+                                                                    <p className="text-xs font-bold text-slate-800 truncate">{item.title}</p>
+                                                                    {item.price && <p className="text-[10px] text-emerald-600 font-black">{item.price}</p>}
+                                                                </div>
+                                                                <Icon name="ChevronRight" size={14} className="text-slate-300 shrink-0"/>
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                );
+                                            })()}
 
                                             {/* Condition + Price Row */}
                                             <div className="grid grid-cols-2 gap-4">
