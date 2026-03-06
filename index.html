@@ -87,7 +87,7 @@
     };
     // Detect which CDN scripts fail to load
     document.addEventListener('error', function(e) {
-        if (e.target && e.target.src) {
+        if (e.target && e.target.src && e.target.tagName === 'SCRIPT') {
             window._loadErrors.push(e.target.src);
             document.getElementById('root').innerHTML = '<div style="font-family:monospace;padding:20px;background:#fee2e2;color:#991b1b;border-radius:8px;margin:20px">'
                 + '<h2>CDN Load Failure</h2>'
@@ -528,7 +528,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             return                       { label: 'NO-GO',    css: 'verdict-nogo',     tag: 'NO-GO' };
         };
 
-        const ArbitrageScout = ({ proxyUrl, ebayConditions, showToast, dbRef, user, inline = false, scanPreload = null, onScanRequest, onSendToProcessing }) => {
+        const ArbitrageScout = ({ proxyUrl, ebayConditions, showToast, dbRef, user, inline = false, scanPreload = null, onScanRequest, onSendToProcessing, onBarcodeScanned }) => {
             const [isOpen,        setIsOpen]        = useState(false);
             const [scoutImage,    setScoutImage]     = useState(null);
             const [condition,     setCondition]      = useState('3000');
@@ -574,17 +574,20 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             // ── Scout inline camera helpers ──────────────────────────────────────────
 
 
-            const handleScoutScan = async (upc) => {
+            const handleScoutScan = (upc) => {
                 setShowScoutScanner(false);
-                setScoutScanResults({ loading: true, items: [], noResults: false });
-                const BARCODE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-                    ? 'http://127.0.0.1:3001/api/barcode-search' : '/api/barcode-search';
-                try {
-                    const res = await fetch(BARCODE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ upc, engine: 'ebay' }) });
-                    const data = await res.json();
-                    const items = data.results || [];
-                    setScoutScanResults({ loading: false, items, noResults: items.length === 0 });
-                } catch(e) { setScoutScanResults({ loading: false, items: [], noResults: true }); }
+                if (onBarcodeScanned) {
+                    onBarcodeScanned(upc);
+                } else {
+                    // Fallback: inline fetch if no parent handler
+                    setScoutScanResults({ loading: true, items: [], noResults: false });
+                    const BARCODE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+                        ? 'http://127.0.0.1:3001/api/barcode-search' : '/api/barcode-search';
+                    fetch(BARCODE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ upc, engine: 'ebay' }) })
+                        .then(r => r.json())
+                        .then(data => { const items = data.results || []; setScoutScanResults({ loading: false, items, noResults: items.length === 0 }); })
+                        .catch(e => setScoutScanResults({ loading: false, items: [], noResults: true }));
+                }
             };
 
             const reset = () => {
@@ -808,7 +811,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                     {history.slice(0, 8).map((h, i) => (
                                         <button key={h._docId} onClick={() => setActiveHistory(i)}
                                             className="w-full flex items-center gap-3 p-3 rounded-2xl text-left hover:bg-slate-50 transition-all border border-transparent hover:border-slate-100">
-                                            {h.imageUrl && <img src={h.imageUrl} className="w-10 h-10 rounded-xl object-cover border border-slate-200 shrink-0"/>}
+                                            {h.imageUrl && <img src={h.imageUrl} className="w-10 h-10 rounded-xl object-cover border border-slate-200 shrink-0" onError={(e) => e.target.style.display='none'}/>}
                                             <div className="min-w-0 flex-1">
                                                 <p className="text-[10px] font-black text-slate-800 uppercase leading-tight truncate">{h.itemTitle}</p>
                                                 <p className="text-[9px] text-slate-400 mt-0.5">{h.timestamp}</p>
@@ -961,7 +964,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                             </div>
                                         </div>
                                         <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex gap-3">
-                                            {r.imageUrl && <img src={r.imageUrl} className="w-16 h-16 rounded-xl object-cover border border-slate-200 shrink-0" />}
+                                            {r.imageUrl && <img src={r.imageUrl} className="w-16 h-16 rounded-xl object-cover border border-slate-200 shrink-0" onError={(e) => e.target.style.display='none'} />}
                                             <div className="min-w-0">
                                                 <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1">Item Identified</p>
                                                 <p className="text-xs font-black text-slate-900 leading-tight uppercase">{r.itemTitle}</p>
@@ -1075,7 +1078,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                 {history.map((h, i) => (
                                                     <button key={i} onClick={() => { setActiveHistory(i); setResult(null); }}
                                                         className={`scout-history-item w-full flex items-center gap-3 p-3 rounded-xl text-left ${activeHistory === i ? 'bg-emerald-50 border border-emerald-200' : 'border border-transparent'}`}>
-                                                        <img src={h.imageUrl} className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0" />
+                                                        <img src={h.imageUrl} className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0" onError={(e) => e.target.style.display='none'} />
                                                         <div className="flex-1 min-w-0">
                                                             <p className="text-[10px] font-black text-slate-800 truncate">{h.itemTitle}</p>
                                                             <p className="text-[9px] text-slate-400 font-bold">{h.timestamp} · ${h.arb.netProfit.toFixed(2)} net</p>
@@ -1090,13 +1093,13 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                     {/* Input Panel  -  hide if viewing history */}
                                     {activeHistory === null && (
                                         <>
-                                            {/* ── {/* ── Image upload + Scan Barcode button ── */}
+                                            {/* Image upload + Scan Barcode button */}
                                             <div className="relative border-2 border-dashed border-slate-300 rounded-2xl overflow-hidden hover:border-emerald-400 transition-colors">
                                                 <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer z-10"
                                                     onChange={(e) => { if (e.target.files[0]) setScoutImage({ file: e.target.files[0], url: URL.createObjectURL(e.target.files[0]) }); }} />
                                                 {scoutImage ? (
                                                     <div className="relative">
-                                                        <img src={scoutImage.url} className="w-full h-52 object-contain bg-slate-50"/>
+                                                        <img src={scoutImage.url} className="w-full h-52 object-contain bg-slate-50"onError={(e) => e.target.style.display='none'} />
                                                         <div className="absolute bottom-3 right-3 bg-emerald-500 text-white text-[9px] font-black px-3 py-1.5 rounded-full uppercase tracking-widest">Tap to Replace</div>
                                                     </div>
                                                 ) : (
@@ -1137,7 +1140,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                 );
                                             })()}
 
-                                            Condition + Price Row */}
+                                            {/* Condition + Price Row */}
                                             <div className="grid grid-cols-2 gap-4">
                                                 <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
                                                     <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-2">Item Condition</p>
@@ -1223,7 +1226,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
 
                                                 {/* Item ID */}
                                                 <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 flex gap-4">
-                                                    {r.imageUrl && <img src={r.imageUrl} className="w-20 h-20 rounded-xl object-cover border border-slate-200 shrink-0" />}
+                                                    {r.imageUrl && <img src={r.imageUrl} className="w-20 h-20 rounded-xl object-cover border border-slate-200 shrink-0" onError={(e) => e.target.style.display='none'} />}
                                                     <div className="min-w-0">
                                                         <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1">Item Identified</p>
                                                         <p className="text-sm font-black text-slate-900 leading-tight uppercase">{r.itemTitle}</p>
@@ -2399,6 +2402,7 @@ We take our reputation seriously, we buy and sell online, so we understand the v
                                 inline={true}
                                 scanPreload={scoutPreload}
                                 onScanRequest={() => setShowScanner(true)}
+                                onBarcodeScanned={(upc) => { setScanResult({ upc, destination: 'scout' }); }}
                                 onSendToProcessing={(item) => {
                                     setBarcodeListingData({ title: item.title, image: item.imageUrl, price: item.price ? String(item.price) : '', upc: '' });
                                     setActiveTab('process');
@@ -2449,6 +2453,7 @@ We take our reputation seriously, we buy and sell online, so we understand the v
                     inline={false}
                     scanPreload={scoutPreload}
                     onScanRequest={() => setShowScanner(true)}
+                    onBarcodeScanned={(upc) => { setScanResult({ upc, destination: 'scout' }); }}
                     onSendToProcessing={(item) => {
                         setBarcodeListingData({ title: item.title, image: item.imageUrl, price: item.price ? String(item.price) : '', upc: '' });
                         setActiveTab('process');
