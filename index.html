@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>eBay Scout</title>
+    <title>eBay Listing Agent v5.6.0</title>
 
     <!-- PWA Manifest -->
     <link rel="manifest" href="/manifest.json">
@@ -124,11 +124,43 @@
 
         const getListingsPath = (uid) => `artifacts/jdinjax-console/users/${uid}/listings`;
 
-        const EBAY_CONDITIONS = [
-            { id: '1000', label: 'New' }, { id: '1500', label: 'New  -  Other' }, { id: '1750', label: 'New  -  Open Box' },
-            { id: '2000', label: 'Seller Refurbished' }, { id: '2500', label: 'Used  -  Like New' }, { id: '3000', label: 'Used  -  Good' },
-            { id: '4000', label: 'Used  -  Acceptable' }, { id: '7000', label: 'For Parts / Not Working' }
+        // ── Condition sets — eBay condition IDs are category-dependent ────────────
+        const EBAY_CONDITIONS_STANDARD = [
+            { id: '1000', label: 'New' },
+            { id: '1500', label: 'New — Other' },
+            { id: '2000', label: 'Seller Refurbished' },
+            { id: '2500', label: 'Used — Like New' },
+            { id: '3000', label: 'Used — Good' },
+            { id: '4000', label: 'Used — Acceptable' },
+            { id: '7000', label: 'For Parts / Not Working' }
         ];
+        const EBAY_CONDITIONS_CLOTHING = [
+            { id: '1000', label: 'New with Tags' },
+            { id: '1500', label: 'New without Tags' },
+            { id: '1750', label: 'New with Defects' },
+            { id: '3000', label: 'Pre-owned' }
+        ];
+        // eBay clothing supertree — categoryId '11450' = Clothing, Shoes & Accessories
+        const CLOTHING_CATEGORY_IDS = new Set([
+            '11450','11483','11484','11485','11486','11487','11488','11489',
+            '15709','15724','15725','15726','15727','15728','15729','15730',
+            '57988','57989','57990','63861','63862','63863','63864','155183',
+            '11509','11510','11511','11512','11513','11514','11515','11516',
+            '175759','175760','175761','175762','175763','175764','175765'
+        ]);
+        const EBAY_CONDITIONS = EBAY_CONDITIONS_STANDARD; // legacy alias
+
+        const getConditionSet = (categoryId) => {
+            if (!categoryId) return EBAY_CONDITIONS_STANDARD;
+            if (CLOTHING_CATEGORY_IDS.has(String(categoryId))) return EBAY_CONDITIONS_CLOTHING;
+            return EBAY_CONDITIONS_STANDARD;
+        };
+
+        const sanitizeConditionId = (conditionId, categoryId) => {
+            const set = getConditionSet(categoryId);
+            if (set.some(s => s.id === conditionId)) return conditionId;
+            return set[0].id; // default to first valid option
+        };
 
         const JDINJAX_SYSTEM_PROMPT = "Role: eBay Listing Pro for Black Knight Armament. Identify the item in the photos. Title STRICT MAX 80 CHARS. Prices should end in .95. Calculate initial price assuming NEW/Excellent condition. For categoryId and categoryPath: be as specific as possible  -  use the deepest applicable eBay leaf category. For firearms accessories use categories like 73944 (Scopes, Sights & Optics), 73943 (Grips, Forends & Stocks), 73938 (Magazines), 177891 (Cleaning Equipment), 73949 (Slings & Swivels). For general items use the most precise leaf node. Format response as JSON strictly.";
 
@@ -1577,10 +1609,10 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         l.conditionId || "1000",   // Condition ID
                         `"${escapedDesc}"`,        // Description
                         "FixedPrice",              // Format
-                        settings.shippingProfile ? `"${settings.shippingProfile}"` : "",  // ShippingProfileName
-                        settings.paymentProfile  ? `"${settings.paymentProfile}"`  : "",  // PaymentProfileName
-                        settings.returnProfile   ? `"${settings.returnProfile}"`   : "",  // ReturnProfileName
-                        settings.storeName  ? `"${settings.storeName}"`  : "",  // StoreName
+                        `"${(settings.shippingProfile || "").replace(/"/g, '""')}"`,  // ShippingProfileName
+                        `"${(settings.paymentProfile  || "").replace(/"/g, '""')}"`,  // PaymentProfileName
+                        `"${(settings.returnProfile   || "").replace(/"/g, '""')}"`,  // ReturnProfileName
+                        `"${(settings.storeName       || "").replace(/"/g, '""')}"`,  // StoreName
                         settings.location   ? `"${settings.location}"`   : "",  // Location
                         settings.postalCode ? `"${settings.postalCode}"` : ""   // PostalCode
                     ];
@@ -1661,14 +1693,14 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         `"${escapedDesc}"`,
                         "FixedPrice",
                         "GTC",
-                        settings.location   ? `"${settings.location}"`   : "",
-                        settings.postalCode ? `"${settings.postalCode}"` : "",
-                        l.brand    || "",
-                        l.itemType || "",
+                        `"${(settings.location   || "").replace(/"/g, '""')}"`,
+                        `"${(settings.postalCode || "").replace(/"/g, '""')}"`,
+                        `"${(l.brand    || "").replace(/"/g, '""')}"`,
+                        `"${(l.itemType || "").replace(/"/g, '""')}"`,
                         `"${schedStr}"`,   // quoted  -  contains spaces
-                        settings.shippingProfile ? `"${settings.shippingProfile}"` : "",
-                        settings.paymentProfile  ? `"${settings.paymentProfile}"`  : "",
-                        settings.returnProfile   ? `"${settings.returnProfile}"`   : ""
+                        `"${(settings.shippingProfile || "").replace(/"/g, '""')}"`,
+                        `"${(settings.paymentProfile  || "").replace(/"/g, '""')}"`,
+                        `"${(settings.returnProfile   || "").replace(/"/g, '""')}"`
                     ];
                 });
 
@@ -1853,10 +1885,11 @@ We Do Not Ship Outside of the Continental U.S. or to P.O Boxes
 *Feedback
 We take our reputation seriously, we buy and sell online, so we understand the value of trust. If you are unsatisfied with your order, please give us an opportunity to resolve it to your satisfaction before leaving a negative feedback.`.trim();
                         
+                        const finalConditionId = sanitizeConditionId(batchCondition, aiData.categoryId);
                         await dbRef.current.collection(listingsPath).add({
                             ...aiData, 
                             images: urls, 
-                            conditionId: batchCondition, 
+                            conditionId: finalConditionId, 
                             timestamp: Date.now(),
                             sku: `BKA-${Date.now()}`,
                             markdownDescription: fullDescription
@@ -2160,7 +2193,7 @@ We take our reputation seriously, we buy and sell online, so we understand the v
                         </div>
                         <div className="flex items-center gap-3 bg-white px-5 py-2 rounded-2xl border border-slate-200 shadow-sm">
                             <span className="text-[9px] font-black uppercase text-slate-400">Batch Condition</span>
-                            <select value={batchCondition} onChange={(e) => setBatchCondition(e.target.value)} className="bg-transparent text-[10px] font-black uppercase text-blue-600 focus:outline-none">{EBAY_CONDITIONS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select>
+                            <select value={batchCondition} onChange={(e) => setBatchCondition(e.target.value)} className="bg-transparent text-[10px] font-black uppercase text-blue-600 focus:outline-none">{EBAY_CONDITIONS_STANDARD.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select>
                         </div>
                         <button onClick={nuclearReset} className="px-5 py-2 bg-red-50 text-red-600 rounded-xl text-[9px] font-black border border-red-100 uppercase transition-all hover:bg-red-100 flex items-center gap-2 shadow-sm"><Icon name="Zap" size={12}/> Purge</button>
                     </div>
@@ -2224,7 +2257,7 @@ We take our reputation seriously, we buy and sell online, so we understand the v
                                             <input className="text-xs font-bold border border-blue-200 rounded-xl px-4 py-3 bg-white" value={tempCategoryData.path} onChange={(e) => setTempCategoryData({...tempCategoryData, path: e.target.value})} placeholder="Path" />
                                             <div className="flex gap-2">
                                                 <input className="text-sm font-black border border-blue-200 rounded-xl px-4 py-3 bg-white flex-grow" value={tempCategoryData.id} onChange={(e) => setTempCategoryData({...tempCategoryData, id: e.target.value})} placeholder="Leaf ID" />
-                                                <button onClick={async () => { await dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({ categoryId: tempCategoryData.id, categoryPath: tempCategoryData.path, categorySource: 'Manual Overide' }); setEditingCategoryId(null); showToast("Saved."); }} className="bg-blue-600 text-white px-5 rounded-xl font-black uppercase text-[10px] shadow-md transition-all active:scale-95">Save</button>
+                                                <button onClick={async () => { await dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({ categoryId: tempCategoryData.id, categoryPath: tempCategoryData.path, categorySource: 'Manual Overide', conditionId: sanitizeConditionId(l.conditionId, tempCategoryData.id) }); setEditingCategoryId(null); showToast("Saved."); }} className="bg-blue-600 text-white px-5 rounded-xl font-black uppercase text-[10px] shadow-md transition-all active:scale-95">Save</button>
                                             </div>
                                         </div>
                                     ) : (
@@ -2262,7 +2295,7 @@ We take our reputation seriously, we buy and sell online, so we understand the v
                                 )}
                                 <div className="bg-slate-50 p-4 rounded-2xl mb-6 border border-slate-100 shadow-sm">
                                     <span className="text-[9px] font-black text-slate-400 uppercase mb-2 block tracking-widest text-center">Listing Condition</span>
-                                    <select value={l.conditionId || '1000'} onChange={e => dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({conditionId: e.target.value})} className="w-full bg-transparent text-xs font-black uppercase text-blue-600 cursor-pointer text-center focus:outline-none">{EBAY_CONDITIONS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select>
+                                    <select value={l.conditionId || '1000'} onChange={e => dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({conditionId: e.target.value})} className="w-full bg-transparent text-xs font-black uppercase text-blue-600 cursor-pointer text-center focus:outline-none">{getConditionSet(l.categoryId).map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select>
                                 </div>
                                 {l.priceResearch && (
                                     <div className="bg-gradient-to-br from-blue-50 to-slate-50 rounded-2xl p-5 border border-blue-100 mb-6 shadow-sm">
