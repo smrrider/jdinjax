@@ -589,8 +589,14 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 setScoutCamActive(true);
                 const reader = new window.ZXing.BrowserMultiFormatReader();
                 scoutReaderRef.current = reader;
-                setTimeout(() => {
-                    if (!scoutVideoRef.current) return;
+                // Poll for video element — modal renders async; fixed delay unreliable on mobile
+                let _attempts = 0;
+                const _waitForVideo = () => {
+                    if (!scoutReaderRef.current) return; // cam was stopped before video mounted
+                    if (!scoutVideoRef.current) {
+                        if (++_attempts > 25) { setScoutCamError('Camera timed out — try again.'); setScoutCamActive(false); return; }
+                        return setTimeout(_waitForVideo, 100);
+                    }
                     reader.decodeFromVideoDevice(null, scoutVideoRef.current, async (result, err) => {
                         if (result) {
                             const upc = result.getText();
@@ -619,7 +625,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         }
                         if (err && !(err instanceof window.ZXing.NotFoundException)) console.warn('[ScoutCam]', err);
                     }).catch(e => { setScoutCamError('Camera access denied. Check browser permissions.'); setScoutCamActive(false); });
-                }, 150);
+                };
+                setTimeout(_waitForVideo, 50);
             };
 
             const reset = () => {
