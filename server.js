@@ -1,6 +1,6 @@
 /**
  * JDINJAX eBay Listing Pro Console — Unified Single-Port Server
- * Version: 5.5.0 (Timeouts + Dedup + Cache Optimized)
+ * Version: 5.6.0 — BASELINE LOCKED
  * MISSION: Secure multi-user logistics, CSV mapping, and signed uploads.
  */
 
@@ -12,7 +12,7 @@ const crypto  = require('crypto');
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
-const APP_VERSION = "5.5.0";
+const APP_VERSION = "5.6.0";
 
 // ─── CATEGORY RESOLUTION ENGINE ─────────────────────────────────────────
 
