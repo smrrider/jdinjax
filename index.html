@@ -132,32 +132,21 @@
 
         // ── Condition sets — eBay condition IDs are category-dependent ────────────
         // ── eBay Condition Schema Engine ──────────────────────────────────────────────────
-        // Each schema maps to a distinct set of eBay conditionIds valid for that
-        // category tree. '1000' (New) exists in ALL schemas — guaranteed safe fallback.
-        // Source: eBay Condition IDs by Category — developer.ebay.com
+        // Two schemas only:
+        //   STANDARD — used for everything (4 conditions, valid across all eBay categories)
+        //   CLOTHING  — used only for Clothing/Shoes/Accessories (has New w/ Tags, Pre-owned, etc.)
+        // If conditionId doesn't match the schema for a category → falls back to '1000' (New).
 
+        // Universal 4-condition set — matches eBay's simplified condition dialog
+        // valid across: Parts, Electronics, Sporting Goods, Home & Garden, Tools, etc.
         const EBAY_CONDITIONS_STANDARD = [
             { id: '1000', label: 'New' },
-            { id: '1500', label: 'New — Other' },
-            { id: '2000', label: 'Seller Refurbished' },
-            { id: '2500', label: 'Used — Like New' },
-            { id: '3000', label: 'Used — Good' },
-            { id: '4000', label: 'Used — Acceptable' },
-            { id: '7000', label: 'For Parts / Not Working' }
-        ];
-
-        // eBay Motors Parts & Accessories — reduced 4-condition schema
-        // Confirmed via eBay community + API: 2000/2500/4000 are NOT valid in this tree.
-        // Covers: eBay Motors > Parts & Accessories (cat 6000) and all subcategories
-        // including RV Parts (3191), Car & Truck Parts (6030), Motorcycle Parts (10063).
-        const EBAY_CONDITIONS_PARTS = [
-            { id: '1000', label: 'New' },
-            { id: '1500', label: 'Open Box' },
+            { id: '1500', label: 'New other (see details)' },
             { id: '3000', label: 'Used' },
-            { id: '7000', label: 'For Parts / Not Working' }
+            { id: '7000', label: 'For parts or not working' }
         ];
 
-        // Clothing, Shoes & Accessories — cat 11450 supertree
+        // Clothing, Shoes & Accessories — cat 11450 supertree only
         const EBAY_CONDITIONS_CLOTHING = [
             { id: '1000', label: 'New with Tags' },
             { id: '1500', label: 'New without Tags' },
@@ -165,97 +154,27 @@
             { id: '3000', label: 'Pre-owned' }
         ];
 
-        // Collectibles, Trading Cards, Coins, Stamps, Antiques
-        const EBAY_CONDITIONS_COLLECTIBLES = [
-            { id: '1000', label: 'New' },
-            { id: '2000', label: 'Excellent' },
-            { id: '2500', label: 'Very Good' },
-            { id: '3000', label: 'Good' },
-            { id: '4000', label: 'Acceptable' },
-            { id: '5000', label: 'Poor' }
-        ];
-
-        // ── Category ID sets for each non-standard schema ─────────────────────────────────────────
-
-        // eBay Motors Parts & Accessories supertree (root: 6000)
-        // Only 4 conditions valid: 1000, 1500, 3000, 7000
-        const PARTS_CATEGORY_IDS = new Set([
-            // eBay Motors > Parts & Accessories root
-            '6000',
-            // Car & Truck Parts & Accessories (6030 supertree)
-            '6030','33559','33560','33561','33562','33563','33564','33565',
-            '33566','33567','33568','33569','33570','33571','33572','33573',
-            '33574','33575','33576','33577','33578','33579','33580','33581',
-            '33582','33583','33584','33585','33586','33587','33588','33589',
-            '33590','33591','33592','33593','33594','33595','33596','33597',
-            '33598','33599','33600','33601','33602','33603','33604','33605',
-            '33606','33607','33608','33609','33610','33611','33612','33613',
-            // Motorcycle Parts
-            '10063','35584','10064','10065','10066','10067','10068','10069',
-            // ATV, Side-by-Side & UTV Parts
-            '43962','43963','43964','43965','43966','43967','43968',
-            // Boat Parts & Accessories
-            '26429','26430','26431','26432','26433','26434','26435','26436',
-            // RV, Trailer & Camper Parts (includes confirmed cat 3191)
-            '3191','38635','38636','38637','38638','38639','38640','38641',
-            '38642','38643','38644','38645','38646','38647','38648','38649',
-            '66466','66467','66468','66469','66470','66471','66472','66473',
-            // Truck & SUV Accessories
-            '124364','124365','124366','124367','124368','124369','124370',
-            // Snowmobile Parts
-            '42595','42596','42597',
-            // Golf Cart Parts
-            '179697',
-            // Heavy Equipment Parts
-            '12101','12102','12103','12104',
-            // Tires & Wheels
-            '25485','25486','25487','25488','25489','25490',
-        ]);
-
-        // Clothing, Shoes & Accessories — eBay cat 11450 and all subcategory leaves
+        // Clothing, Shoes & Accessories — eBay cat 11450 and subcategory leaves
         const CLOTHING_CATEGORY_IDS = new Set([
             '11450','11483','11484','11485','11486','11487','11488','11489',
             '15709','15724','15725','15726','15727','15728','15729','15730',
             '57988','57989','57990','63861','63862','63863','63864','155183',
             '11509','11510','11511','11512','11513','11514','11515','11516',
             '175759','175760','175761','175762','175763','175764','175765',
-            // Shoes (cat 63889 tree — same condition schema as clothing)
             '63889','93427','11631','11632','11633','11634','11635',
             '11636','11637','11638','95672','24437'
         ]);
 
-        // Collectibles supertree — Trading Cards, Coins, Stamps, Antiques, Art
-        const COLLECTIBLES_CATEGORY_IDS = new Set([
-            '1','11116',
-            '212','183050','183454','183455','183456','183457','183458',
-            '183459','183460','183461','183462','261328','261329','261330',
-            '253','3381','18465','40143','45118',
-            '260','261','3606','3607','3609','19020','47511',
-            '20081','37903','38','675','3736','13583','156','20','14090',
-            '550','19502','19503','19504','19505','19506','19507',
-            '64482','64483','64484','64485','64486','64487','64488',
-            '64489','64490','64491','64492','64493','64494','64495',
-            '220','19071','19068','19069','19070','2613','163060'
-        ]);
-
         const EBAY_CONDITIONS = EBAY_CONDITIONS_STANDARD; // legacy alias
 
-        // ── Schema resolver — returns the correct condition set for a categoryId ──
-        // Priority: Parts → Clothing → Collectibles → Standard (default)
-        // All schemas include '1000' — if no match, Standard is always safe.
+        // Returns Clothing schema for clothing/shoes categories, Standard for everything else
         const getConditionSet = (categoryId) => {
-            if (!categoryId) return EBAY_CONDITIONS_STANDARD;
-            const id = String(categoryId);
-            if (PARTS_CATEGORY_IDS.has(id))          return EBAY_CONDITIONS_PARTS;
-            if (CLOTHING_CATEGORY_IDS.has(id))        return EBAY_CONDITIONS_CLOTHING;
-            if (COLLECTIBLES_CATEGORY_IDS.has(id))    return EBAY_CONDITIONS_COLLECTIBLES;
+            if (categoryId && CLOTHING_CATEGORY_IDS.has(String(categoryId))) return EBAY_CONDITIONS_CLOTHING;
             return EBAY_CONDITIONS_STANDARD;
         };
 
-        // ── Condition sanitizer — used on save AND at CSV export time ─────────────────
-        // If the stored conditionId is valid for this category → keep it.
-        // If not → fall back to '1000' (New), which is valid in every eBay schema.
-        // This guarantees CSV import will never fail due to a condition mismatch.
+        // If stored conditionId is valid for this category → keep it.
+        // Otherwise → '1000' (New) — safe fallback valid in every eBay schema.
         const sanitizeConditionId = (conditionId, categoryId) => {
             const set = getConditionSet(categoryId);
             if (set.some(s => s.id === String(conditionId))) return String(conditionId);
