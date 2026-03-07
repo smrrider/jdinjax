@@ -611,19 +611,29 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             };
 
             const purgeHistory = async () => {
-                if (!user || !dbRef || !dbRef.current) return;
+                if (!user || !dbRef || !dbRef.current) { setConfirmPurge(false); return; }
                 try {
                     const path = `artifacts/jdinjax-console/users/${user.uid}/scoutHistory`;
                     const snap = await dbRef.current.collection(path).get();
-                    if (snap.empty) return;
+                    if (!snap || !snap.docs || snap.docs.length === 0) {
+                        setHistory([]);
+                        setConfirmPurge(false);
+                        showToast('History already empty.');
+                        return;
+                    }
                     const batch = dbRef.current.batch();
                     snap.docs.forEach(d => batch.delete(d.ref));
                     await batch.commit();
+                    setHistory([]);
                     setActiveHistory(null);
                     setResult(null);
                     setConfirmPurge(false);
                     showToast('Scout history cleared.');
-                } catch(e) { setConfirmPurge(false); showToast('Purge failed: ' + e.message); }
+                } catch(e) {
+                    setConfirmPurge(false);
+                    const msg = (e && (e.message || e.code || String(e))) || 'Unknown error';
+                    showToast('Purge failed: ' + msg);
+                }
             };
 
             const displayResult = activeHistory !== null ? history[activeHistory] : result;
