@@ -637,6 +637,11 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         setHistory([]);
                         setActiveHistory(null);
                         setResult(null);
+                        setScoutImage(null);
+                        setBarcodePreload(null);
+                        setPurchasePrice('');
+                        setScoutScanResults(null);
+                        setErrorMsg(null);
                         showToast('Scout history cleared.');
                     })
                     .catch(e => {
