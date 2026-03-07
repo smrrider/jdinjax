@@ -2492,7 +2492,7 @@ We take our reputation seriously, we buy and sell online, so we understand the v
                 {showScanner && <BarcodeScanner onScan={handleScan} onClose={() => setShowScanner(false)} />}
                 {scanResult && <ScanResult upc={scanResult.upc} onClose={() => setScanResult(null)} onSendToScout={handleSendToScout} onSendToListing={handleSendToListing} showToast={showToast} />}
                 <div className="min-h-screen p-4 md:p-8 max-w-6xl mx-auto animate-in fade-in duration-700">
-                    {toast && <div className="fixed top-8 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest shadow-2xl animate-in slide-in-from-top-4">{toast}</div>}
+                    {toast && <div className={`fixed top-8 left-1/2 -translate-x-1/2 z-50 px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest shadow-2xl animate-in slide-in-from-top-4 ${toast.type === 'error' ? 'bg-red-600 text-white' : 'bg-slate-900 text-white'}`}>{toast.msg}</div>}
                     <header className="flex flex-col md:flex-row justify-between items-center mb-10 gap-4">
                         <div className="flex items-center gap-6">
                             <h1 className="text-2xl font-black flex items-center gap-3"><Icon name="Package" className="text-blue-600" size={32} /> eBay Scout</h1>
