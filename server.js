@@ -1,6 +1,6 @@
 /**
  * JDINJAX eBay Listing Pro Console — Unified Single-Port Server
- * Version: 5.6.0 — BASELINE LOCKED
+ * Version: 5.7
  * MISSION: Secure multi-user logistics, CSV mapping, and signed uploads.
  */
 
