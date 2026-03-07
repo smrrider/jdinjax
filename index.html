@@ -72,17 +72,23 @@
     <script>
     window._loadErrors = [];
     window.onerror = function(msg, src, line, col, err) {
-        // Only fatal Babel/script parse errors should wipe the UI
-        if (src && src.indexOf('babel') === -1 && src.indexOf('unpkg') === -1) {
-            console.error('[App Error]', msg, src, line, col, err);
-            return true; // suppress — don't wipe app
+        console.error('[App Error]', msg, src, line, col, err);
+        // Only wipe the UI for fatal parse/script errors (not React render errors)
+        var isCDN = src && (src.indexOf('unpkg') !== -1 || src.indexOf('cdnjs') !== -1 || src.indexOf('gstatic') !== -1 || src.indexOf('googleapis') !== -1);
+        var isBabel = src && src.indexOf('babel') !== -1;
+        if (!isCDN && !isBabel) {
+            // Surface the error in the root div so it's visible (not a silent white screen)
+            var root = document.getElementById('root');
+            if (root && root.innerHTML.trim() === '') {
+                root.innerHTML = '<div style="font-family:monospace;padding:20px;background:#fee2e2;color:#991b1b;border-radius:8px;margin:20px">'
+                    + '<h2 style="margin:0 0 12px">App Error</h2>'
+                    + '<p><b>Message:</b> ' + msg + '</p>'
+                    + '<p><b>Source:</b> ' + (src||'unknown') + '</p>'
+                    + '<p><b>Line:</b> ' + line + ':' + col + '</p>'
+                    + '<pre style="background:#fca5a5;padding:8px;border-radius:4px;overflow:auto;white-space:pre-wrap">' + (err && err.stack ? err.stack : 'no stack') + '</pre>'
+                    + '</div>';
+            }
         }
-        var info = '<div style="font-family:monospace;padding:20px;background:#fee2e2;color:#991b1b;border-radius:8px;margin:20px">'
-            + '<h2 style="margin:0 0 12px">App Error</h2>'
-            + '<p><b>Message:</b> ' + msg + '</p>'
-            + '<p><b>Source:</b> ' + (src||'unknown') + '</p>'
-            + '<p><b>Line:</b> ' + line + ':' + col + '</p>'
-            + '<pre style="background:#fca5a5;padding:8px;border-radius:4px;overflow:auto;white-space:pre-wrap">' + (err && err.stack ? err.stack : 'no stack') + '</pre>';
         return true;
     };
     // Detect which CDN scripts fail to load
@@ -96,13 +102,13 @@
                 + '</div>';
         }
     }, true);
-    console.log('[JDINJAX] v5.5.0 loading - checking CDN...');
+    console.log('[JDINJAX] v5.6.0 loading - checking CDN...');
     </script>
 
     <script type="text/babel">
         const { useState, useEffect, useCallback, useRef, useMemo } = React;
 
-        const APP_VERSION = "5.5.0"; // 3-panel desktop + barcode scanner
+        const APP_VERSION = "5.6.0"; // 3-panel desktop + barcode scanner
 
         const _host    = window.location.hostname;
         const _isLocal = (_host === '127.0.0.1' || _host === 'localhost' || _host === '');
@@ -125,6 +131,11 @@
         const getListingsPath = (uid) => `artifacts/jdinjax-console/users/${uid}/listings`;
 
         // ── Condition sets — eBay condition IDs are category-dependent ────────────
+        // ── eBay Condition Schema Engine ──────────────────────────────────────────────────
+        // Each schema maps to a distinct set of eBay conditionIds valid for that
+        // category tree. '1000' (New) exists in ALL schemas — guaranteed safe fallback.
+        // Source: eBay Condition IDs by Category — developer.ebay.com
+
         const EBAY_CONDITIONS_STANDARD = [
             { id: '1000', label: 'New' },
             { id: '1500', label: 'New — Other' },
@@ -134,32 +145,121 @@
             { id: '4000', label: 'Used — Acceptable' },
             { id: '7000', label: 'For Parts / Not Working' }
         ];
+
+        // eBay Motors Parts & Accessories — reduced 4-condition schema
+        // Confirmed via eBay community + API: 2000/2500/4000 are NOT valid in this tree.
+        // Covers: eBay Motors > Parts & Accessories (cat 6000) and all subcategories
+        // including RV Parts (3191), Car & Truck Parts (6030), Motorcycle Parts (10063).
+        const EBAY_CONDITIONS_PARTS = [
+            { id: '1000', label: 'New' },
+            { id: '1500', label: 'Open Box' },
+            { id: '3000', label: 'Used' },
+            { id: '7000', label: 'For Parts / Not Working' }
+        ];
+
+        // Clothing, Shoes & Accessories — cat 11450 supertree
         const EBAY_CONDITIONS_CLOTHING = [
             { id: '1000', label: 'New with Tags' },
             { id: '1500', label: 'New without Tags' },
             { id: '1750', label: 'New with Defects' },
             { id: '3000', label: 'Pre-owned' }
         ];
-        // eBay clothing supertree — categoryId '11450' = Clothing, Shoes & Accessories
+
+        // Collectibles, Trading Cards, Coins, Stamps, Antiques
+        const EBAY_CONDITIONS_COLLECTIBLES = [
+            { id: '1000', label: 'New' },
+            { id: '2000', label: 'Excellent' },
+            { id: '2500', label: 'Very Good' },
+            { id: '3000', label: 'Good' },
+            { id: '4000', label: 'Acceptable' },
+            { id: '5000', label: 'Poor' }
+        ];
+
+        // ── Category ID sets for each non-standard schema ─────────────────────────────────────────
+
+        // eBay Motors Parts & Accessories supertree (root: 6000)
+        // Only 4 conditions valid: 1000, 1500, 3000, 7000
+        const PARTS_CATEGORY_IDS = new Set([
+            // eBay Motors > Parts & Accessories root
+            '6000',
+            // Car & Truck Parts & Accessories (6030 supertree)
+            '6030','33559','33560','33561','33562','33563','33564','33565',
+            '33566','33567','33568','33569','33570','33571','33572','33573',
+            '33574','33575','33576','33577','33578','33579','33580','33581',
+            '33582','33583','33584','33585','33586','33587','33588','33589',
+            '33590','33591','33592','33593','33594','33595','33596','33597',
+            '33598','33599','33600','33601','33602','33603','33604','33605',
+            '33606','33607','33608','33609','33610','33611','33612','33613',
+            // Motorcycle Parts
+            '10063','35584','10064','10065','10066','10067','10068','10069',
+            // ATV, Side-by-Side & UTV Parts
+            '43962','43963','43964','43965','43966','43967','43968',
+            // Boat Parts & Accessories
+            '26429','26430','26431','26432','26433','26434','26435','26436',
+            // RV, Trailer & Camper Parts (includes confirmed cat 3191)
+            '3191','38635','38636','38637','38638','38639','38640','38641',
+            '38642','38643','38644','38645','38646','38647','38648','38649',
+            '66466','66467','66468','66469','66470','66471','66472','66473',
+            // Truck & SUV Accessories
+            '124364','124365','124366','124367','124368','124369','124370',
+            // Snowmobile Parts
+            '42595','42596','42597',
+            // Golf Cart Parts
+            '179697',
+            // Heavy Equipment Parts
+            '12101','12102','12103','12104',
+            // Tires & Wheels
+            '25485','25486','25487','25488','25489','25490',
+        ]);
+
+        // Clothing, Shoes & Accessories — eBay cat 11450 and all subcategory leaves
         const CLOTHING_CATEGORY_IDS = new Set([
             '11450','11483','11484','11485','11486','11487','11488','11489',
             '15709','15724','15725','15726','15727','15728','15729','15730',
             '57988','57989','57990','63861','63862','63863','63864','155183',
             '11509','11510','11511','11512','11513','11514','11515','11516',
-            '175759','175760','175761','175762','175763','175764','175765'
+            '175759','175760','175761','175762','175763','175764','175765',
+            // Shoes (cat 63889 tree — same condition schema as clothing)
+            '63889','93427','11631','11632','11633','11634','11635',
+            '11636','11637','11638','95672','24437'
         ]);
+
+        // Collectibles supertree — Trading Cards, Coins, Stamps, Antiques, Art
+        const COLLECTIBLES_CATEGORY_IDS = new Set([
+            '1','11116',
+            '212','183050','183454','183455','183456','183457','183458',
+            '183459','183460','183461','183462','261328','261329','261330',
+            '253','3381','18465','40143','45118',
+            '260','261','3606','3607','3609','19020','47511',
+            '20081','37903','38','675','3736','13583','156','20','14090',
+            '550','19502','19503','19504','19505','19506','19507',
+            '64482','64483','64484','64485','64486','64487','64488',
+            '64489','64490','64491','64492','64493','64494','64495',
+            '220','19071','19068','19069','19070','2613','163060'
+        ]);
+
         const EBAY_CONDITIONS = EBAY_CONDITIONS_STANDARD; // legacy alias
 
+        // ── Schema resolver — returns the correct condition set for a categoryId ──
+        // Priority: Parts → Clothing → Collectibles → Standard (default)
+        // All schemas include '1000' — if no match, Standard is always safe.
         const getConditionSet = (categoryId) => {
             if (!categoryId) return EBAY_CONDITIONS_STANDARD;
-            if (CLOTHING_CATEGORY_IDS.has(String(categoryId))) return EBAY_CONDITIONS_CLOTHING;
+            const id = String(categoryId);
+            if (PARTS_CATEGORY_IDS.has(id))          return EBAY_CONDITIONS_PARTS;
+            if (CLOTHING_CATEGORY_IDS.has(id))        return EBAY_CONDITIONS_CLOTHING;
+            if (COLLECTIBLES_CATEGORY_IDS.has(id))    return EBAY_CONDITIONS_COLLECTIBLES;
             return EBAY_CONDITIONS_STANDARD;
         };
 
+        // ── Condition sanitizer — used on save AND at CSV export time ─────────────────
+        // If the stored conditionId is valid for this category → keep it.
+        // If not → fall back to '1000' (New), which is valid in every eBay schema.
+        // This guarantees CSV import will never fail due to a condition mismatch.
         const sanitizeConditionId = (conditionId, categoryId) => {
             const set = getConditionSet(categoryId);
-            if (set.some(s => s.id === conditionId)) return conditionId;
-            return set[0].id; // default to first valid option
+            if (set.some(s => s.id === String(conditionId))) return String(conditionId);
+            return '1000'; // universal safe fallback — exists in all eBay condition schemas
         };
 
         const JDINJAX_SYSTEM_PROMPT = "Role: eBay Listing Pro for Black Knight Armament. Identify the item in the photos. Title STRICT MAX 80 CHARS. Prices should end in .95. Calculate initial price assuming NEW/Excellent condition. For categoryId and categoryPath: be as specific as possible  -  use the deepest applicable eBay leaf category. For firearms accessories use categories like 73944 (Scopes, Sights & Optics), 73943 (Grips, Forends & Stocks), 73938 (Magazines), 177891 (Cleaning Equipment), 73949 (Slings & Swivels). For general items use the most precise leaf node. Format response as JSON strictly.";
@@ -587,6 +687,76 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             return                       { label: 'NO-GO',    css: 'verdict-nogo',     tag: 'NO-GO' };
         };
 
+        // ── Error Boundary — catches render crashes in listing cards, prevents full wipe ──
+        class ErrorBoundary extends React.Component {
+            constructor(props) { super(props); this.state = { hasError: false, error: null }; }
+            static getDerivedStateFromError(error) { return { hasError: true, error }; }
+            componentDidCatch(error, info) { console.error('[ErrorBoundary]', error, info); }
+            render() {
+                if (this.state.hasError) {
+                    return (
+                        <div className="bg-red-50 border border-red-200 rounded-2xl p-6 text-center">
+                            <p className="text-[10px] font-black text-red-600 uppercase tracking-widest mb-2">Render Error</p>
+                            <p className="text-xs text-red-500 mb-4">{this.state.error?.message || 'Unknown error'}</p>
+                            <button onClick={() => this.setState({ hasError: false, error: null })}
+                                className="px-4 py-2 bg-red-500 text-white rounded-xl text-[10px] font-black uppercase hover:bg-red-400 transition-all">
+                                Retry
+                            </button>
+                        </div>
+                    );
+                }
+                return this.props.children;
+            }
+        }
+
+        // ── ScoutScanResults — shared between inline and modal Scout modes ────────
+        // Previously duplicated ~80 lines of JSX. Single source of truth.
+        const ScoutScanResultsPanel = ({ scoutScanResults, scoutManualTitle, setScoutManualTitle, scoutSearchEngine, setBarcodePreload, setScoutScanResults, setResult, setActiveHistory, setShowScoutScanner }) => {
+            if (!scoutScanResults) return null;
+            const { loading, items, noResults, engine, upc } = scoutScanResults;
+            return (
+                <div className="rounded-2xl border-2 border-slate-200 overflow-hidden">
+                    <div className="flex border-b border-slate-100">
+                        {['ebay','amazon'].map(eng => (
+                            <button key={eng} onClick={() => scoutSearchEngine(eng, upc)}
+                                className={"flex-1 py-2.5 text-[10px] font-black uppercase tracking-widest transition-all " + (engine===eng ? (eng==='ebay' ? 'bg-blue-600 text-white' : 'bg-orange-500 text-white') : 'bg-slate-50 text-slate-400 hover:bg-slate-100')}>
+                                {eng === 'ebay' ? 'eBay' : 'Amazon'}
+                            </button>
+                        ))}
+                    </div>
+                    {loading ? (
+                        <div className="py-8 text-center">
+                            <Icon name="Loader2" size={24} className="animate-spin text-emerald-500 mx-auto mb-2"/>
+                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Searching {engine}...</p>
+                        </div>
+                    ) : noResults ? (
+                        <div className="p-4 space-y-3">
+                            <p className="text-slate-500 text-xs font-bold text-center">No results — try the other marketplace or enter manually</p>
+                            <input type="text" value={scoutManualTitle} onChange={e => setScoutManualTitle(e.target.value)} placeholder="Enter item title manually..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-emerald-400"/>
+                            <div className="flex gap-2">
+                                <button onClick={() => { if(scoutManualTitle.trim()) { setBarcodePreload({ title: scoutManualTitle.trim() }); setScoutScanResults(null); setResult(null); setActiveHistory(null); }}} className="flex-1 py-2 bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase">Use Title</button>
+                                <button onClick={() => { setScoutScanResults(null); setShowScoutScanner(true); }} className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase">Scan Again</button>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="max-h-60 overflow-y-auto no-scrollbar">
+                            {(items||[]).map((item, i) => (
+                                <button key={item.url || i} onClick={() => { setBarcodePreload(item); setScoutScanResults(null); setResult(null); setActiveHistory(null); }}
+                                    className="w-full flex items-center gap-3 px-4 py-3 hover:bg-emerald-50 border-b border-slate-100 last:border-0 transition-colors text-left active:scale-[0.98]">
+                                    {item.image && <img src={item.image} className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0" onError={(e) => e.target.style.display='none'}/>}
+                                    <div className="flex-1 min-w-0">
+                                        <p className="text-xs font-bold text-slate-800 leading-snug line-clamp-2">{item.title}</p>
+                                        {item.price && <p className="text-[10px] text-emerald-600 font-black mt-0.5">{item.price}</p>}
+                                    </div>
+                                    <Icon name="ChevronRight" size={14} className="text-slate-300 shrink-0"/>
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
         const ArbitrageScout = ({ proxyUrl, ebayConditions, showToast, dbRef, user, inline = false, scanPreload = null, onScanRequest, onSendToProcessing }) => {
             const [isOpen,        setIsOpen]        = useState(false);
             const [scoutImage,    setScoutImage]     = useState(null);
@@ -663,6 +833,9 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             };
 
             const reset = () => {
+                if (scoutImage && scoutImage.url && scoutImage.url.startsWith('blob:')) {
+                    URL.revokeObjectURL(scoutImage.url);
+                }
                 setScoutImage(null); setCondition('3000'); setPurchasePrice('');
                 setShippingMode('flat'); setFlatShippingFee('6.95');
                 setResult(null); setErrorMsg(null); setScoutStatus(''); setActiveHistory(null);
@@ -883,8 +1056,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                             {history.length > 0 && activeHistory === null && !result && (
                                 <div className="space-y-1">
                                     <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest px-1 mb-2">Recent Scans</p>
-                                    {history.slice(0, 8).map((h, i) => (
-                                        <button key={h._docId} onClick={() => setActiveHistory(i)}
+                                    {history.slice(0, 8).map((h) => (
+                                        <button key={h._docId} onClick={() => setActiveHistory(history.indexOf(h))}
                                             className="w-full flex items-center gap-3 p-3 rounded-2xl text-left hover:bg-slate-50 transition-all border border-transparent hover:border-slate-100">
                                             {h.imageUrl && <img src={h.imageUrl} className="w-10 h-10 rounded-xl object-cover border border-slate-200 shrink-0" onError={(e) => e.target.style.display='none'}/>}
                                             <div className="min-w-0 flex-1">
@@ -929,51 +1102,17 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                     </button>
 
                                     {/* Scan results */}
-                                    {scoutScanResults && (() => {
-                                        const { loading, items, noResults, engine, upc } = scoutScanResults;
-                                        return (
-                                            <div className="rounded-2xl border-2 border-slate-200 overflow-hidden">
-                                                {/* Engine toggle */}
-                                                <div className="flex border-b border-slate-100">
-                                                    {['ebay','amazon'].map(eng => (
-                                                        <button key={eng} onClick={() => scoutSearchEngine(eng, upc)}
-                                                            className={"flex-1 py-2.5 text-[10px] font-black uppercase tracking-widest transition-all " + (engine===eng ? (eng==='ebay' ? 'bg-blue-600 text-white' : 'bg-orange-500 text-white') : 'bg-slate-50 text-slate-400 hover:bg-slate-100')}>
-                                                            {eng === 'ebay' ? 'eBay' : 'Amazon'}
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                                {loading ? (
-                                                    <div className="py-8 text-center">
-                                                        <Icon name="Loader2" size={24} className="animate-spin text-emerald-500 mx-auto mb-2"/>
-                                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Searching {engine}...</p>
-                                                    </div>
-                                                ) : noResults ? (
-                                                    <div className="p-4 space-y-3">
-                                                        <p className="text-slate-500 text-xs font-bold text-center">No results — try the other marketplace or enter manually</p>
-                                                        <input type="text" value={scoutManualTitle} onChange={e => setScoutManualTitle(e.target.value)} placeholder="Enter item title manually..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-emerald-400"/>
-                                                        <div className="flex gap-2">
-                                                            <button onClick={() => { if(scoutManualTitle.trim()) { setBarcodePreload({ title: scoutManualTitle.trim() }); setScoutScanResults(null); setResult(null); setActiveHistory(null); }}} className="flex-1 py-2 bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase">Use Title</button>
-                                                            <button onClick={() => { setScoutScanResults(null); setShowScoutScanner(true); }} className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase">Scan Again</button>
-                                                        </div>
-                                                    </div>
-                                                ) : (
-                                                    <div className="max-h-60 overflow-y-auto no-scrollbar">
-                                                        {(items||[]).map((item,i) => (
-                                                            <button key={i} onClick={() => { setBarcodePreload(item); setScoutScanResults(null); setResult(null); setActiveHistory(null); }}
-                                                                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-emerald-50 border-b border-slate-100 last:border-0 transition-colors text-left active:scale-[0.98]">
-                                                                {item.image && <img src={item.image} className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0" onError={(e) => e.target.style.display='none'}/>}
-                                                                <div className="flex-1 min-w-0">
-                                                                    <p className="text-xs font-bold text-slate-800 leading-snug line-clamp-2">{item.title}</p>
-                                                                    {item.price && <p className="text-[10px] text-emerald-600 font-black mt-0.5">{item.price}</p>}
-                                                                </div>
-                                                                <Icon name="ChevronRight" size={14} className="text-slate-300 shrink-0"/>
-                                                            </button>
-                                                        ))}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        );
-                                    })()}
+                                    <ScoutScanResultsPanel
+                                        scoutScanResults={scoutScanResults}
+                                        scoutManualTitle={scoutManualTitle}
+                                        setScoutManualTitle={setScoutManualTitle}
+                                        scoutSearchEngine={scoutSearchEngine}
+                                        setBarcodePreload={setBarcodePreload}
+                                        setScoutScanResults={setScoutScanResults}
+                                        setResult={setResult}
+                                        setActiveHistory={setActiveHistory}
+                                        setShowScoutScanner={setShowScoutScanner}
+                                    />
 
                                     {/* Condition + Price Row */}
                                     <div className="grid grid-cols-2 gap-3">
@@ -1197,51 +1336,17 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                 className="w-full py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 bg-slate-100 text-slate-600 hover:bg-emerald-50 hover:text-emerald-600 active:scale-95">
                                                 <Icon name="ScanLine" size={12}/> Scan Barcode
                                             </button>
-                                            {scoutScanResults && (() => {
-                                        const { loading, items, noResults, engine, upc } = scoutScanResults;
-                                        return (
-                                            <div className="rounded-2xl border-2 border-slate-200 overflow-hidden">
-                                                {/* Engine toggle */}
-                                                <div className="flex border-b border-slate-100">
-                                                    {['ebay','amazon'].map(eng => (
-                                                        <button key={eng} onClick={() => scoutSearchEngine(eng, upc)}
-                                                            className={"flex-1 py-2.5 text-[10px] font-black uppercase tracking-widest transition-all " + (engine===eng ? (eng==='ebay' ? 'bg-blue-600 text-white' : 'bg-orange-500 text-white') : 'bg-slate-50 text-slate-400 hover:bg-slate-100')}>
-                                                            {eng === 'ebay' ? 'eBay' : 'Amazon'}
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                                {loading ? (
-                                                    <div className="py-8 text-center">
-                                                        <Icon name="Loader2" size={24} className="animate-spin text-emerald-500 mx-auto mb-2"/>
-                                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Searching {engine}...</p>
-                                                    </div>
-                                                ) : noResults ? (
-                                                    <div className="p-4 space-y-3">
-                                                        <p className="text-slate-500 text-xs font-bold text-center">No results — try the other marketplace or enter manually</p>
-                                                        <input type="text" value={scoutManualTitle} onChange={e => setScoutManualTitle(e.target.value)} placeholder="Enter item title manually..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-emerald-400"/>
-                                                        <div className="flex gap-2">
-                                                            <button onClick={() => { if(scoutManualTitle.trim()) { setBarcodePreload({ title: scoutManualTitle.trim() }); setScoutScanResults(null); setResult(null); setActiveHistory(null); }}} className="flex-1 py-2 bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase">Use Title</button>
-                                                            <button onClick={() => { setScoutScanResults(null); setShowScoutScanner(true); }} className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase">Scan Again</button>
-                                                        </div>
-                                                    </div>
-                                                ) : (
-                                                    <div className="max-h-60 overflow-y-auto no-scrollbar">
-                                                        {(items||[]).map((item,i) => (
-                                                            <button key={i} onClick={() => { setBarcodePreload(item); setScoutScanResults(null); setResult(null); setActiveHistory(null); }}
-                                                                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-emerald-50 border-b border-slate-100 last:border-0 transition-colors text-left active:scale-[0.98]">
-                                                                {item.image && <img src={item.image} className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0" onError={(e) => e.target.style.display='none'}/>}
-                                                                <div className="flex-1 min-w-0">
-                                                                    <p className="text-xs font-bold text-slate-800 leading-snug line-clamp-2">{item.title}</p>
-                                                                    {item.price && <p className="text-[10px] text-emerald-600 font-black mt-0.5">{item.price}</p>}
-                                                                </div>
-                                                                <Icon name="ChevronRight" size={14} className="text-slate-300 shrink-0"/>
-                                                            </button>
-                                                        ))}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        );
-                                    })()}
+                                            {scoutScanResults && <ScoutScanResultsPanel
+                                                scoutScanResults={scoutScanResults}
+                                                scoutManualTitle={scoutManualTitle}
+                                                setScoutManualTitle={setScoutManualTitle}
+                                                scoutSearchEngine={scoutSearchEngine}
+                                                setBarcodePreload={setBarcodePreload}
+                                                setScoutScanResults={setScoutScanResults}
+                                                setResult={setResult}
+                                                setActiveHistory={setActiveHistory}
+                                                setShowScoutScanner={setShowScoutScanner}
+                                            />}
 
                                             {/* Condition + Price Row */}
                                             <div className="grid grid-cols-2 gap-4">
@@ -1532,13 +1637,21 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 const init = async () => {
                     try {
                         await fetchAppConfig();
+                        // Guard: if config fetch succeeded but returned undefined keys, fail loudly
+                        if (!firebaseConfig || !firebaseConfig.apiKey) {
+                            throw new Error('Firebase config missing — check Railway env vars (FIREBASE_API_KEY etc.)');
+                        }
                         if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
                         dbRef.current = firebase.firestore();
                         firebase.auth().onAuthStateChanged(u => { 
                             setUser(u); 
                             setAuthLoading(false); 
                         });
-                    } catch (e) { setErrorMsg("Access Bridge Link Failure: " + e.message); }
+                    } catch (e) {
+                        console.error('[Init] Fatal:', e.message);
+                        setErrorMsg("Access Bridge Link Failure: " + e.message);
+                        setAuthLoading(false); // ← CRITICAL: releases the spinner so errorMsg renders
+                    }
                 };
                 init();
             }, []);
@@ -1564,6 +1677,9 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     })
                     .catch(e => console.warn('[Settings] Load failed:', e.message));
             }, [user]);
+
+            // ── useMemo MUST be here — before ANY conditional returns (Rules of Hooks) ──
+            const sortedListings = useMemo(() => [...listings].sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0)), [listings]);
 
             const showToast = (msg, type = 'default') => { setToast({ msg, type }); setTimeout(() => setToast(null), 4000); };
             const cleanJson = (text) => text.replace(/```json|```/g, '').trim();
@@ -1674,6 +1790,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     const htmlDesc = `<div>${convertToHtml(l.markdownDescription)}</div>`;
                     const escapedDesc = htmlDesc.replace(/"/g, '""');
                     const sku = l.sku || `BKA-${l.timestamp || Date.now()}`;
+                    // Sanitize at export time — invalid conditionId for this category → '1000' (New)
+                    const safeConditionId = sanitizeConditionId(l.conditionId || '1000', l.categoryId);
                     
                     return [
                         "Draft",                   // Action
@@ -1684,7 +1802,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         Number(l.buyItNowPrice || 0).toFixed(2), // Price
                         "1",                       // Quantity
                         `"${(l.images || []).slice(0, 12).join('|')}"`,           // Item photo URL (up to 12)
-                        l.conditionId || "1000",   // Condition ID
+                        safeConditionId,           // Condition ID — sanitized, guaranteed valid for category
                         `"${escapedDesc}"`,        // Description
                         "FixedPrice",              // Format
                         `"${(settings.shippingProfile || "").replace(/"/g, '""')}"`,  // ShippingProfileName
@@ -1704,9 +1822,11 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
 
                 const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
                 const link = document.createElement("a");
-                link.href = URL.createObjectURL(blob);
+                const blobUrl = URL.createObjectURL(blob);
+                link.href = blobUrl;
                 link.download = `ebay_draft_import_${Date.now()}.csv`;
                 link.click();
+                setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
                 showToast("CSV Exported (Template v1193).");
             };
 
@@ -1759,6 +1879,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     const htmlDesc    = `<div>${convertToHtml(l.markdownDescription)}</div>`;
                     const escapedDesc = htmlDesc.replace(/"/g, '""');
                     const sku         = l.sku || `BKA-${l.timestamp || Date.now()}`;
+                    // Sanitize at export time — invalid conditionId for this category → '1000' (New)
+                    const safeConditionId = sanitizeConditionId(l.conditionId || '1000', l.categoryId);
                     return [
                         "Add",
                         sku,
@@ -1767,7 +1889,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         Number(l.buyItNowPrice || 0).toFixed(2),
                         "1",
                         `"${(l.images || []).slice(0, 12).join('|')}"`,
-                        l.conditionId  || "1000",
+                        safeConditionId,           // Condition ID — sanitized, guaranteed valid for category
                         `"${escapedDesc}"`,
                         "FixedPrice",
                         "GTC",
@@ -1789,9 +1911,11 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
 
                 const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
                 const link = document.createElement("a");
-                link.href = URL.createObjectURL(blob);
+                const blobUrl2 = URL.createObjectURL(blob);
+                link.href = blobUrl2;
                 link.download = `ebay_add_import_${Date.now()}.csv`;
                 link.click();
+                setTimeout(() => URL.revokeObjectURL(blobUrl2), 5000);
                 showToast("CSV Exported (Add  -  Scheduled: " + formatScheduleTimeDisplay(isoScheduleTime) + ")");
                 setShowSchedulePicker(false);
             };
@@ -1934,6 +2058,29 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
 
             if (authLoading) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><Icon name="Loader2" size={48} className="text-blue-600 animate-spin" /></div>;
 
+            // Surface init errors (bad env vars, network down, etc.) — prevents silent white screen
+            if (errorMsg && !user) return (
+                <div className="min-h-screen flex items-center justify-center p-6 bg-slate-100">
+                    <div className="max-w-md w-full bg-white rounded-3xl shadow-2xl p-10 border border-red-200">
+                        <div className="w-14 h-14 bg-red-100 rounded-2xl flex items-center justify-center mb-6">
+                            <Icon name="AlertTriangle" size={28} className="text-red-500"/>
+                        </div>
+                        <h2 className="text-lg font-black text-red-700 uppercase tracking-tight mb-2">Access Bridge Failure</h2>
+                        <p className="text-sm font-bold text-slate-600 mb-4">{errorMsg}</p>
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Checklist:</p>
+                        <ul className="text-xs text-slate-500 space-y-1 list-disc list-inside mb-6">
+                            <li>Node server running on port 3001?</li>
+                            <li>.env has all FIREBASE_* keys set?</li>
+                            <li>GEMINI_API_KEY and SERPAPI_KEY present?</li>
+                            <li>CLOUDINARY_* vars configured?</li>
+                        </ul>
+                        <button onClick={() => window.location.reload()} className="w-full py-3 bg-red-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-red-500 transition-all">
+                            Retry
+                        </button>
+                    </div>
+                </div>
+            );
+
             if (!user) return (
                 <div className="min-h-screen flex items-center justify-center p-6 bg-slate-100">
                     <div className="max-w-md w-full auth-card rounded-[3rem] shadow-2xl p-10 border border-slate-200 animate-in fade-in zoom-in-95 duration-500">
@@ -1959,8 +2106,6 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     </div>
                 </div>
             );
-
-            const sortedListings = useMemo(() => [...listings].sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0)), [listings]);
 
             const handleScan = (upc) => {
                 setShowScanner(false);
@@ -2222,7 +2367,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         <button onClick={nuclearReset} className="px-6 py-3 bg-red-50 text-red-600 rounded-xl text-[10px] font-black uppercase flex items-center gap-2 border border-red-100 shadow-sm transition-all hover:bg-red-100 active:scale-95"><Icon name="Zap" size={14}/> Emergency Reset</button>
                     </div>
                     {sortedListings.map(l => (
-                        <div key={l.id} className="bg-white rounded-[2rem] border border-slate-200 flex flex-col md:flex-row overflow-hidden shadow-sm hover:border-blue-300 transition-all animate-in fade-in duration-500 listing-card">
+                        <ErrorBoundary key={l.id}>
+                        <div className="bg-white rounded-[2rem] border border-slate-200 flex flex-col md:flex-row overflow-hidden shadow-sm hover:border-blue-300 transition-all animate-in fade-in duration-500 listing-card">
                             <div className="md:w-72 h-72 md:h-auto shrink-0 bg-slate-50 border-r border-slate-100 relative group">
                                 <img src={l.images?.[0]} className="w-full h-full object-cover" />
                                 <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-md text-white text-[9px] font-black px-3 py-1 rounded-full uppercase tracking-widest">{l.images?.length || 0} Assets</div>
@@ -2294,6 +2440,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                 </div>
                             </div>
                         </div>
+                        </ErrorBoundary>
                     ))}
                 </div>
             );

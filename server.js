@@ -39,10 +39,60 @@ const BKA_CATEGORY_MAP = {
     "183446": "Home & Garden > Tools & Workshop Equipment"
 };
 
+// ─── Startup env validation ───────────────────────────────────────────────
+const REQUIRED_ENV = [
+    'FIREBASE_API_KEY', 'FIREBASE_AUTH_DOMAIN', 'FIREBASE_PROJECT_ID',
+    'GEMINI_API_KEY', 'CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET'
+];
+const missingEnv = REQUIRED_ENV.filter(k => !process.env[k]);
+if (missingEnv.length > 0) {
+    console.error(`[eBay Scout] ❌ MISSING ENV VARS: ${missingEnv.join(', ')}`);
+    console.error('[eBay Scout] Server will start but affected endpoints will fail.');
+}
+
+// ─── Gemini model allowlist — prevent model injection via /api/gemini ─────
+const ALLOWED_GEMINI_MODELS = new Set([
+    'gemini-2.5-flash',
+    'gemini-2.0-flash',
+    'gemini-1.5-flash',
+    'gemini-1.5-pro'
+]);
+
+// ─── SSRF allowlist — /api/proxy-image only fetches from these domains ────
+const ALLOWED_IMAGE_HOSTS = new Set([
+    'i.ebayimg.com',
+    'm.media-amazon.com',
+    'images-na.ssl-images-amazon.com',
+    'serpapi.com',
+    'encrypted-tbn0.gstatic.com',
+    'encrypted-tbn1.gstatic.com',
+    'encrypted-tbn2.gstatic.com',
+    'encrypted-tbn3.gstatic.com',
+    'shopping.googleapis.com',
+]);
+
 // ─── Middleware ────────────────────────────────────────────────────────────
-app.use(cors());
-app.use(express.json({ limit: '50mb' }));
+// CORS: lock to your Railway domain in production, allow localhost for dev
+const allowedOrigins = [
+    'https://ebay-lister.up.railway.app',
+    'http://localhost:3001',
+    'http://127.0.0.1:3001'
+];
+app.use(cors({
+    origin: (origin, callback) => {
+        // Allow requests with no origin (same-origin, curl, Postman)
+        if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+        console.warn('[CORS] Blocked origin:', origin);
+        callback(new Error('CORS: origin not allowed'));
+    },
+    methods: ['GET', 'POST'],
+    allowedHeaders: ['Content-Type']
+}));
 app.use(express.static(path.join(__dirname)));
+
+// Route-specific body parsers — tighter limits where images aren't needed
+const jsonSmall  = express.json({ limit: '64kb'  });   // text-only routes
+const jsonImages = express.json({ limit: '50mb'  });   // Gemini image proxy
 
 // ─── API Routes ───────────────────────────────────────────────────────────
 
@@ -72,7 +122,7 @@ app.get('/api/config', (req, res) => {
  * Generates a HMAC-SHA1 signature for secure uploads.
  * Isolates files to: jdinjax/users/{userId}
  */
-app.post('/api/sign-upload', (req, res) => {
+app.post('/api/sign-upload', jsonSmall, (req, res) => {
     const { userId, timestamp } = req.body;
     if (!userId || !timestamp) return res.status(400).json({ error: "Auth context required." });
 
@@ -178,7 +228,7 @@ const resolveViaGeminiOnly = async (title, keyFeatures, description) => {
 // In-flight request deduplication — bulk batches with similar titles share one API call
 const _inflightCategoryReqs = new Map();
 
-app.post("/api/category-resolve", async (req, res) => {
+app.post("/api/category-resolve", jsonSmall, async (req, res) => {
     const { title, keyFeatures = [], description = "" } = req.body;
     if (!title) return res.status(400).json({ error: "Title required." });
 
@@ -232,7 +282,7 @@ app.post("/api/category-resolve", async (req, res) => {
  * GEMINI PROXY
  */
 // ── Barcode Search ────────────────────────────────────────────────────────────
-app.post('/api/barcode-search', async (req, res) => {
+app.post('/api/barcode-search', jsonSmall, async (req, res) => {
     const { upc, engine = 'ebay' } = req.body;
     if (!upc) return res.status(400).json({ error: 'UPC required' });
     try {
@@ -282,9 +332,20 @@ app.post('/api/barcode-search', async (req, res) => {
 });
 
 // ── Image Proxy (for barcode listing — fetch external image → b64 + Cloudinary) ─
-app.post('/api/proxy-image', async (req, res) => {
+app.post('/api/proxy-image', jsonSmall, async (req, res) => {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL required' });
+    // SSRF guard — only fetch from known image CDNs
+    let parsedHost;
+    try {
+        parsedHost = new URL(url).hostname;
+    } catch(e) {
+        return res.status(400).json({ error: 'Invalid URL' });
+    }
+    if (!ALLOWED_IMAGE_HOSTS.has(parsedHost)) {
+        console.warn('[ProxyImage] SSRF blocked:', parsedHost);
+        return res.status(403).json({ error: 'Image host not permitted: ' + parsedHost });
+    }
     try {
         const imgCtrl = new AbortController();
         const imgTO = setTimeout(() => imgCtrl.abort(), 8000);
@@ -332,8 +393,12 @@ app.post('/api/proxy-image', async (req, res) => {
 });
 
 // ── Gemini Proxy ──────────────────────────────────────────────────────────────
-app.post('/api/gemini', async (req, res) => {
+app.post('/api/gemini', jsonImages, async (req, res) => {
     const { model = 'gemini-2.5-flash', ...payload } = req.body;
+    // Model allowlist — prevent injection of arbitrary model strings into the API URL
+    if (!ALLOWED_GEMINI_MODELS.has(model)) {
+        return res.status(400).json({ error: `Model not permitted: ${model}` });
+    }
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`;
     try {
         const gemCtrl = new AbortController();
@@ -352,6 +417,12 @@ app.post('/api/gemini', async (req, res) => {
         }
         res.json(data);
     } catch (err) { res.status(502).json({ error: { message: err.message } }); }
+});
+
+// ── SPA catch-all — serves index.html for any non-API route ──────────────
+// Must be registered AFTER all API routes so /api/* are not intercepted
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────────
