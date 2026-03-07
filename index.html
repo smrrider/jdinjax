@@ -72,17 +72,17 @@
     <script>
     window._loadErrors = [];
     window.onerror = function(msg, src, line, col, err) {
+        // Only fatal Babel/script parse errors should wipe the UI
+        if (src && src.indexOf('babel') === -1 && src.indexOf('unpkg') === -1) {
+            console.error('[App Error]', msg, src, line, col, err);
+            return true; // suppress — don't wipe app
+        }
         var info = '<div style="font-family:monospace;padding:20px;background:#fee2e2;color:#991b1b;border-radius:8px;margin:20px">'
             + '<h2 style="margin:0 0 12px">App Error</h2>'
             + '<p><b>Message:</b> ' + msg + '</p>'
             + '<p><b>Source:</b> ' + (src||'unknown') + '</p>'
             + '<p><b>Line:</b> ' + line + ':' + col + '</p>'
             + '<pre style="background:#fca5a5;padding:8px;border-radius:4px;overflow:auto;white-space:pre-wrap">' + (err && err.stack ? err.stack : 'no stack') + '</pre>';
-        if (window._loadErrors.length) {
-            info += '<p><b>Failed script loads:</b></p><ul>' + window._loadErrors.map(function(e){return '<li>'+e+'</li>';}).join('') + '</ul>';
-        }
-        info += '</div>';
-        document.getElementById('root').innerHTML = info;
         return true;
     };
     // Detect which CDN scripts fail to load
@@ -610,30 +610,38 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 setScoutScanResults(null); setScoutManualTitle('');
             };
 
-            const purgeHistory = async () => {
-                if (!user || !dbRef || !dbRef.current) { setConfirmPurge(false); return; }
-                try {
-                    const path = `artifacts/jdinjax-console/users/${user.uid}/scoutHistory`;
-                    const snap = await dbRef.current.collection(path).get();
-                    if (!snap || !snap.docs || snap.docs.length === 0) {
-                        setHistory([]);
-                        setConfirmPurge(false);
-                        showToast('History already empty.');
-                        return;
-                    }
-                    const batch = dbRef.current.batch();
-                    snap.docs.forEach(d => batch.delete(d.ref));
-                    await batch.commit();
-                    setHistory([]);
-                    setActiveHistory(null);
-                    setResult(null);
-                    setConfirmPurge(false);
-                    showToast('Scout history cleared.');
-                } catch(e) {
-                    setConfirmPurge(false);
-                    const msg = (e && (e.message || e.code || String(e))) || 'Unknown error';
-                    showToast('Purge failed: ' + msg);
+            const purgeHistory = () => {
+                setConfirmPurge(false);
+                if (!user || !dbRef || !dbRef.current) {
+                    showToast('Not connected — try again.');
+                    return;
                 }
+                const errMsg = (e) => {
+                    if (!e) return 'Unknown error';
+                    if (typeof e === 'string') return e;
+                    return e.message || e.code || e.toString() || 'Unknown error';
+                };
+                const path = `artifacts/jdinjax-console/users/${user.uid}/scoutHistory`;
+                dbRef.current.collection(path).get()
+                    .then(snap => {
+                        if (!snap || !snap.docs || snap.docs.length === 0) {
+                            setHistory([]);
+                            showToast('History already empty.');
+                            return;
+                        }
+                        const batch = dbRef.current.batch();
+                        snap.docs.forEach(d => batch.delete(d.ref));
+                        return batch.commit();
+                    })
+                    .then(() => {
+                        setHistory([]);
+                        setActiveHistory(null);
+                        setResult(null);
+                        showToast('Scout history cleared.');
+                    })
+                    .catch(e => {
+                        showToast('Purge failed: ' + errMsg(e));
+                    });
             };
 
             const displayResult = activeHistory !== null ? history[activeHistory] : result;
