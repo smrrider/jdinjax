@@ -190,7 +190,7 @@ app.post("/api/category-resolve", async (req, res) => {
     }
 
     // ── In-flight dedup — second request for same title waits on first ────────
-    const key = title.toLowerCase().trim();
+    const key = cacheKey(title);
     if (_inflightCategoryReqs.has(key)) {
         console.log("[Cat] Dedup wait: " + title.substring(0, 40));
         try {
