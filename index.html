@@ -100,7 +100,7 @@
     </script>
 
     <script type="text/babel">
-        const { useState, useEffect, useCallback, useRef } = React;
+        const { useState, useEffect, useCallback, useRef, useMemo } = React;
 
         const APP_VERSION = "5.5.0"; // 3-panel desktop + barcode scanner
 
@@ -186,6 +186,65 @@
             },
             required: ["title", "buyItNowPrice", "categoryId", "categoryPath", "weightItem", "dimensions"]
         };
+
+        // ── Shared image compression utility ─────────────────────────────────────
+        const compressImage = (img, maxPx = 1024) => new Promise((resolve, reject) => {
+            const image = new Image();
+            image.onload = () => {
+                let w = image.width, h = image.height;
+                if (w > maxPx || h > maxPx) {
+                    if (w > h) { h = Math.round(h * maxPx / w); w = maxPx; }
+                    else       { w = Math.round(w * maxPx / h); h = maxPx; }
+                }
+                const canvas = document.createElement('canvas');
+                canvas.width = w; canvas.height = h;
+                canvas.getContext('2d').drawImage(image, 0, 0, w, h);
+                canvas.toBlob(blob => {
+                    const reader = new FileReader();
+                    reader.onload = e => resolve({ blob, b64: e.target.result.split(',')[1], mimeType: 'image/jpeg' });
+                    reader.readAsDataURL(blob);
+                }, 'image/jpeg', 0.82);
+            };
+            image.onerror = () => reject(new Error('Compress failed'));
+            image.src = img.url;
+        });
+
+        // ── Shared listing description builder ───────────────────────────────────
+        const buildDescription = (aiData, conditionLabel) => `
+DESCRIPTION & TECHNICAL SPECIFICATIONS
+
+${aiData.title}
+
+KEY FEATURES:
+${(aiData.keyFeatures || []).map(f => `* ${f}`).join('\n')}
+
+WHAT'S INCLUDED:
+${(aiData.whatsIncluded || []).map(i => `* ${i}`).join('\n')}
+
+CONDITION & FLAWS:
+* Condition: ${conditionLabel}
+* Visible Flaws: ${aiData.flaws || "None observed during technical inspection."}
+
+SHIPPING LOGISTICS:
+* Item Weight: ${aiData.weightItem || 'TBD'}
+* Packaging Weight: ${aiData.weightPackaging || 'TBD'}
+* Total Shipping Weight: ${aiData.weightTotal || 'TBD'}
+* Dimensions: ${aiData.dimensions || 'TBD'}
+
+*Making an Offer
+Please don't hesitate to make a reasonable offer. A majority of our sales are concluded this way and it it doesn't hurt to ask. NOTE: However, I most likely won't counteroffer "low ball" offers....it will simply be declined.
+
+**Return Policy (Please read)
+Buyer is responsible for return shipping on any item that is not damaged, defective, or as described. As a reseller of items sourced from numerous places, we cannot control the manufacturing quality of an item. However, we CAN control how the items are sold, pricing, and time to ship of those items to you. If you are unsatisfied with your order in anyway, please contact us and we will work with you to resolve it to your satisfaction.
+
+*Shipping
+Items are shipped as fast as possible after payment is processed. We pride ourselves on getting your purchase to you FAST! This typically results in same day shipping if payment is received before noon (Mon-Fri).
+
+*Delivery
+We Do Not Ship Outside of the Continental U.S. or to P.O Boxes
+
+*Feedback
+We take our reputation seriously, we buy and sell online, so we understand the value of trust. If you are unsatisfied with your order, please give us an opportunity to resolve it to your satisfaction before leaving a negative feedback.`.trim();
 
         const Icon = ({ name, size = 24, className = "" }) => {
             const ref = useRef(null);
@@ -660,30 +719,10 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     let scoutBlob = null, b64 = null, scoutMimeType = null;
                     if (scoutImage) {
                         setScoutStatus("Compressing image...");
-                        const compressed = await new Promise((res, rej) => {
-                            const img = new Image();
-                            img.onload = () => {
-                                const MAX = 1024;
-                                let w = img.width, h = img.height;
-                                if (w > MAX || h > MAX) {
-                                    if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
-                                    else       { w = Math.round(w * MAX / h); h = MAX; }
-                                }
-                                const canvas = document.createElement('canvas');
-                                canvas.width = w; canvas.height = h;
-                                canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-                                canvas.toBlob(blob => {
-                                    const reader = new FileReader();
-                                    reader.onload = e => res({ scoutBlob: blob, b64: e.target.result.split(',')[1], scoutMimeType: 'image/jpeg' });
-                                    reader.readAsDataURL(blob);
-                                }, 'image/jpeg', 0.82);
-                            };
-                            img.onerror = () => rej(new Error("Image load failed"));
-                            img.src = scoutImage.url;
-                        });
-                        scoutBlob = compressed.scoutBlob;
+                        const compressed = await compressImage(scoutImage);
+                        scoutBlob = compressed.blob;
                         b64 = compressed.b64;
-                        scoutMimeType = compressed.scoutMimeType;
+                        scoutMimeType = compressed.mimeType;
                     } // end if(scoutImage)
                     const condLabel = ebayConditions.find(c => c.id === condition)?.label || 'Used';
 
@@ -762,7 +801,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                             const colRef = dbRef.current.collection(path);
                             await colRef.add({ ...scoutResult, savedAt: Date.now() });
                             // Prune to 20  -  delete oldest beyond cap
-                            const all = await colRef.orderBy('savedAt', 'desc').get();
+                            const all = await colRef.orderBy('savedAt', 'desc').limit(21).get();
                             if (all.docs.length > 20) {
                                 const batch = dbRef.current.batch();
                                 all.docs.slice(20).forEach(d => batch.delete(d.ref));
@@ -1780,51 +1819,26 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     : Array.from({ length: Math.floor(images.length / 4) }, (_, i) => images.slice(i * 4, i * 4 + 4));
                 const total = batches.length;
                 setIsProcessing(true);
+                let completed = 0;
+                setStatus(`Processing 0/${total}...`);
                 try {
                     const listingsPath = getListingsPath(user.uid);
-                    for (let i = 0; i < total; i++) {
-                        const batch = batches[i];
-                        setStatus(`Processing ${i+1}/${total}...`);
-
-                        // -- Compress all images in batch ONCE, reuse for Cloudinary + Gemini --
-                        const compressImage = (img, maxPx = 1024) => new Promise((resolve, reject) => {
-                            const image = new Image();
-                            image.onload = () => {
-                                let w = image.width, h = image.height;
-                                if (w > maxPx || h > maxPx) {
-                                    if (w > h) { h = Math.round(h * maxPx / w); w = maxPx; }
-                                    else       { w = Math.round(w * maxPx / h); h = maxPx; }
-                                }
-                                const canvas = document.createElement('canvas');
-                                canvas.width = w; canvas.height = h;
-                                canvas.getContext('2d').drawImage(image, 0, 0, w, h);
-                                canvas.toBlob(blob => {
-                                    const reader = new FileReader();
-                                    reader.onload = e => resolve({
-                                        blob,
-                                        b64: e.target.result.split(',')[1],
-                                        mimeType: 'image/jpeg'
-                                    });
-                                    reader.readAsDataURL(blob);
-                                }, 'image/jpeg', 0.82);
-                            };
-                            image.onerror = () => reject(new Error('Compress failed'));
-                            image.src = img.url;
-                        });
+                    await Promise.all(batches.map(async (batch, i) => {
+                        // Compress all images in this batch in parallel
                         const compressed = await Promise.all(batch.map(img => compressImage(img)));
-
-                        // HIGH OPT: Fire Cloudinary uploads + Gemini call in parallel
-                        // Both only need compressed data — neither waits on the other
                         const primaryB64 = { data: compressed[0].b64, mimeType: compressed[0].mimeType };
 
-                        const uploadPromise = Promise.allSettled(compressed.map(async (comp, idx) => {
-                            const timestamp = Math.round((new Date()).getTime() / 1000);
-                            const signRes = await fetch(SIGN_API_URL, {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ userId: user.uid, timestamp })
-                            });
-                            const { signature, folder } = await signRes.json();
+                        // Single sign-upload call for the whole batch — all images share timestamp+signature
+                        const timestamp = Math.round(Date.now() / 1000);
+                        const signRes = await fetch(SIGN_API_URL, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ userId: user.uid, timestamp })
+                        });
+                        const { signature, folder } = await signRes.json();
+
+                        // Fire Cloudinary uploads + Gemini in parallel
+                        const uploadPromise = Promise.allSettled(compressed.map(async (comp) => {
                             const fd = new FormData();
                             fd.append("file", comp.blob);
                             fd.append("api_key", CLOUDINARY_CONFIG.apiKey);
@@ -1847,13 +1861,13 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                 generationConfig: { responseMimeType: "application/json", responseSchema: JSON_SCHEMA }
                             })
                         });
-                        // Await both in parallel — whichever finishes first waits for the other
+
                         const [uploadResults, geminiRes] = await Promise.all([uploadPromise, geminiPromise]);
 
                         const failedUploads = uploadResults.filter(r => r.status === 'rejected').length;
                         if (failedUploads > 0) showToast(`${failedUploads} image(s) failed to upload  -  skipped.`);
                         const urls = uploadResults.filter(r => r.status === 'fulfilled').map(r => r.value);
-                        if (urls.length === 0) { showToast(`Batch ${i+1}: all uploads failed — check Cloudinary config.`, 'error'); continue; }
+                        if (urls.length === 0) { showToast(`Batch ${i+1}: all uploads failed — check Cloudinary config.`, 'error'); return; }
 
                         const result = await geminiRes.json();
                         if (!result.candidates?.[0]?.content?.parts?.[0]?.text) {
@@ -1863,17 +1877,11 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         const aiData = JSON.parse(cleanJson(result.candidates[0].content.parts[0].text));
 
                         let finalSource = "UNMAPPED";
-
                         try {
-                            // Gemini dedicated category resolution  -  two-stage classification
                             const catRes = await fetch(CATEGORY_API_URL, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                    title: aiData.title,
-                                    keyFeatures: aiData.keyFeatures || [],
-                                    description: aiData.markdownDescription || ''
-                                })
+                                body: JSON.stringify({ title: aiData.title, keyFeatures: aiData.keyFeatures || [], description: aiData.markdownDescription || '' })
                             });
                             if (catRes.ok) {
                                 const catData = await catRes.json();
@@ -1881,59 +1889,25 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                 aiData.categoryPath = catData.categoryPath;
                                 finalSource = catData.confidence === 'High' ? 'AI Verified' : 'AI Predicted';
                             }
-                        } catch (e) {
-                            console.warn('Category resolve failed:', e.message);
-                        }
-                        
+                        } catch (e) { console.warn('Category resolve failed:', e.message); }
+
                         aiData.categorySource = finalSource;
                         const currentCondition = EBAY_CONDITIONS.find(c => c.id === batchCondition)?.label || 'Used';
-                        
-                        const fullDescription = `
-DESCRIPTION & TECHNICAL SPECIFICATIONS
-
-${aiData.title}
-
-KEY FEATURES:
-${(aiData.keyFeatures || []).map(f => `* ${f}`).join('\n')}
-
-WHAT'S INCLUDED:
-${(aiData.whatsIncluded || []).map(i => `* ${i}`).join('\n')}
-
-CONDITION & FLAWS:
-* Condition: ${currentCondition}
-* Visible Flaws: ${aiData.flaws || "None observed during technical inspection."}
-
-SHIPPING LOGISTICS:
-* Item Weight: ${aiData.weightItem || 'TBD'}
-* Packaging Weight: ${aiData.weightPackaging || 'TBD'}
-* Total Shipping Weight: ${aiData.weightTotal || 'TBD'}
-* Dimensions: ${aiData.dimensions || 'TBD'}
-
-*Making an Offer 
-Please don't hesitate to make a reasonable offer. A majority of our sales are concluded this way and it it doesn't hurt to ask. NOTE: However, I most likely won't counteroffer "low ball" offers....it will simply be declined. 
-
-**Return Policy (Please read)
-Buyer is responsible for return shipping on any item that is not damaged, defective, or as described. As a reseller of items sourced from numerous places, we cannot control the manufacturing quality of an item. However, we CAN control how the items are sold, pricing, and time to ship of those items to you. If you are unsatisfied with your order in anyway, please contact us and we will work with you to resolve it to your satisfaction. 
-
-*Shipping
-Items are shipped as fast as possible after payment is processed. We pride ourselves on getting your purchase to you FAST! This typically results in same day shipping if payment is received before noon (Mon-Fri).
-
-*Delivery
-We Do Not Ship Outside of the Continental U.S. or to P.O Boxes
-
-*Feedback
-We take our reputation seriously, we buy and sell online, so we understand the value of trust. If you are unsatisfied with your order, please give us an opportunity to resolve it to your satisfaction before leaving a negative feedback.`.trim();
-                        
                         const finalConditionId = sanitizeConditionId(batchCondition, aiData.categoryId);
                         await dbRef.current.collection(listingsPath).add({
-                            ...aiData, 
-                            images: urls, 
-                            conditionId: finalConditionId, 
+                            ...aiData,
+                            images: urls,
+                            conditionId: finalConditionId,
                             timestamp: Date.now(),
                             sku: `BKA-${Date.now()}`,
-                            markdownDescription: fullDescription
+                            markdownDescription: buildDescription(aiData, currentCondition)
                         });
-                    }
+
+                        completed++;
+                        setStatus(`Processing ${completed}/${total}...`);
+                    }));
+
+                    images.forEach(img => URL.revokeObjectURL(img.url));
                     setImages([]); setActiveTab('listings'); showToast(`${total} Ad${total !== 1 ? 's' : ''} Generated.`);
                 } catch (e) { showToast(e.message || 'Processing failed — check console.', 'error'); console.error('[processImages]', e); } finally { setIsProcessing(false); setStatus(""); }
             };
@@ -1986,7 +1960,7 @@ We take our reputation seriously, we buy and sell online, so we understand the v
                 </div>
             );
 
-            const sortedListings = [...listings].sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
+            const sortedListings = useMemo(() => [...listings].sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0)), [listings]);
 
             const handleScan = (upc) => {
                 setShowScanner(false);
@@ -2066,49 +2040,13 @@ We take our reputation seriously, we buy and sell online, so we understand the v
 
                     aiData.categorySource = finalSource;
                     const currentCondition = EBAY_CONDITIONS.find(ec => ec.id === batchCondition)?.label || 'Used';
-                    const fullDescription = `
-DESCRIPTION & TECHNICAL SPECIFICATIONS
-
-${aiData.title}
-
-KEY FEATURES:
-${(aiData.keyFeatures || []).map(f => `* ${f}`).join('\n')}
-
-WHAT'S INCLUDED:
-${(aiData.whatsIncluded || []).map(i => `* ${i}`).join('\n')}
-
-CONDITION & FLAWS:
-* Condition: ${currentCondition}
-* Visible Flaws: ${aiData.flaws || "None observed during technical inspection."}
-
-SHIPPING LOGISTICS:
-* Item Weight: ${aiData.weightItem || 'TBD'}
-* Packaging Weight: ${aiData.weightPackaging || 'TBD'}
-* Total Shipping Weight: ${aiData.weightTotal || 'TBD'}
-* Dimensions: ${aiData.dimensions || 'TBD'}
-
-*Making an Offer 
-Please don't hesitate to make a reasonable offer. A majority of our sales are concluded this way and it it doesn't hurt to ask. NOTE: However, I most likely won't counteroffer "low ball" offers....it will simply be declined. 
-
-**Return Policy (Please read)
-Buyer is responsible for return shipping on any item that is not damaged, defective, or as described. As a reseller of items sourced from numerous places, we cannot control the manufacturing quality of an item. However, we CAN control how the items are sold, pricing, and time to ship of those items to you. If you are unsatisfied with your order in anyway, please contact us and we will work with you to resolve it to your satisfaction. 
-
-*Shipping
-Items are shipped as fast as possible after payment is received. We pride ourselves on getting your purchase to you FAST! This typically results in same day shipping if payment is received before noon (Mon-Fri).
-
-*Delivery
-We Do Not Ship Outside of the Continental U.S. or to P.O Boxes
-
-*Feedback
-We take our reputation seriously, we buy and sell online, so we understand the value of trust. If you are unsatisfied with your order, please give us an opportunity to resolve it to your satisfaction before leaving a negative feedback.`.trim();
-
                     await dbRef.current.collection(listingsPath).add({
                         ...aiData,
                         images: imageUrls,
                         conditionId: batchCondition,
                         timestamp: Date.now(),
                         sku: 'BKA-' + Date.now(),
-                        markdownDescription: fullDescription,
+                        markdownDescription: buildDescription(aiData, currentCondition),
                         upc: barcodeListingData.upc || '',
                         buyItNowPrice: aiData.buyItNowPrice || (barcodeListingData.price ? parseFloat(barcodeListingData.price.replace(/[^0-9.]/g,'')) || 0 : 0)
                     });
@@ -2248,7 +2186,7 @@ We take our reputation seriously, we buy and sell online, so we understand the v
                                 {images.map(img => (
                                     <div key={img.id} className="aspect-square rounded-xl overflow-hidden border border-slate-100 relative group">
                                         <img src={img.url} className="w-full h-full object-cover" />
-                                        <button onClick={() => setImages(images.filter(i => i.id !== img.id))} className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"><Icon name="Trash2" size={12}/></button>
+                                        <button onClick={() => { URL.revokeObjectURL(img.url); setImages(images.filter(i => i.id !== img.id)); }} className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"><Icon name="Trash2" size={12}/></button>
                                     </div>
                                 ))}
                             </div>
