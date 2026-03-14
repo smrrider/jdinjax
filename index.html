@@ -39,16 +39,16 @@
         .login-field:focus { border-color: #2563eb; background: #ffffff; box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.1); }
         .listing-card { transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
         .listing-card:hover { transform: translateY(-2px); }
-        .scout-fab { box-shadow: 0 8px 32px rgba(16, 185, 129, 0.45); }
-        .scout-modal-bg { animation: fadeInBg 0.2s ease; }
-        .scout-modal { animation: slideUpModal 0.25s cubic-bezier(0.4, 0, 0.2, 1); }
+        .recon-fab { box-shadow: 0 8px 32px rgba(16, 185, 129, 0.45); }
+        .recon-modal-bg { animation: fadeInBg 0.2s ease; }
+        .recon-modal { animation: slideUpModal 0.25s cubic-bezier(0.4, 0, 0.2, 1); }
         @keyframes fadeInBg { from { opacity: 0; } to { opacity: 1; } }
         @keyframes slideUpModal { from { opacity: 0; transform: translateY(40px) scale(0.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
         .verdict-go { background: linear-gradient(135deg, #d1fae5, #a7f3d0); border-color: #6ee7b7; color: #065f46; }
         .verdict-marginal { background: linear-gradient(135deg, #fef9c3, #fde68a); border-color: #fcd34d; color: #78350f; }
         .verdict-nogo { background: linear-gradient(135deg, #fee2e2, #fecaca); border-color: #fca5a5; color: #7f1d1d; }
-        .scout-history-item { transition: all 0.15s ease; }
-        .scout-history-item:hover { background: #f1f5f9; }
+        .recon-history-item { transition: all 0.15s ease; }
+        .recon-history-item:hover { background: #f1f5f9; }
         /* Desktop 3-panel layout */
         .desktop-layout { display: flex; height: 100vh; overflow: hidden; }
         .panel-left { width: 240px; min-width: 240px; height: 100vh; overflow-y: auto; border-right: 1px solid #e2e8f0; background: #ffffff; }
@@ -287,7 +287,8 @@ We take our reputation seriously, we buy and sell online, so we understand the v
             const videoRef   = useRef(null);
             const readerRef  = useRef(null);
             const inputRef   = useRef(null);
-            const [mode, setMode]     = useState('input');   // 'input' | 'camera'
+            const isMobile   = window.innerWidth < 768;
+            const [mode, setMode]     = useState(isMobile ? 'camera' : 'input');   // 'input' | 'camera'
             const [manualVal, setManualVal] = useState('');
             const [camError, setCamError]   = useState(null);
             const [camActive, setCamActive] = useState(false);
@@ -336,14 +337,15 @@ We take our reputation seriously, we buy and sell online, so we understand the v
                         <div className="px-6 py-5 border-b border-slate-700 flex items-center justify-between">
                             <div>
                                 <p className="text-white font-black text-sm uppercase tracking-widest">Barcode Lookup</p>
-                                <p className="text-slate-400 text-[10px] mt-0.5 uppercase tracking-widest">Gun · Keyboard · Camera</p>
+                                <p className="text-slate-400 text-[10px] mt-0.5 uppercase tracking-widest">{isMobile ? 'Camera' : 'Gun · Keyboard · Camera'}</p>
                             </div>
                             <button onClick={() => { stopCamera(); onClose(); }} className="text-slate-500 hover:text-white transition-colors p-1">
                                 <Icon name="X" size={18}/>
                             </button>
                         </div>
 
-                        {/* Mode toggle */}
+                        {/* Mode toggle — desktop only; mobile is camera-only */}
+                        {!isMobile && (
                         <div className="px-6 pt-5 flex gap-2">
                             <button onClick={() => { stopCamera(); setMode('input'); }}
                                 className={"flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 " + (mode === 'input' ? "bg-emerald-500 text-white shadow-md" : "bg-slate-800 text-slate-400 hover:bg-slate-700")}>
@@ -354,6 +356,7 @@ We take our reputation seriously, we buy and sell online, so we understand the v
                                 <Icon name="Camera" size={13}/> Camera
                             </button>
                         </div>
+                        )}
 
                         {/* Input mode */}
                         {mode === 'input' && (
@@ -422,7 +425,7 @@ We take our reputation seriously, we buy and sell online, so we understand the v
             );
         };
 
-        const ScanResult = ({ upc, onClose, onSendToScout, onSendToListing, showToast }) => {
+        const ScanResult = ({ upc, onClose, onSendToRecon, onSendToListing, showToast }) => {
             const [engine, setEngine]     = useState('ebay');
             const [loading, setLoading]   = useState(true);
             const [results, setResults]   = useState([]);
@@ -499,10 +502,10 @@ We take our reputation seriously, we buy and sell online, so we understand the v
                         {/* Destination buttons */}
                         {!loading && results.length > 0 && (
                             <div className="px-6 pb-6 grid grid-cols-2 gap-3 border-t border-slate-100 pt-4">
-                                <button onClick={() => onSendToScout(selectedItem, upc)}
+                                <button onClick={() => onSendToRecon(selectedItem, upc)}
                                     className="py-4 bg-emerald-500 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-emerald-100 hover:bg-emerald-400 transition-all active:scale-95 flex flex-col items-center gap-1">
                                     <Icon name="Zap" size={16}/>
-                                    Send to Scout
+                                    Send to Recon
                                 </button>
                                 <button onClick={() => onSendToListing(selectedItem, upc)}
                                     className="py-4 bg-blue-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-blue-100 hover:bg-blue-500 transition-all active:scale-95 flex flex-col items-center gap-1">
@@ -633,16 +636,16 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             }
         }
 
-        // ── ScoutScanResults — shared between inline and modal Scout modes ────────
+        // ── ReconScanResults — shared between inline and modal Recon modes ────────
         // Previously duplicated ~80 lines of JSX. Single source of truth.
-        const ScoutScanResultsPanel = ({ scoutScanResults, scoutManualTitle, setScoutManualTitle, scoutSearchEngine, setBarcodePreload, setScoutScanResults, setResult, setActiveHistory, setShowScoutScanner }) => {
-            if (!scoutScanResults) return null;
-            const { loading, items, noResults, engine, upc } = scoutScanResults;
+        const ReconScanResultsPanel = ({ reconScanResults, reconManualTitle, setReconManualTitle, reconSearchEngine, setBarcodePreload, setReconScanResults, setResult, setActiveHistory, setShowReconScanner }) => {
+            if (!reconScanResults) return null;
+            const { loading, items, noResults, engine, upc } = reconScanResults;
             return (
                 <div className="rounded-2xl border-2 border-slate-200 overflow-hidden">
                     <div className="flex border-b border-slate-100">
                         {['ebay','amazon'].map(eng => (
-                            <button key={eng} onClick={() => scoutSearchEngine(eng, upc)}
+                            <button key={eng} onClick={() => reconSearchEngine(eng, upc)}
                                 className={"flex-1 py-2.5 text-[10px] font-black uppercase tracking-widest transition-all " + (engine===eng ? (eng==='ebay' ? 'bg-blue-600 text-white' : 'bg-orange-500 text-white') : 'bg-slate-50 text-slate-400 hover:bg-slate-100')}>
                                 {eng === 'ebay' ? 'eBay' : 'Amazon'}
                             </button>
@@ -656,16 +659,16 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     ) : noResults ? (
                         <div className="p-4 space-y-3">
                             <p className="text-slate-500 text-xs font-bold text-center">No results — try the other marketplace or enter manually</p>
-                            <input type="text" value={scoutManualTitle} onChange={e => setScoutManualTitle(e.target.value)} placeholder="Enter item title manually..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-emerald-400"/>
+                            <input type="text" value={reconManualTitle} onChange={e => setReconManualTitle(e.target.value)} placeholder="Enter item title manually..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-emerald-400"/>
                             <div className="flex gap-2">
-                                <button onClick={() => { if(scoutManualTitle.trim()) { setBarcodePreload({ title: scoutManualTitle.trim() }); setScoutScanResults(null); setResult(null); setActiveHistory(null); }}} className="flex-1 py-2 bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase">Use Title</button>
-                                <button onClick={() => { setScoutScanResults(null); setShowScoutScanner(true); }} className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase">Scan Again</button>
+                                <button onClick={() => { if(reconManualTitle.trim()) { setBarcodePreload({ title: reconManualTitle.trim() }); setReconScanResults(null); setResult(null); setActiveHistory(null); }}} className="flex-1 py-2 bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase">Use Title</button>
+                                <button onClick={() => { setReconScanResults(null); setShowReconScanner(true); }} className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase">Scan Again</button>
                             </div>
                         </div>
                     ) : (
                         <div className="max-h-60 overflow-y-auto no-scrollbar">
                             {(items||[]).map((item, i) => (
-                                <button key={item.url || i} onClick={() => { setBarcodePreload(item); setScoutScanResults(null); setResult(null); setActiveHistory(null); }}
+                                <button key={item.url || i} onClick={() => { setBarcodePreload(item); setReconScanResults(null); setResult(null); setActiveHistory(null); }}
                                     className="w-full flex items-center gap-3 px-4 py-3 hover:bg-emerald-50 border-b border-slate-100 last:border-0 transition-colors text-left active:scale-[0.98]">
                                     {item.image && <img src={item.image} className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0" onError={(e) => e.target.style.display='none'}/>}
                                     <div className="flex-1 min-w-0">
@@ -681,13 +684,13 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             );
         };
 
-        const ArbitrageScout = ({ proxyUrl, ebayConditions, showToast, dbRef, user, inline = false, scanPreload = null, onScanRequest, onSendToProcessing }) => {
+        const ArbitrageRecon = ({ proxyUrl, ebayConditions, showToast, dbRef, user, inline = false, scanPreload = null, onScanRequest, onSendToProcessing }) => {
             const [isOpen,        setIsOpen]        = useState(false);
-            const [scoutImage,    setScoutImage]     = useState(null);
+            const [reconImage,    setReconImage]     = useState(null);
             const [condition,     setCondition]      = useState('3000');
             const [purchasePrice, setPurchasePrice]  = useState('');
             const [isRunning,     setIsRunning]      = useState(false);
-            const [scoutStatus,   setScoutStatus]    = useState('');
+            const [reconStatus,   setReconStatus]    = useState('');
             const [result,        setResult]         = useState(null);
             const [history,       setHistory]        = useState([]);
             const [activeHistory, setActiveHistory]  = useState(null);
@@ -696,14 +699,14 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const [flatShippingFee, setFlatShippingFee] = useState('6.95');
             const [barcodePreload,  setBarcodePreload]  = useState(null);
             const [errorMsg,      setErrorMsg]       = useState(null);
-            const [scoutScanResults, setScoutScanResults] = useState(null);
-            const [scoutManualTitle, setScoutManualTitle] = useState('');
-            const [showScoutScanner, setShowScoutScanner] = useState(false);
+            const [reconScanResults, setReconScanResults] = useState(null);
+            const [reconManualTitle, setReconManualTitle] = useState('');
+            const [showReconScanner, setShowReconScanner] = useState(false);
 
-            // Load Scout history from Firestore on mount
+            // Load Recon history from Firestore on mount
             useEffect(() => {
                 if (!user || !dbRef || !dbRef.current) return;
-                const path = `artifacts/jdinjax-console/users/${user.uid}/scoutHistory`;
+                const path = `artifacts/jdinjax-console/users/${user.uid}/reconHistory`;
                 const unsubscribe = dbRef.current.collection(path)
                     .orderBy('savedAt', 'desc').limit(20)
                     .onSnapshot(snap => {
@@ -724,46 +727,46 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 }
             }, [scanPreload]);
 
-            // ── Scout inline camera helpers ──────────────────────────────────────────
+            // ── Recon inline camera helpers ──────────────────────────────────────────
 
 
-            const handleScoutScan = async (upc) => {
-                setShowScoutScanner(false);
-                setScoutScanResults({ loading: true, items: [], noResults: false, engine: 'ebay' });
+            const handleReconScan = async (upc) => {
+                setShowReconScanner(false);
+                setReconScanResults({ loading: true, items: [], noResults: false, engine: 'ebay' });
                 const BARCODE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
                     ? 'http://127.0.0.1:3001/api/barcode-search' : '/api/barcode-search';
                 try {
                     const res = await fetch(BARCODE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ upc, engine: 'ebay' }) });
                     const data = await res.json();
                     const items = data.results || [];
-                    setScoutScanResults({ loading: false, items, noResults: items.length === 0, engine: 'ebay', upc });
+                    setReconScanResults({ loading: false, items, noResults: items.length === 0, engine: 'ebay', upc });
                 } catch(e) {
-                    setScoutScanResults({ loading: false, items: [], noResults: true, engine: 'ebay', upc });
+                    setReconScanResults({ loading: false, items: [], noResults: true, engine: 'ebay', upc });
                 }
             };
 
-            const scoutSearchEngine = async (eng, upc) => {
-                setScoutScanResults(prev => ({ ...prev, loading: true, engine: eng }));
+            const reconSearchEngine = async (eng, upc) => {
+                setReconScanResults(prev => ({ ...prev, loading: true, engine: eng }));
                 const BARCODE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
                     ? 'http://127.0.0.1:3001/api/barcode-search' : '/api/barcode-search';
                 try {
                     const res = await fetch(BARCODE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ upc, engine: eng }) });
                     const data = await res.json();
                     const items = data.results || [];
-                    setScoutScanResults(prev => ({ ...prev, loading: false, items, noResults: items.length === 0 }));
+                    setReconScanResults(prev => ({ ...prev, loading: false, items, noResults: items.length === 0 }));
                 } catch(e) {
-                    setScoutScanResults(prev => ({ ...prev, loading: false, items: [], noResults: true }));
+                    setReconScanResults(prev => ({ ...prev, loading: false, items: [], noResults: true }));
                 }
             };
 
             const reset = () => {
-                if (scoutImage && scoutImage.url && scoutImage.url.startsWith('blob:')) {
-                    URL.revokeObjectURL(scoutImage.url);
+                if (reconImage && reconImage.url && reconImage.url.startsWith('blob:')) {
+                    URL.revokeObjectURL(reconImage.url);
                 }
-                setScoutImage(null); setCondition('3000'); setPurchasePrice('');
+                setReconImage(null); setCondition('3000'); setPurchasePrice('');
                 setShippingMode('flat'); setFlatShippingFee('6.95');
-                setResult(null); setErrorMsg(null); setScoutStatus(''); setActiveHistory(null);
-                setScoutScanResults(null); setScoutManualTitle('');
+                setResult(null); setErrorMsg(null); setReconStatus(''); setActiveHistory(null);
+                setReconScanResults(null); setReconManualTitle('');
             };
 
             const purgeHistory = () => {
@@ -777,7 +780,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     if (typeof e === 'string') return e;
                     return e.message || e.code || e.toString() || 'Unknown error';
                 };
-                const path = `artifacts/jdinjax-console/users/${user.uid}/scoutHistory`;
+                const path = `artifacts/jdinjax-console/users/${user.uid}/reconHistory`;
                 dbRef.current.collection(path).get()
                     .then(snap => {
                         if (!snap || !snap.docs || snap.docs.length === 0) {
@@ -793,12 +796,12 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         setHistory([]);
                         setActiveHistory(null);
                         setResult(null);
-                        setScoutImage(null);
+                        setReconImage(null);
                         setBarcodePreload(null);
                         setPurchasePrice('');
-                        setScoutScanResults(null);
+                        setReconScanResults(null);
                         setErrorMsg(null);
-                        showToast('Scout history cleared.');
+                        showToast('Recon history cleared.');
                     })
                     .catch(e => {
                         showToast('Purge failed: ' + errMsg(e));
@@ -807,25 +810,25 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
 
             const displayResult = activeHistory !== null ? history[activeHistory] : result;
 
-            const runScout = async () => {
+            const runRecon = async () => {
                 const hasBarcode = !!barcodePreload;
-                if (!scoutImage && !hasBarcode) { setErrorMsg("Upload an image or scan a barcode first."); return; }
+                if (!reconImage && !hasBarcode) { setErrorMsg("Upload an image or scan a barcode first."); return; }
                 setIsRunning(true); setErrorMsg(null); setResult(null);
                 try {
                     // Skip compression if no image  -  barcode text-only path
-                    let scoutBlob = null, b64 = null, scoutMimeType = null;
-                    if (scoutImage) {
-                        setScoutStatus("Compressing image...");
-                        const compressed = await compressImage(scoutImage);
-                        scoutBlob = compressed.blob;
+                    let reconBlob = null, b64 = null, reconMimeType = null;
+                    if (reconImage) {
+                        setReconStatus("Compressing image...");
+                        const compressed = await compressImage(reconImage);
+                        reconBlob = compressed.blob;
                         b64 = compressed.b64;
-                        scoutMimeType = compressed.mimeType;
-                    } // end if(scoutImage)
+                        reconMimeType = compressed.mimeType;
+                    } // end if(reconImage)
                     const condLabel = ebayConditions.find(c => c.id === condition)?.label || 'Used';
 
                     // Cloudinary upload  -  skip if no image (barcode text-only mode)
                     const cloudinaryUpload = (async () => {
-                        if (!scoutBlob) return barcodePreload?.image || null;
+                        if (!reconBlob) return barcodePreload?.image || null;
                         try {
                             const timestamp = Math.round(Date.now() / 1000);
                             const signRes = await fetch(SIGN_API_URL, {
@@ -834,18 +837,18 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                             });
                             const { signature, folder } = await signRes.json();
                             const fd = new FormData();
-                            fd.append("file", scoutBlob);
+                            fd.append("file", reconBlob);
                             fd.append("api_key", CLOUDINARY_CONFIG.apiKey);
                             fd.append("timestamp", timestamp);
                             fd.append("signature", signature);
                             fd.append("folder", folder);
                             const upRes = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CONFIG.cloudName}/image/upload`, { method: "POST", body: fd });
                             const upData = await upRes.json();
-                            return upData.secure_url || scoutImage.url;
-                        } catch(e) { console.warn('[Scout] Image upload failed:', e.message); return scoutImage.url; }
+                            return upData.secure_url || reconImage.url;
+                        } catch(e) { console.warn('[Recon] Image upload failed:', e.message); return reconImage.url; }
                     })();
 
-                    setScoutStatus("Running intel analysis...");
+                    setReconStatus("Running intel analysis...");
 
                     // Build Gemini parts  -  image if available, barcode title if not
                     const geminiParts = [];
@@ -854,7 +857,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     } else {
                         geminiParts.push({ text: `Analyze this item for eBay arbitrage. Condition: ${condLabel}. Provide realistic pricing based on actual eBay sold data, sell-through rate, days to sell, and estimated package dimensions for shipping.` });
                     }
-                    if (b64) geminiParts.push({ inlineData: { mimeType: scoutMimeType, data: b64 } });
+                    if (b64) geminiParts.push({ inlineData: { mimeType: reconMimeType, data: b64 } });
 
                     // Gemini + Cloudinary race in parallel  -  net time = max(gemini, upload) not sum
                     const geminiRes = fetch(proxyUrl, {
@@ -872,7 +875,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     const raw  = geminiResponse.candidates[0].content.parts[0].text.replace(/```json|```/g,'').trim();
                     const ai   = JSON.parse(raw);
 
-                    setScoutStatus("Calculating shipping...");
+                    setReconStatus("Calculating shipping...");
                     const uspsEstimate = getUspsZone8Rate(ai.weightOz, ai.packageLengthIn, ai.packageWidthIn, ai.packageHeightIn);
                     const purchase     = parseFloat(purchasePrice) || 0;
                     const flatFee      = parseFloat(flatShippingFee) || 0;
@@ -880,23 +883,23 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     const shipping     = uspsEstimate;
                     const verdict   = getVerdict(arb.netProfit);
 
-                    const scoutResult = {
+                    const reconResult = {
                         ...ai, condition: condLabel, purchasePrice: purchase,
                         shipping, arb, verdict, shippingMode,
                         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                         imageUrl: persistentImageUrl
                     };
 
-                    setResult(scoutResult);
+                    setResult(reconResult);
                     setActiveHistory(null);
                     setBarcodePreload(null);
 
                     // Persist to Firestore, enforce 20-result cap
                     if (user && dbRef && dbRef.current) {
                         try {
-                            const path = `artifacts/jdinjax-console/users/${user.uid}/scoutHistory`;
+                            const path = `artifacts/jdinjax-console/users/${user.uid}/reconHistory`;
                             const colRef = dbRef.current.collection(path);
-                            await colRef.add({ ...scoutResult, savedAt: Date.now() });
+                            await colRef.add({ ...reconResult, savedAt: Date.now() });
                             // Prune to 20  -  delete oldest beyond cap
                             const all = await colRef.orderBy('savedAt', 'desc').limit(21).get();
                             if (all.docs.length > 20) {
@@ -904,10 +907,10 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                 all.docs.slice(20).forEach(d => batch.delete(d.ref));
                                 await batch.commit();
                             }
-                        } catch(saveErr) { console.warn('Scout save failed:', saveErr.message); }
+                        } catch(saveErr) { console.warn('Recon save failed:', saveErr.message); }
                     }
-                } catch(e) { setErrorMsg("Scout failed: " + e.message); }
-                finally { setIsRunning(false); setScoutStatus(''); }
+                } catch(e) { setErrorMsg("Recon failed: " + e.message); }
+                finally { setIsRunning(false); setReconStatus(''); }
             };
 
             // -- Inline mode: desktop right panel -------------------------------------
@@ -944,7 +947,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between shrink-0 bg-white">
                             <div className="flex items-center gap-2">
                                 <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
-                                <p className="text-[10px] font-black text-slate-700 uppercase tracking-widest">Arbitrage Scout</p>
+                                <p className="text-[10px] font-black text-slate-700 uppercase tracking-widest">Arbitrage Recon</p>
                             </div>
                             <div className="flex items-center gap-2">
                                 {onScanRequest && (
@@ -1005,10 +1008,10 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                     {/* Image upload */}
                                     <div className="relative border-2 border-dashed border-slate-300 rounded-2xl overflow-hidden hover:border-emerald-400 transition-colors">
                                         <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer z-10"
-                                            onChange={(e) => { if (e.target.files[0]) setScoutImage({ file: e.target.files[0], url: URL.createObjectURL(e.target.files[0]) }); }} />
-                                        {scoutImage ? (
+                                            onChange={(e) => { if (e.target.files[0]) setReconImage({ file: e.target.files[0], url: URL.createObjectURL(e.target.files[0]) }); }} />
+                                        {reconImage ? (
                                             <div className="relative">
-                                                <img src={scoutImage.url} className="w-full h-40 object-contain bg-slate-50"/>
+                                                <img src={reconImage.url} className="w-full h-40 object-contain bg-slate-50"/>
                                                 <div className="absolute bottom-2 right-2 bg-emerald-500 text-white text-[9px] font-black px-2 py-1 rounded-full uppercase">Tap to Replace</div>
                                             </div>
                                         ) : (
@@ -1020,22 +1023,22 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                     </div>
 
                                     {/* Scan Barcode button */}
-                                    <button onClick={() => setShowScoutScanner(true)}
+                                    <button onClick={() => setShowReconScanner(true)}
                                         className="w-full py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 bg-slate-100 text-slate-600 hover:bg-emerald-50 hover:text-emerald-600 active:scale-95">
                                         <Icon name="ScanLine" size={12}/> Scan Barcode
                                     </button>
 
                                     {/* Scan results */}
-                                    <ScoutScanResultsPanel
-                                        scoutScanResults={scoutScanResults}
-                                        scoutManualTitle={scoutManualTitle}
-                                        setScoutManualTitle={setScoutManualTitle}
-                                        scoutSearchEngine={scoutSearchEngine}
+                                    <ReconScanResultsPanel
+                                        reconScanResults={reconScanResults}
+                                        reconManualTitle={reconManualTitle}
+                                        setReconManualTitle={setReconManualTitle}
+                                        reconSearchEngine={reconSearchEngine}
                                         setBarcodePreload={setBarcodePreload}
-                                        setScoutScanResults={setScoutScanResults}
+                                        setReconScanResults={setReconScanResults}
                                         setResult={setResult}
                                         setActiveHistory={setActiveHistory}
-                                        setShowScoutScanner={setShowScoutScanner}
+                                        setShowReconScanner={setShowReconScanner}
                                     />
 
                                     {/* Condition + Price Row */}
@@ -1087,9 +1090,9 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                     )}
 
                                     {/* Run Button */}
-                                    <button onClick={runScout} disabled={isRunning || (!scoutImage && !barcodePreload)}
-                                        className={`w-full py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest transition-all active:scale-95 shadow-lg flex items-center justify-center gap-3 ${isRunning || (!scoutImage && !barcodePreload) ? "bg-slate-200 text-slate-400" : 'bg-emerald-500 text-white shadow-emerald-100 hover:bg-emerald-400'}`}>
-                                        {isRunning ? <><Icon name="Loader2" size={16} className="animate-spin" /> {scoutStatus || 'Running Scout...'}</> : <><Icon name="Zap" size={16} /> Run Arbitrage Intel</>}
+                                    <button onClick={runRecon} disabled={isRunning || (!reconImage && !barcodePreload)}
+                                        className={`w-full py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest transition-all active:scale-95 shadow-lg flex items-center justify-center gap-3 ${isRunning || (!reconImage && !barcodePreload) ? "bg-slate-200 text-slate-400" : 'bg-emerald-500 text-white shadow-emerald-100 hover:bg-emerald-400'}`}>
+                                        {isRunning ? <><Icon name="Loader2" size={16} className="animate-spin" /> {reconStatus || 'Running Recon...'}</> : <><Icon name="Zap" size={16} /> Run Arbitrage Intel</>}
                                     </button>
                                 </div>
                             )}
@@ -1167,16 +1170,16 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                             className="w-full py-4 bg-blue-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-500 transition-all active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-blue-100">
                                             <Icon name="PackagePlus" size={13}/> Send to Add Processor
                                         </button>
-                                        <button onClick={() => { setResult(null); setScoutImage(null); setBarcodePreload(null); setPurchasePrice(''); }}
+                                        <button onClick={() => { setResult(null); setReconImage(null); setBarcodePreload(null); setPurchasePrice(''); }}
                                             className="w-full py-3 bg-slate-100 text-slate-600 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all active:scale-95">
-                                            <Icon name="RotateCcw" size={12} className="inline mr-1"/> New Scout
+                                            <Icon name="RotateCcw" size={12} className="inline mr-1"/> New Recon
                                         </button>
                                     </div>
                                 );
                             })()}
                         </div>
                     </div>
-                    {showScoutScanner && <BarcodeScanner onScan={handleScoutScan} onClose={() => setShowScoutScanner(false)} />}
+                    {showReconScanner && <BarcodeScanner onScan={handleReconScan} onClose={() => setShowReconScanner(false)} />}
                     </>
                 );
             }
@@ -1187,16 +1190,16 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     {/* FAB */}
                     <button
                         onClick={() => { setIsOpen(true); reset(); }}
-                        className="fixed bottom-8 right-8 z-40 scout-fab bg-emerald-500 hover:bg-emerald-400 text-white rounded-2xl px-5 py-4 flex items-center gap-3 font-black text-[11px] uppercase tracking-widest transition-all active:scale-95 hover:scale-105"
+                        className="fixed bottom-8 right-8 z-40 recon-fab bg-emerald-500 hover:bg-emerald-400 text-white rounded-2xl px-5 py-4 flex items-center gap-3 font-black text-[11px] uppercase tracking-widest transition-all active:scale-95 hover:scale-105"
                     >
                         <Icon name="Crosshair" size={20} />
-                        Scout
+                        Recon
                     </button>
 
                     {/* Modal Backdrop */}
                     {isOpen && (
-                        <div className="scout-modal-bg fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end md:items-center justify-center p-0 md:p-6" onClick={(e) => { if(e.target === e.currentTarget) setIsOpen(false); }}>
-                            <div className="scout-modal bg-white w-full md:max-w-2xl md:rounded-[2.5rem] rounded-t-[2.5rem] max-h-[92vh] overflow-y-auto no-scrollbar shadow-2xl">
+                        <div className="recon-modal-bg fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end md:items-center justify-center p-0 md:p-6" onClick={(e) => { if(e.target === e.currentTarget) setIsOpen(false); }}>
+                            <div className="recon-modal bg-white w-full md:max-w-2xl md:rounded-[2.5rem] rounded-t-[2.5rem] max-h-[92vh] overflow-y-auto no-scrollbar shadow-2xl">
 
                                 {/* Header */}
                                 <div className="sticky top-0 bg-white/95 backdrop-blur-sm border-b border-slate-100 px-8 py-5 flex items-center justify-between rounded-t-[2.5rem] z-10">
@@ -1205,7 +1208,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                             <Icon name="Crosshair" size={20} className="text-white" />
                                         </div>
                                         <div>
-                                            <h2 className="text-base font-black uppercase tracking-tight leading-none">Arbitrage Scout</h2>
+                                            <h2 className="text-base font-black uppercase tracking-tight leading-none">Arbitrage Recon</h2>
                                             <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-0.5">eBay Flip Intel Engine</p>
                                         </div>
                                     </div>
@@ -1223,7 +1226,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                             <div className="space-y-1">
                                                 {history.map((h, i) => (
                                                     <button key={i} onClick={() => { setActiveHistory(i); setResult(null); }}
-                                                        className={`scout-history-item w-full flex items-center gap-3 p-3 rounded-xl text-left ${activeHistory === i ? 'bg-emerald-50 border border-emerald-200' : 'border border-transparent'}`}>
+                                                        className={`recon-history-item w-full flex items-center gap-3 p-3 rounded-xl text-left ${activeHistory === i ? 'bg-emerald-50 border border-emerald-200' : 'border border-transparent'}`}>
                                                         <img src={h.imageUrl} className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0" onError={(e) => e.target.style.display='none'} />
                                                         <div className="flex-1 min-w-0">
                                                             <p className="text-[10px] font-black text-slate-800 truncate">{h.itemTitle}</p>
@@ -1242,10 +1245,10 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                             {/* Image upload + Scan Barcode button */}
                                             <div className="relative border-2 border-dashed border-slate-300 rounded-2xl overflow-hidden hover:border-emerald-400 transition-colors">
                                                 <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer z-10"
-                                                    onChange={(e) => { if (e.target.files[0]) setScoutImage({ file: e.target.files[0], url: URL.createObjectURL(e.target.files[0]) }); }} />
-                                                {scoutImage ? (
+                                                    onChange={(e) => { if (e.target.files[0]) setReconImage({ file: e.target.files[0], url: URL.createObjectURL(e.target.files[0]) }); }} />
+                                                {reconImage ? (
                                                     <div className="relative">
-                                                        <img src={scoutImage.url} className="w-full h-52 object-contain bg-slate-50"onError={(e) => e.target.style.display='none'} />
+                                                        <img src={reconImage.url} className="w-full h-52 object-contain bg-slate-50"onError={(e) => e.target.style.display='none'} />
                                                         <div className="absolute bottom-3 right-3 bg-emerald-500 text-white text-[9px] font-black px-3 py-1.5 rounded-full uppercase tracking-widest">Tap to Replace</div>
                                                     </div>
                                                 ) : (
@@ -1256,20 +1259,20 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                     </div>
                                                 )}
                                             </div>
-                                            <button onClick={() => setShowScoutScanner(true)}
+                                            <button onClick={() => setShowReconScanner(true)}
                                                 className="w-full py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 bg-slate-100 text-slate-600 hover:bg-emerald-50 hover:text-emerald-600 active:scale-95">
                                                 <Icon name="ScanLine" size={12}/> Scan Barcode
                                             </button>
-                                            {scoutScanResults && <ScoutScanResultsPanel
-                                                scoutScanResults={scoutScanResults}
-                                                scoutManualTitle={scoutManualTitle}
-                                                setScoutManualTitle={setScoutManualTitle}
-                                                scoutSearchEngine={scoutSearchEngine}
+                                            {reconScanResults && <ReconScanResultsPanel
+                                                reconScanResults={reconScanResults}
+                                                reconManualTitle={reconManualTitle}
+                                                setReconManualTitle={setReconManualTitle}
+                                                reconSearchEngine={reconSearchEngine}
                                                 setBarcodePreload={setBarcodePreload}
-                                                setScoutScanResults={setScoutScanResults}
+                                                setReconScanResults={setReconScanResults}
                                                 setResult={setResult}
                                                 setActiveHistory={setActiveHistory}
-                                                setShowScoutScanner={setShowScoutScanner}
+                                                setShowReconScanner={setShowReconScanner}
                                             />}
 
                                             {/* Condition + Price Row */}
@@ -1321,11 +1324,11 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                             )}
 
                                             {/* Run Button */}
-                                            <button onClick={runScout} disabled={isRunning || (!scoutImage && !barcodePreload)}
-                                                className={`w-full py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest transition-all active:scale-95 shadow-lg flex items-center justify-center gap-3 ${isRunning || (!scoutImage && !barcodePreload) ? "bg-slate-200 text-slate-400" : 'bg-emerald-500 text-white shadow-emerald-100 hover:bg-emerald-400'}`}>
-                                                {isRunning ? <><Icon name="Loader2" size={16} className="animate-spin" /> {scoutStatus || 'Running Scout...'}</> : <><Icon name="Zap" size={16} /> Run Arbitrage Intel</>}
+                                            <button onClick={runRecon} disabled={isRunning || (!reconImage && !barcodePreload)}
+                                                className={`w-full py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest transition-all active:scale-95 shadow-lg flex items-center justify-center gap-3 ${isRunning || (!reconImage && !barcodePreload) ? "bg-slate-200 text-slate-400" : 'bg-emerald-500 text-white shadow-emerald-100 hover:bg-emerald-400'}`}>
+                                                {isRunning ? <><Icon name="Loader2" size={16} className="animate-spin" /> {reconStatus || 'Running Recon...'}</> : <><Icon name="Zap" size={16} /> Run Arbitrage Intel</>}
                                             </button>
-                                            {(!scoutImage && !barcodePreload) && (
+                                            {(!reconImage && !barcodePreload) && (
                                                 <p className="text-[10px] text-slate-400 text-center uppercase tracking-widest">Load an image or scan a barcode to run</p>
                                             )}
                                         </>
@@ -1334,7 +1337,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                     {/* Back button when viewing history */}
                                     {activeHistory !== null && (
                                         <button onClick={() => setActiveHistory(null)} className="flex items-center gap-2 text-[10px] font-black text-slate-500 uppercase tracking-widest hover:text-slate-800 transition-colors">
-                                            <Icon name="ChevronLeft" size={14} /> New Scout
+                                            <Icon name="ChevronLeft" size={14} /> New Recon
                                         </button>
                                     )}
 
@@ -1494,9 +1497,9 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                 className="w-full mt-2 py-4 bg-blue-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-500 transition-all active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-blue-100">
                                                 <Icon name="PackagePlus" size={13}/> Send to Add Processor
                                             </button>
-                                            <button onClick={() => { setResult(null); setScoutImage(null); setBarcodePreload(null); setPurchasePrice(''); }}
+                                            <button onClick={() => { setResult(null); setReconImage(null); setBarcodePreload(null); setPurchasePrice(''); }}
                                                 className="w-full mt-2 py-3 bg-slate-100 text-slate-600 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all active:scale-95">
-                                                <Icon name="RotateCcw" size={12} className="inline mr-1"/> New Scout
+                                                <Icon name="RotateCcw" size={12} className="inline mr-1"/> New Recon
                                             </button>
                                             </div>
                                         );
@@ -1507,7 +1510,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         </div>
                     )}
                     {/* BarcodeScanner: z-9999 overlay, must render inside <> but outside modal div to avoid scroll clipping */}
-                    {showScoutScanner && <BarcodeScanner onScan={handleScoutScan} onClose={() => setShowScoutScanner(false)} />}
+                    {showReconScanner && <BarcodeScanner onScan={handleReconScan} onClose={() => setShowReconScanner(false)} />}
                 </>
             );
         };
@@ -1538,7 +1541,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const dbRef = useRef(null);
             const [showScanner,    setShowScanner]    = useState(false);
             const [scanResult,     setScanResult]     = useState(null);  // { upc, ... }
-            const [scoutPreload,   setScoutPreload]   = useState(null);
+            const [reconPreload,   setReconPreload]   = useState(null);
             const [barcodeListingData, setBarcodeListingData] = useState(null); // { title, image, price, upc }
             const [activeTab,       setActiveTab]       = useState('process');  // keep single source
             const [showSettings,    setShowSettings]    = useState(false);
@@ -2107,9 +2110,9 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 setScanResult({ upc });
             };
 
-            const handleSendToScout = (item, upc) => {
+            const handleSendToRecon = (item, upc) => {
                 setScanResult(null);
-                setScoutPreload({ title: item.title, upc, price: item.price });
+                setReconPreload({ title: item.title, upc, price: item.price });
             };
 
             const handleSendToListing = (item, upc) => {
@@ -2490,7 +2493,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 return (
                     <>
                     {showScanner && <BarcodeScanner onScan={handleScan} onClose={() => setShowScanner(false)} />}
-                    {scanResult && <ScanResult upc={scanResult.upc} onClose={() => setScanResult(null)} onSendToScout={handleSendToScout} onSendToListing={handleSendToListing} showToast={showToast} />}
+                    {scanResult && <ScanResult upc={scanResult.upc} onClose={() => setScanResult(null)} onSendToRecon={handleSendToRecon} onSendToListing={handleSendToListing} showToast={showToast} />}
                     {toast && <div className={`fixed top-6 left-1/2 -translate-x-1/2 z-50 px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest shadow-2xl animate-in slide-in-from-top-4 ${toast.type === 'error' ? 'bg-red-600 text-white' : 'bg-slate-900 text-white'}`}>{toast.msg}</div>}
 
                     {/* Schedule Picker Modal */}
@@ -2588,21 +2591,21 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                             <footer className="py-6 text-center text-[9px] font-black uppercase tracking-[0.3em] text-slate-300 border-t">© 2026 BLACK KNIGHT ARMAMENT</footer>
                         </div>
 
-                        {/* RIGHT PANEL  -  Scout always visible */}
+                        {/* RIGHT PANEL  -  Recon always visible */}
                         <div className="panel-right">
-                            <ArbitrageScout
+                            <ArbitrageRecon
                                 proxyUrl={PROXY_API_URL}
                                 ebayConditions={EBAY_CONDITIONS}
                                 showToast={showToast}
                                 dbRef={dbRef}
                                 user={user}
                                 inline={true}
-                                scanPreload={scoutPreload}
+                                scanPreload={reconPreload}
                                 onScanRequest={() => setShowScanner(true)}
                                 onSendToProcessing={(item) => {
                                     setBarcodeListingData({ title: item.title, image: item.imageUrl, price: item.price ? String(item.price) : '', upc: '' });
                                     setActiveTab('process');
-                                    showToast('Scout item sent to Processing.');
+                                    showToast('Recon item sent to Processing.');
                                 }}
                             />
                         </div>
@@ -2615,7 +2618,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             return (
                 <>
                 {showScanner && <BarcodeScanner onScan={handleScan} onClose={() => setShowScanner(false)} />}
-                {scanResult && <ScanResult upc={scanResult.upc} onClose={() => setScanResult(null)} onSendToScout={handleSendToScout} onSendToListing={handleSendToListing} showToast={showToast} />}
+                {scanResult && <ScanResult upc={scanResult.upc} onClose={() => setScanResult(null)} onSendToRecon={handleSendToRecon} onSendToListing={handleSendToListing} showToast={showToast} />}
                 <div className="min-h-screen p-4 md:p-8 max-w-6xl mx-auto animate-in fade-in duration-700">
                     {toast && <div className={`fixed top-8 left-1/2 -translate-x-1/2 z-50 px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest shadow-2xl animate-in slide-in-from-top-4 ${toast.type === 'error' ? 'bg-red-600 text-white' : 'bg-slate-900 text-white'}`}>{toast.msg}</div>}
                     <header className="flex flex-col md:flex-row justify-between items-center mb-10 gap-4">
@@ -2639,20 +2642,20 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     </main>
                     <footer className="mt-20 py-8 border-t text-center text-[9px] font-black uppercase tracking-[0.4em] text-slate-400 opacity-60 italic">© 2026 eBay Scout * BLACK KNIGHT ARMAMENT * v{APP_VERSION}</footer>
                 </div>
-                {/* Mobile Scout FAB */}
-                <ArbitrageScout
+                {/* Mobile Recon FAB */}
+                <ArbitrageRecon
                     proxyUrl={PROXY_API_URL}
                     ebayConditions={EBAY_CONDITIONS}
                     showToast={showToast}
                     dbRef={dbRef}
                     user={user}
                     inline={false}
-                    scanPreload={scoutPreload}
+                    scanPreload={reconPreload}
                     onScanRequest={() => setShowScanner(true)}
                     onSendToProcessing={(item) => {
                         setBarcodeListingData({ title: item.title, image: item.imageUrl, price: item.price ? String(item.price) : '', upc: '' });
                         setActiveTab('process');
-                        showToast('Scout item sent to Processing.');
+                        showToast('Recon item sent to Processing.');
                     }}
                 />
                 </>
