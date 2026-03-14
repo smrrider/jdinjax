@@ -184,7 +184,7 @@
             return '1000'; // universal safe fallback — exists in all eBay condition schemas
         };
 
-        const JDINJAX_SYSTEM_PROMPT = "Role: eBay Listing Pro for Black Knight Armament. Identify the item in the photos. Title STRICT MAX 80 CHARS. Prices should end in .95. Calculate initial price assuming NEW/Excellent condition. For categoryId and categoryPath: be as specific as possible  -  use the deepest applicable eBay leaf category. For firearms accessories use categories like 73944 (Scopes, Sights & Optics), 73943 (Grips, Forends & Stocks), 73938 (Magazines), 177891 (Cleaning Equipment), 73949 (Slings & Swivels). For general items use the most precise leaf node. Format response as JSON strictly.";
+        const JDINJAX_SYSTEM_PROMPT = "Role: eBay Listing Pro for Black Knight Armament. Identify the item in the photos. Title STRICT MAX 80 CHARS. Prices should end in .95. Calculate initial price assuming NEW/Excellent condition. For categoryId and categoryPath: be as specific as possible  -  use the deepest applicable eBay leaf category. For firearms accessories use categories like 73944 (Scopes, Sights & Optics), 73943 (Grips, Forends & Stocks), 73938 (Magazines), 177891 (Cleaning Equipment), 73949 (Slings & Swivels). For ammunition use category 26460 (Ammunition) and always populate ammunitionType (e.g. Centerfire, Rimfire, Shotgun Shell, Airsoft BB). For general items use the most precise leaf node. Format response as JSON strictly.";
 
 
 
@@ -204,7 +204,8 @@
                 dimensions:          { type: "STRING" },
                 brand:               { type: "STRING" },
                 itemType:            { type: "STRING" },
-                markdownDescription: { type: "STRING" }
+                markdownDescription: { type: "STRING" },
+                ammunitionType:      { type: "STRING" }
             },
             required: ["title", "buyItNowPrice", "categoryId", "categoryPath", "weightItem", "dimensions"]
         };
@@ -1709,7 +1710,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     "ReturnProfileName",
                     "StoreName",
                     "Location",
-                    "PostalCode"
+                    "PostalCode",
+                    "C:Ammunition Type"
                 ];
 
                 const rows = listings.map(l => {
@@ -1719,7 +1721,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     const sku = l.sku || `BKA-${l.timestamp || Date.now()}`;
                     // Sanitize at export time — invalid conditionId for this category → '1000' (New)
                     const safeConditionId = sanitizeConditionId(l.conditionId || '1000', l.categoryId);
-                    
+
                     return [
                         "Draft",                   // Action
                         sku,                       // Custom Label (SKU)
@@ -1737,7 +1739,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         `"${(settings.returnProfile   || "").replace(/"/g, '""')}"`,  // ReturnProfileName
                         `"${(settings.storeName       || "").replace(/"/g, '""')}"`,  // StoreName
                         settings.location   ? `"${settings.location}"`   : "",  // Location
-                        settings.postalCode ? `"${settings.postalCode}"` : ""   // PostalCode
+                        settings.postalCode ? `"${settings.postalCode}"` : "",  // PostalCode
+                        `"${(l.ammunitionType || "").replace(/"/g, '""')}"`     // C:Ammunition Type
                     ];
                 });
 
@@ -1795,6 +1798,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     "PostalCode",
                     "C:Brand",
                     "C:Type",
+                    "C:Ammunition Type",
                     "ScheduleTime",
                     "ShippingProfileName",
                     "PaymentProfileName",
@@ -1822,8 +1826,9 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         "GTC",
                         `"${(settings.location   || "").replace(/"/g, '""')}"`,
                         `"${(settings.postalCode || "").replace(/"/g, '""')}"`,
-                        `"${(l.brand    || "").replace(/"/g, '""')}"`,
-                        `"${(l.itemType || "").replace(/"/g, '""')}"`,
+                        `"${(l.brand          || "").replace(/"/g, '""')}"`,
+                        `"${(l.itemType       || "").replace(/"/g, '""')}"`,
+                        `"${(l.ammunitionType || "").replace(/"/g, '""')}"`,
                         `"${schedStr}"`,   // quoted  -  contains spaces
                         `"${(settings.shippingProfile || "").replace(/"/g, '""')}"`,
                         `"${(settings.paymentProfile  || "").replace(/"/g, '""')}"`,
