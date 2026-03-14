@@ -1869,9 +1869,9 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     }
                 }
 
-                // Single mode: ALL images -> 1 ad. Bulk mode: every 4 images -> 1 ad.
+                // Single mode: 1 image -> 1 ad. Bulk mode: every 4 images -> 1 ad.
                 const batches = mode === 'single'
-                    ? [images]
+                    ? images.map(img => [img])
                     : Array.from({ length: Math.floor(images.length / 4) }, (_, i) => images.slice(i * 4, i * 4 + 4));
                 const total = batches.length;
                 setIsProcessing(true);
@@ -2256,7 +2256,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         <input type="file" multiple accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer z-10" onChange={(e) => setImages([...images, ...Array.from(e.target.files).map(file => ({ id: Math.random().toString(36), url: URL.createObjectURL(file), file }))])} />
                         <Icon name="Upload" size={48} className="text-blue-500 mb-4" />
                         <h3 className="text-lg font-black uppercase tracking-tight leading-none">Load Ad Assets</h3>
-                        <p className="text-slate-400 text-xs mt-3 italic max-w-xs mx-auto">{processMode === 'single' ? "Single Mode: All uploaded images -> 1 listing." : "Bulk Mode: Every 4 images -> 1 listing."}</p>
+                        <p className="text-slate-400 text-xs mt-3 italic max-w-xs mx-auto">{processMode === 'single' ? "Single Mode: 1 image -> 1 listing." : "Bulk Mode: Every 4 images -> 1 listing."}</p>
                     </div>
                     {images.length > 0 && (
                         <div className="bg-white rounded-[2rem] border border-slate-200 overflow-hidden shadow-sm animate-in slide-in-from-bottom-4">
