@@ -118,6 +118,9 @@
         const CATEGORY_API_URL = _isLocal ? 'http://127.0.0.1:3001/api/category-resolve' : '/api/category-resolve';
         const BARCODE_API_URL  = _isLocal ? 'http://127.0.0.1:3001/api/barcode-search' : '/api/barcode-search';
 
+        // ── Debug auth bypass — LOCAL ONLY, never active in production ────────────
+        const DEV_BYPASS_AUTH = false; // flip to _isLocal to bypass auth during local debugging
+
         let firebaseConfig    = null;
         let CLOUDINARY_CONFIG = null;
 
@@ -1562,10 +1565,15 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         }
                         if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
                         dbRef.current = firebase.firestore();
-                        firebase.auth().onAuthStateChanged(u => { 
-                            setUser(u); 
-                            setAuthLoading(false); 
-                        });
+                        if (DEV_BYPASS_AUTH) {
+                            setUser({ uid: 'debug-user-local', email: 'debug@local.dev' });
+                            setAuthLoading(false);
+                        } else {
+                            firebase.auth().onAuthStateChanged(u => {
+                                setUser(u);
+                                setAuthLoading(false);
+                            });
+                        }
                     } catch (e) {
                         console.error('[Init] Fatal:', e.message);
                         setErrorMsg("Access Bridge Link Failure: " + e.message);
@@ -1919,25 +1927,10 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         }
                         const aiData = JSON.parse(cleanJson(result.candidates[0].content.parts[0].text));
 
-                        let finalSource = "UNMAPPED";
-                        try {
-                            const catRes = await fetch(CATEGORY_API_URL, {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ title: aiData.title, keyFeatures: aiData.keyFeatures || [], description: aiData.markdownDescription || '' })
-                            });
-                            if (catRes.ok) {
-                                const catData = await catRes.json();
-                                aiData.categoryId   = catData.categoryId;
-                                aiData.categoryPath = catData.categoryPath;
-                                finalSource = catData.confidence === 'High' ? 'AI Verified' : 'AI Predicted';
-                            }
-                        } catch (e) { console.warn('Category resolve failed:', e.message); }
-
-                        aiData.categorySource = finalSource;
+                        aiData.categorySource = 'AI Draft';
                         const currentCondition = EBAY_CONDITIONS.find(c => c.id === batchCondition)?.label || 'Used';
                         const finalConditionId = sanitizeConditionId(batchCondition, aiData.categoryId);
-                        await dbRef.current.collection(listingsPath).add({
+                        const docRef = await dbRef.current.collection(listingsPath).add({
                             ...aiData,
                             images: urls,
                             conditionId: finalConditionId,
@@ -1945,6 +1938,22 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                             sku: `BKA-${Date.now()}`,
                             markdownDescription: buildDescription(aiData, currentCondition)
                         });
+
+                        // Background: refine category — Firestore listener auto-updates UI when done
+                        fetch(CATEGORY_API_URL, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ title: aiData.title, keyFeatures: aiData.keyFeatures || [], description: aiData.markdownDescription || '' })
+                        }).then(async catRes => {
+                            if (!catRes.ok) return;
+                            const catData = await catRes.json();
+                            await docRef.update({
+                                categoryId:     catData.categoryId,
+                                categoryPath:   catData.categoryPath,
+                                categorySource: catData.confidence === 'High' ? 'AI Verified' : 'AI Predicted',
+                                conditionId:    sanitizeConditionId(batchCondition, catData.categoryId)
+                            });
+                        }).catch(e => console.warn('Category resolve failed:', e.message));
 
                         completed++;
                         setStatus(`Processing ${completed}/${total}...`);
