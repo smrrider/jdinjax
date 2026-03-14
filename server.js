@@ -74,6 +74,8 @@ const ALLOWED_IMAGE_HOSTS = new Set([
 // ─── Middleware ────────────────────────────────────────────────────────────
 // CORS: lock to your Railway domain in production, allow localhost for dev
 const allowedOrigins = [
+    'https://ebay-scout.com',
+    'https://www.ebay-scout.com',
     'https://ebay-lister.up.railway.app',
     'http://localhost:3001',
     'http://127.0.0.1:3001'
