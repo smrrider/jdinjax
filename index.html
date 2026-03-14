@@ -1740,7 +1740,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         `"${(settings.storeName       || "").replace(/"/g, '""')}"`,  // StoreName
                         settings.location   ? `"${settings.location}"`   : "",  // Location
                         settings.postalCode ? `"${settings.postalCode}"` : "",  // PostalCode
-                        `"${(l.ammunitionType || "").replace(/"/g, '""')}"`     // C:Ammunition Type
+                        `"${(l.ammunitionType || "Other").replace(/"/g, '""')}"`     // C:Ammunition Type
                     ];
                 });
 
@@ -1828,7 +1828,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         `"${(settings.postalCode || "").replace(/"/g, '""')}"`,
                         `"${(l.brand          || "").replace(/"/g, '""')}"`,
                         `"${(l.itemType       || "").replace(/"/g, '""')}"`,
-                        `"${(l.ammunitionType || "").replace(/"/g, '""')}"`,
+                        `"${(l.ammunitionType || "Other").replace(/"/g, '""')}"`,
                         `"${schedStr}"`,   // quoted  -  contains spaces
                         `"${(settings.shippingProfile || "").replace(/"/g, '""')}"`,
                         `"${(settings.paymentProfile  || "").replace(/"/g, '""')}"`,
