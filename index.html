@@ -120,6 +120,7 @@
 
         // ── Debug auth bypass — LOCAL ONLY, never active in production ────────────
         const DEV_BYPASS_AUTH = false; // flip to _isLocal to bypass auth during local debugging
+        const OWNER_EMAIL = 'jdinjax@gmail.com'; // always has access — update if your email differs
 
         let firebaseConfig    = null;
         let CLOUDINARY_CONFIG = null;
@@ -1517,6 +1518,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
         const App = () => {
             const [user, setUser] = useState(null);
             const [authLoading, setAuthLoading] = useState(true);
+            const [accessDenied, setAccessDenied] = useState(false);
             const [email, setEmail] = useState("");
             const [password, setPassword] = useState("");
             const [isRegistering, setIsRegistering] = useState(false);
@@ -1540,6 +1542,9 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const [barcodeListingData, setBarcodeListingData] = useState(null); // { title, image, price, upc }
             const [activeTab,       setActiveTab]       = useState('process');  // keep single source
             const [showSettings,    setShowSettings]    = useState(false);
+            const [approvedUsers,   setApprovedUsers]   = useState([]);
+            const [newUserEmail,    setNewUserEmail]    = useState('');
+            const [userMgmtMsg,     setUserMgmtMsg]     = useState('');
             const [settings,        setSettings]        = useState({
                 shippingProfile: '', paymentProfile: '', returnProfile: '',
                 storeName: '', location: '', postalCode: '', country: 'US'
@@ -1570,9 +1575,30 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                             setUser({ uid: 'debug-user-local', email: 'debug@local.dev' });
                             setAuthLoading(false);
                         } else {
-                            firebase.auth().onAuthStateChanged(u => {
-                                setUser(u);
-                                setAuthLoading(false);
+                            firebase.auth().onAuthStateChanged(async u => {
+                                if (!u) { setUser(null); setAuthLoading(false); return; }
+                                // Owner always has access
+                                if (u.email === OWNER_EMAIL) {
+                                    setUser(u); setAuthLoading(false); return;
+                                }
+                                // Check whitelist: system/access/approved/{email}
+                                try {
+                                    const snap = await dbRef.current
+                                        .collection('system/access/approved')
+                                        .doc(u.email.toLowerCase())
+                                        .get();
+                                    if (snap.exists) {
+                                        setUser(u); setAuthLoading(false);
+                                    } else {
+                                        firebase.auth().signOut();
+                                        setAccessDenied(true);
+                                        setAuthLoading(false);
+                                    }
+                                } catch(e) {
+                                    firebase.auth().signOut();
+                                    setAccessDenied(true);
+                                    setAuthLoading(false);
+                                }
                             });
                         }
                     } catch (e) {
@@ -1680,6 +1706,28 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     showToast('Settings saved.');
                 } catch(e) { showToast('Save failed: ' + e.message); }
                 finally { setSettingsSaving(false); }
+            };
+
+            // ── Access Management (owner only) ────────────────────────────────
+            const loadApprovedUsers = async () => {
+                if (!dbRef.current) return;
+                const snap = await dbRef.current.collection('system/access/approved').get();
+                setApprovedUsers(snap.docs.map(d => d.id));
+            };
+            const addApprovedUser = async () => {
+                const email = newUserEmail.trim().toLowerCase();
+                if (!email || !email.includes('@')) { setUserMgmtMsg('Enter a valid email.'); return; }
+                await dbRef.current.collection('system/access/approved').doc(email).set({ addedBy: user.email, addedAt: Date.now() });
+                setNewUserEmail('');
+                setUserMgmtMsg(`✓ ${email} approved.`);
+                loadApprovedUsers();
+                setTimeout(() => setUserMgmtMsg(''), 3000);
+            };
+            const removeApprovedUser = async (email) => {
+                await dbRef.current.collection('system/access/approved').doc(email).delete();
+                setUserMgmtMsg(`Removed ${email}.`);
+                loadApprovedUsers();
+                setTimeout(() => setUserMgmtMsg(''), 3000);
             };
 
             const exportEbayCSV = () => {
@@ -1991,6 +2039,20 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
 
             if (authLoading) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><Icon name="Loader2" size={48} className="text-blue-600 animate-spin" /></div>;
 
+            // ── Access Denied screen ──────────────────────────────────────────
+            if (accessDenied) return (
+                <div className="min-h-screen flex items-center justify-center p-6 bg-slate-100">
+                    <div className="max-w-md w-full bg-white rounded-3xl shadow-2xl p-10 border border-red-200 text-center">
+                        <div className="w-14 h-14 bg-red-100 rounded-2xl flex items-center justify-center mb-6 mx-auto">
+                            <Icon name="ShieldX" size={28} className="text-red-500"/>
+                        </div>
+                        <h2 className="text-lg font-black text-red-700 uppercase tracking-tight mb-2">Access Denied</h2>
+                        <p className="text-sm text-slate-500 mb-6">Your account has not been approved for eBay Scout. Contact the administrator to request access.</p>
+                        <button onClick={() => { setAccessDenied(false); }} className="w-full py-3 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-700 text-sm uppercase tracking-widest">Back to Login</button>
+                    </div>
+                </div>
+            );
+
             // Surface init errors (bad env vars, network down, etc.) — prevents silent white screen
             if (errorMsg && !user) return (
                 <div className="min-h-screen flex items-center justify-center p-6 bg-slate-100">
@@ -2212,6 +2274,51 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                             ? <><Icon name="Check" size={14}/> Saved to Account</>
                             : <><Icon name="Save" size={14}/> Save Settings</>}
                     </button>
+
+                    {/* ── Owner-only: Access Management ───────────────────── */}
+                    {user && user.email === OWNER_EMAIL && (
+                        <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden">
+                            <div className="px-8 py-5 border-b border-slate-100 flex items-center gap-3">
+                                <Icon name="Users" size={16} className="text-violet-600"/>
+                                <div>
+                                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Admin</p>
+                                    <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight">Access Management</h3>
+                                </div>
+                                <button onClick={loadApprovedUsers} className="ml-auto text-[9px] font-black text-slate-400 hover:text-slate-600 uppercase tracking-widest flex items-center gap-1">
+                                    <Icon name="RefreshCw" size={10}/> Refresh
+                                </button>
+                            </div>
+                            <div className="p-8 space-y-4">
+                                <div className="flex gap-2">
+                                    <input
+                                        type="email"
+                                        value={newUserEmail}
+                                        onChange={e => setNewUserEmail(e.target.value)}
+                                        onKeyDown={e => e.key === 'Enter' && addApprovedUser()}
+                                        placeholder="friend@email.com"
+                                        className="flex-1 px-4 py-3 rounded-2xl border border-slate-200 text-sm font-bold text-slate-700 focus:outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-50 bg-slate-50 placeholder-slate-300"
+                                    />
+                                    <button onClick={addApprovedUser} className="px-5 py-3 bg-violet-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-violet-500 active:scale-95 transition-all flex items-center gap-2">
+                                        <Icon name="UserPlus" size={13}/> Add
+                                    </button>
+                                </div>
+                                {userMgmtMsg && <p className="text-xs font-bold text-violet-600">{userMgmtMsg}</p>}
+                                {approvedUsers.length === 0
+                                    ? <p className="text-xs text-slate-400 italic">No approved users yet. Click Refresh to load.</p>
+                                    : <ul className="space-y-2">
+                                        {approvedUsers.map(email => (
+                                            <li key={email} className="flex items-center justify-between bg-slate-50 rounded-2xl px-4 py-3">
+                                                <span className="text-xs font-bold text-slate-700">{email}</span>
+                                                <button onClick={() => removeApprovedUser(email)} className="text-red-400 hover:text-red-600 transition-colors">
+                                                    <Icon name="X" size={14}/>
+                                                </button>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                }
+                            </div>
+                        </div>
+                    )}
                 </section>
             );
 
