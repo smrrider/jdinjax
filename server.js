@@ -440,6 +440,24 @@ app.post('/api/gemini', jsonImages, async (req, res) => {
     } catch (err) { res.status(502).json({ error: { message: err.message } }); }
 });
 
+// ── Admin: Disable Firebase Auth user on removal ──────────────────────────────
+app.post('/api/admin/remove-user', jsonSmall, async (req, res) => {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email required' });
+    if (!adminAuth) return res.status(503).json({ error: 'Firebase Admin SDK not configured.' });
+    try {
+        const userRecord = await adminAuth.getUserByEmail(email);
+        await adminAuth.updateUser(userRecord.uid, { disabled: true });
+        console.log(`[Admin] Disabled Firebase Auth user: ${email}`);
+        res.json({ success: true, message: `${email} disabled in Firebase Auth.` });
+    } catch(e) {
+        // If user not found in Firebase (e.g. Google SSO only), still succeed silently
+        if (e.code === 'auth/user-not-found') return res.json({ success: true, message: 'User not in Firebase Auth (Google SSO) — whitelist removed only.' });
+        console.error('[Admin] Disable user failed:', e.message);
+        res.status(400).json({ error: e.message });
+    }
+});
+
 // ── Admin: Create email/password user ─────────────────────────────────────────
 app.post('/api/admin/create-user', jsonSmall, async (req, res) => {
     const { email, requestedBy } = req.body;

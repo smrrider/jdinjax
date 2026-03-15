@@ -1744,7 +1744,15 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             };
             const removeApprovedUser = async (email) => {
                 await dbRef.current.collection('system/access/approved').doc(email).delete();
-                setUserMgmtMsg(`Removed ${email}.`);
+                // Also disable in Firebase Auth (silently handles Google SSO users)
+                try {
+                    await fetch('/api/admin/remove-user', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email })
+                    });
+                } catch(e) { console.warn('[Admin] Firebase disable failed:', e.message); }
+                setUserMgmtMsg(`Removed & disabled ${email}.`);
                 loadApprovedUsers();
                 setTimeout(() => setUserMgmtMsg(''), 3000);
             };
