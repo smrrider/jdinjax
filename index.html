@@ -1656,7 +1656,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 if (!user || user.email !== OWNER_EMAIL) return;
                 fetch('/api/admin/list-users')
                     .then(r => r.json())
-                    .then(data => { if (data.users) setApprovedUsers(data.users.map(u => u.email)); })
+                    .then(data => { if (data.users) setApprovedUsers(data.users); })
                     .catch(e => console.warn('[Access] List failed:', e.message));
             }, [user]);
 
@@ -1741,14 +1741,14 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 try {
                     const res  = await fetch('/api/admin/list-users');
                     const data = await res.json();
-                    if (data.users) setApprovedUsers(data.users.map(u => u.email));
+                    if (data.users) setApprovedUsers(data.users);
                 } catch(e) { console.warn('[Access] List failed:', e.message); }
             };
-            const addApprovedUser = async () => {
-                const email = newUserEmail.trim().toLowerCase();
+            const addApprovedUser = async (emailOverride) => {
+                const email = (emailOverride || newUserEmail).trim().toLowerCase();
                 if (!email || !email.includes('@')) { setUserMgmtMsg('Enter a valid email.'); return; }
                 await dbRef.current.collection('system/access/approved').doc(email).set({ addedBy: user.email, addedAt: Date.now() });
-                setNewUserEmail('');
+                if (!emailOverride) setNewUserEmail('');
                 setUserMgmtMsg(`✓ ${email} approved.`);
                 loadApprovedUsers();
                 setTimeout(() => setUserMgmtMsg(''), 3000);
@@ -2443,14 +2443,31 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                     </div>
                                 )}
                                 {approvedUsers.length === 0
-                                    ? <p className="text-xs text-slate-400 italic">No approved users yet. Click Refresh to load.</p>
+                                    ? <p className="text-xs text-slate-400 italic">No users found. Add the service account key to Railway to load.</p>
                                     : <ul className="space-y-2">
-                                        {approvedUsers.map(email => (
-                                            <li key={email} className="flex items-center justify-between bg-slate-50 rounded-2xl px-4 py-3">
-                                                <span className="text-xs font-bold text-slate-700">{email}</span>
-                                                <button onClick={() => removeApprovedUser(email)} className="text-red-400 hover:text-red-600 transition-colors">
-                                                    <Icon name="X" size={14}/>
-                                                </button>
+                                        {approvedUsers.filter(u => u.email !== OWNER_EMAIL).map(u => (
+                                            <li key={u.email} className="flex items-center justify-between bg-slate-50 rounded-2xl px-4 py-3 gap-3">
+                                                <div className="flex items-center gap-2 min-w-0 flex-1">
+                                                    <span className={`text-[8px] font-black px-2 py-1 rounded-lg uppercase shrink-0 ${u.provider === 'google' ? 'bg-blue-100 text-blue-600' : 'bg-slate-200 text-slate-600'}`}>
+                                                        {u.provider === 'google' ? 'G' : 'Email'}
+                                                    </span>
+                                                    <span className="text-xs font-bold text-slate-700 truncate">{u.email}</span>
+                                                </div>
+                                                <div className="flex items-center gap-2 shrink-0">
+                                                    <span className={`text-[8px] font-black px-2 py-1 rounded-lg uppercase ${u.whitelisted ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                                                        {u.whitelisted ? 'Active' : 'No Access'}
+                                                    </span>
+                                                    {!u.whitelisted && (
+                                                        <button onClick={() => addApprovedUser(u.email)} className="text-emerald-500 hover:text-emerald-700 transition-colors" title="Grant access">
+                                                            <Icon name="UserCheck" size={14}/>
+                                                        </button>
+                                                    )}
+                                                    {u.whitelisted && (
+                                                        <button onClick={() => removeApprovedUser(u.email)} className="text-red-400 hover:text-red-600 transition-colors" title="Revoke access">
+                                                            <Icon name="X" size={14}/>
+                                                        </button>
+                                                    )}
+                                                </div>
                                             </li>
                                         ))}
                                     </ul>

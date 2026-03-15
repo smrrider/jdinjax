@@ -442,12 +442,22 @@ app.post('/api/gemini', jsonImages, async (req, res) => {
     } catch (err) { res.status(502).json({ error: { message: err.message } }); }
 });
 
-// ── Admin: List approved users (bypasses Firestore client rules) ──────────────
+// ── Admin: List all Firebase Auth users + whitelist status ────────────────────
 app.get('/api/admin/list-users', async (req, res) => {
-    if (!adminFirestore) return res.status(503).json({ error: 'Firebase Admin SDK not configured.' });
+    if (!adminAuth || !adminFirestore) return res.status(503).json({ error: 'Firebase Admin SDK not configured.' });
     try {
-        const snap = await adminFirestore.collection('system/access/approved').get();
-        const users = snap.docs.map(d => ({ email: d.id, ...d.data() }));
+        // Get all Firebase Auth users
+        const listResult = await adminAuth.listUsers(1000);
+        // Get Firestore whitelist
+        const wlSnap = await adminFirestore.collection('system/access/approved').get();
+        const whitelist = new Set(wlSnap.docs.map(d => d.id));
+        const users = listResult.users.map(u => ({
+            email:       u.email,
+            provider:    u.providerData[0]?.providerId === 'google.com' ? 'google' : 'email',
+            disabled:    u.disabled,
+            whitelisted: whitelist.has(u.email),
+            createdAt:   u.metadata.creationTime
+        }));
         res.json({ users });
     } catch(e) {
         console.error('[Admin] List users failed:', e.message);
