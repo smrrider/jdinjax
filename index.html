@@ -1753,20 +1753,28 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 loadApprovedUsers();
                 setTimeout(() => setUserMgmtMsg(''), 3000);
             };
-            const removeApprovedUser = async (email) => {
-                await dbRef.current.collection('system/access/approved').doc(email).delete();
-                // Also disable in Firebase Auth (silently handles Google SSO users)
+            const userAction = async (email, action) => {
                 try {
-                    await fetch('/api/admin/remove-user', {
+                    await fetch('/api/admin/update-user', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ email })
+                        body: JSON.stringify({ email, action })
                     });
-                } catch(e) { console.warn('[Admin] Firebase disable failed:', e.message); }
-                setUserMgmtMsg(`Removed & disabled ${email}.`);
-                loadApprovedUsers();
-                setTimeout(() => setUserMgmtMsg(''), 3000);
+                    if (action === 'delete') {
+                        await dbRef.current.collection('system/access/approved').doc(email).delete();
+                        setUserMgmtMsg(`${email} deleted.`);
+                    } else if (action === 'disable') {
+                        await dbRef.current.collection('system/access/approved').doc(email).delete();
+                        setUserMgmtMsg(`${email} disabled.`);
+                    } else if (action === 'enable') {
+                        await dbRef.current.collection('system/access/approved').doc(email).set({ addedBy: user.email, addedAt: Date.now() });
+                        setUserMgmtMsg(`${email} enabled.`);
+                    }
+                    loadApprovedUsers();
+                    setTimeout(() => setUserMgmtMsg(''), 3000);
+                } catch(e) { setUserMgmtMsg(`Error: ${e.message}`); }
             };
+            const removeApprovedUser = (email) => userAction(email, 'disable');
 
             const [inviteLink, setInviteLink] = useState(null); // { email, link }
 
@@ -2454,19 +2462,24 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                     <span className="text-xs font-bold text-slate-700 truncate">{u.email}</span>
                                                 </div>
                                                 <div className="flex items-center gap-2 shrink-0">
-                                                    <span className={`text-[8px] font-black px-2 py-1 rounded-lg uppercase ${u.whitelisted ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
-                                                        {u.whitelisted ? 'Active' : 'No Access'}
+                                                    <span className={`text-[8px] font-black px-2 py-1 rounded-lg uppercase ${u.disabled ? 'bg-red-100 text-red-600' : u.whitelisted ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                                                        {u.disabled ? 'Disabled' : u.whitelisted ? 'Active' : 'No Access'}
                                                     </span>
-                                                    {!u.whitelisted && (
-                                                        <button onClick={() => addApprovedUser(u.email)} className="text-emerald-500 hover:text-emerald-700 transition-colors" title="Grant access">
-                                                            <Icon name="UserCheck" size={14}/>
-                                                        </button>
-                                                    )}
-                                                    {u.whitelisted && (
-                                                        <button onClick={() => removeApprovedUser(u.email)} className="text-red-400 hover:text-red-600 transition-colors" title="Revoke access">
-                                                            <Icon name="X" size={14}/>
-                                                        </button>
-                                                    )}
+                                                    {/* Enable */}
+                                                    <button onClick={() => userAction(u.email, 'enable')} title="Enable"
+                                                        className="p-1.5 rounded-lg text-emerald-500 hover:bg-emerald-50 hover:text-emerald-700 transition-colors">
+                                                        <Icon name="UserCheck" size={13}/>
+                                                    </button>
+                                                    {/* Disable */}
+                                                    <button onClick={() => userAction(u.email, 'disable')} title="Disable"
+                                                        className="p-1.5 rounded-lg text-amber-500 hover:bg-amber-50 hover:text-amber-700 transition-colors">
+                                                        <Icon name="UserX" size={13}/>
+                                                    </button>
+                                                    {/* Delete */}
+                                                    <button onClick={() => { if (window.confirm(`Permanently delete ${u.email}?`)) userAction(u.email, 'delete'); }} title="Delete permanently"
+                                                        className="p-1.5 rounded-lg text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors">
+                                                        <Icon name="Trash2" size={13}/>
+                                                    </button>
                                                 </div>
                                             </li>
                                         ))}

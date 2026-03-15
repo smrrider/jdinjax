@@ -465,20 +465,24 @@ app.get('/api/admin/list-users', async (req, res) => {
     }
 });
 
-// ── Admin: Disable Firebase Auth user on removal ──────────────────────────────
-app.post('/api/admin/remove-user', jsonSmall, async (req, res) => {
-    const { email } = req.body;
-    if (!email) return res.status(400).json({ error: 'Email required' });
+// ── Admin: Enable / Disable / Delete Firebase Auth user ───────────────────────
+app.post('/api/admin/update-user', jsonSmall, async (req, res) => {
+    const { email, action } = req.body; // action: 'enable' | 'disable' | 'delete'
+    if (!email || !action) return res.status(400).json({ error: 'Email and action required' });
     if (!adminAuth) return res.status(503).json({ error: 'Firebase Admin SDK not configured.' });
     try {
         const userRecord = await adminAuth.getUserByEmail(email);
-        await adminAuth.deleteUser(userRecord.uid);
-        console.log(`[Admin] Deleted Firebase Auth user: ${email}`);
-        res.json({ success: true, message: `${email} permanently deleted from Firebase Auth.` });
+        if (action === 'delete') {
+            await adminAuth.deleteUser(userRecord.uid);
+            console.log(`[Admin] Deleted: ${email}`);
+            return res.json({ success: true });
+        }
+        await adminAuth.updateUser(userRecord.uid, { disabled: action === 'disable' });
+        console.log(`[Admin] ${action}d: ${email}`);
+        res.json({ success: true });
     } catch(e) {
-        // If user not found in Firebase (e.g. Google SSO only), still succeed silently
-        if (e.code === 'auth/user-not-found') return res.json({ success: true, message: 'User not in Firebase Auth (Google SSO) — whitelist removed only.' });
-        console.error('[Admin] Disable user failed:', e.message);
+        if (e.code === 'auth/user-not-found') return res.json({ success: true }); // Google SSO — no Auth record
+        console.error(`[Admin] ${action} failed:`, e.message);
         res.status(400).json({ error: e.message });
     }
 });
