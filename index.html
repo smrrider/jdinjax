@@ -1651,10 +1651,13 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     .catch(e => console.warn('[Settings] Load failed:', e.message));
             }, [user]);
 
-            // Auto-load approved users for owner on login
+            // Real-time approved users listener — owner only
             useEffect(() => {
-                if (!user || !dbRef.current) return;
-                if (user.email === OWNER_EMAIL) loadApprovedUsers();
+                if (!user || !dbRef.current || user.email !== OWNER_EMAIL) return;
+                const unsubscribe = dbRef.current.collection('system/access/approved')
+                    .onSnapshot(snap => setApprovedUsers(snap.docs.map(d => d.id)),
+                                err  => console.warn('[Access] Snapshot error:', err.message));
+                return () => unsubscribe();
             }, [user]);
 
             // ── useMemo MUST be here — before ANY conditional returns (Rules of Hooks) ──
