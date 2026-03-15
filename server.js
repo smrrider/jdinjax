@@ -5,6 +5,25 @@
  */
 
 require('dotenv').config();
+const admin = require('firebase-admin');
+
+// ─── Firebase Admin SDK init ─────────────────────────────────────────────────
+let adminAuth = null;
+try {
+    if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+        const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+        if (!admin.apps.length) {
+            admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+        }
+        adminAuth = admin.auth();
+        console.log('[eBay Scout] Firebase Admin SDK: Ready');
+    } else {
+        console.warn('[eBay Scout] FIREBASE_SERVICE_ACCOUNT_JSON not set — admin user creation disabled');
+    }
+} catch(e) {
+    console.error('[eBay Scout] Firebase Admin init failed:', e.message);
+}
+
 const express = require('express');
 const cors    = require('cors');
 const path    = require('path');
@@ -419,6 +438,27 @@ app.post('/api/gemini', jsonImages, async (req, res) => {
         }
         res.json(data);
     } catch (err) { res.status(502).json({ error: { message: err.message } }); }
+});
+
+// ── Admin: Create email/password user ─────────────────────────────────────────
+app.post('/api/admin/create-user', jsonSmall, async (req, res) => {
+    const { email, requestedBy } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email required' });
+    if (!adminAuth) return res.status(503).json({ error: 'Firebase Admin SDK not configured. Add FIREBASE_SERVICE_ACCOUNT_JSON to Railway env vars.' });
+    try {
+        // Create the Firebase Auth user with a random temp password
+        const tempPassword = Math.random().toString(36).slice(-10) + Math.random().toString(36).slice(-6).toUpperCase() + '!';
+        await adminAuth.createUser({ email, password: tempPassword, emailVerified: false });
+        // Send password reset email so they set their own password
+        const resetLink = await adminAuth.generatePasswordResetLink(email);
+        console.log(`[Admin] Created user ${email} (by ${requestedBy}) — reset link: ${resetLink}`);
+        // Note: in production you'd send this via an email service
+        // For now return the link to the admin so they can share it
+        res.json({ success: true, resetLink, message: `User ${email} created. Share the reset link to let them set their password.` });
+    } catch(e) {
+        console.error('[Admin] Create user failed:', e.message);
+        res.status(400).json({ error: e.message });
+    }
 });
 
 // ── SPA catch-all — serves index.html for any non-API route ──────────────

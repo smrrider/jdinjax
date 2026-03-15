@@ -234,8 +234,8 @@
         });
 
         // ── Shared listing description builder ───────────────────────────────────
-        const buildDescription = (aiData, conditionLabel) => `
-DESCRIPTION & TECHNICAL SPECIFICATIONS
+        const buildDescription = (aiData, conditionLabel, adFooter = '') => {
+            const body = `DESCRIPTION & TECHNICAL SPECIFICATIONS
 
 ${aiData.title}
 
@@ -253,22 +253,11 @@ SHIPPING LOGISTICS:
 * Item Weight: ${aiData.weightItem || 'TBD'}
 * Packaging Weight: ${aiData.weightPackaging || 'TBD'}
 * Total Shipping Weight: ${aiData.weightTotal || 'TBD'}
-* Dimensions: ${aiData.dimensions || 'TBD'}
-
-MAKING AN OFFER:
-Please don't hesitate to make a reasonable offer. A majority of our sales are concluded this way and it it doesn't hurt to ask. NOTE: However, I most likely won't counteroffer "low ball" offers....it will simply be declined.
-
-RETURN POLICY (PLEASE READ):
-Buyer is responsible for return shipping on any item that is not damaged, defective, or as described. As a reseller of items sourced from numerous places, we cannot control the manufacturing quality of an item. However, we CAN control how the items are sold, pricing, and time to ship of those items to you. If you are unsatisfied with your order in anyway, please contact us and we will work with you to resolve it to your satisfaction.
-
-SHIPPING:
-Items are shipped as fast as possible after payment is processed. We pride ourselves on getting your purchase to you FAST! This typically results in same day shipping if payment is received before noon (Mon-Fri).
-
-DELIVERY:
-We Do Not Ship Outside of the Continental U.S. or to P.O Boxes
-
-FEEDBACK:
-We take our reputation seriously, we buy and sell online, so we understand the value of trust. If you are unsatisfied with your order, please give us an opportunity to resolve it to your satisfaction before leaving a negative feedback.`.trim();
+* Dimensions: ${aiData.dimensions || 'TBD'}`;
+            return adFooter && adFooter.trim()
+                ? `${body}\n\n${adFooter.trim()}`
+                : body;
+        };
 
         const Icon = ({ name, size = 24, className = "" }) => {
             const ref = useRef(null);
@@ -591,15 +580,15 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
         };
 
         // shippingMode: 'flat' | 'free' | 'pickup'
-        const calcArbitrage = (priceMid, purchasePrice, uspsEstimate, shippingMode, flatFee) => {
+        const calcArbitrage = (priceMid, purchasePrice, uspsEstimate, shippingMode, flatFee, feeOverrides = {}) => {
             const packaging = 2.00;
             if (shippingMode === 'pickup') {
                 const netProfit = priceMid - purchasePrice - packaging;
                 const roi = purchasePrice > 0 ? (netProfit / purchasePrice) * 100 : 0;
                 return { ebayFVF: 0, paymentFee: 0, packaging, uspsEstimate: 0, flatFeeCollected: 0, netShippingCost: 0, totalFees: packaging, netProfit, roi };
             }
-            const ebayFVF          = priceMid * 0.1325;
-            const paymentFee       = priceMid * 0.029 + 0.30;
+            const ebayFVF          = priceMid * ((parseFloat(feeOverrides.ebayFeePercent) || 13.25) / 100);
+            const paymentFee       = priceMid * ((parseFloat(feeOverrides.paymentFeePercent) || 2.9) / 100) + (parseFloat(feeOverrides.paymentFeeFlat) || 0.30);
             const flatFeeCollected = shippingMode === 'flat' ? (parseFloat(flatFee) || 0) : 0;
             const netShippingCost  = uspsEstimate - flatFeeCollected;
             const totalFees        = ebayFVF + paymentFee + packaging + netShippingCost;
@@ -612,6 +601,19 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             if (netProfit >= 15)  return { label: 'GO',       css: 'verdict-go',       tag: 'GO' };
             if (netProfit >= 5)   return { label: 'MARGINAL', css: 'verdict-marginal', tag: 'MARGINAL' };
             return                       { label: 'NO-GO',    css: 'verdict-nogo',     tag: 'NO-GO' };
+        };
+
+        const calcListingProfit = (salePrice, purchasePrice, userSettings) => {
+            const price = parseFloat(salePrice) || 0;
+            const cost  = parseFloat(purchasePrice) || 0;
+            if (price === 0) return null;
+            const ebayFee    = price * ((parseFloat(userSettings.ebayFeePercent) || 13.25) / 100);
+            const paymentFee = price * ((parseFloat(userSettings.paymentFeePercent) || 2.9) / 100) + (parseFloat(userSettings.paymentFeeFlat) || 0.30);
+            const shipping   = parseFloat(userSettings.shippingCost) || 0;
+            const totalFees  = ebayFee + paymentFee + shipping;
+            const netProfit  = price - cost - totalFees;
+            const margin     = price > 0 ? (netProfit / price) * 100 : 0;
+            return { ebayFee, paymentFee, shipping, totalFees, netProfit, margin };
         };
 
         // ── Error Boundary — catches render crashes in listing cards, prevents full wipe ──
@@ -684,7 +686,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             );
         };
 
-        const ArbitrageRecon = ({ proxyUrl, ebayConditions, showToast, dbRef, user, inline = false, scanPreload = null, onScanRequest, onSendToProcessing }) => {
+        const ArbitrageRecon = ({ proxyUrl, ebayConditions, showToast, dbRef, user, inline = false, scanPreload = null, onScanRequest, onSendToProcessing, userSettings = {} }) => {
             const [isOpen,        setIsOpen]        = useState(false);
             const [reconImage,    setReconImage]     = useState(null);
             const [condition,     setCondition]      = useState('3000');
@@ -702,6 +704,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const [reconScanResults, setReconScanResults] = useState(null);
             const [reconManualTitle, setReconManualTitle] = useState('');
             const [showReconScanner, setShowReconScanner] = useState(false);
+            const [reconDefaultEngine, setReconDefaultEngine] = useState('ebay');
 
             // Load Recon history from Firestore on mount
             useEffect(() => {
@@ -732,16 +735,16 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
 
             const handleReconScan = async (upc) => {
                 setShowReconScanner(false);
-                setReconScanResults({ loading: true, items: [], noResults: false, engine: 'ebay' });
+                setReconScanResults({ loading: true, items: [], noResults: false, engine: reconDefaultEngine });
                 const BARCODE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
                     ? 'http://127.0.0.1:3001/api/barcode-search' : '/api/barcode-search';
                 try {
-                    const res = await fetch(BARCODE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ upc, engine: 'ebay' }) });
+                    const res = await fetch(BARCODE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ upc, engine: reconDefaultEngine }) });
                     const data = await res.json();
                     const items = data.results || [];
-                    setReconScanResults({ loading: false, items, noResults: items.length === 0, engine: 'ebay', upc });
+                    setReconScanResults({ loading: false, items, noResults: items.length === 0, engine: reconDefaultEngine, upc });
                 } catch(e) {
-                    setReconScanResults({ loading: false, items: [], noResults: true, engine: 'ebay', upc });
+                    setReconScanResults({ loading: false, items: [], noResults: true, engine: reconDefaultEngine, upc });
                 }
             };
 
@@ -879,7 +882,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     const uspsEstimate = getUspsZone8Rate(ai.weightOz, ai.packageLengthIn, ai.packageWidthIn, ai.packageHeightIn);
                     const purchase     = parseFloat(purchasePrice) || 0;
                     const flatFee      = parseFloat(flatShippingFee) || 0;
-                    const arb          = calcArbitrage(ai.priceMid, purchase, uspsEstimate, shippingMode, flatFee);
+                    const arb          = calcArbitrage(ai.priceMid, purchase, uspsEstimate, shippingMode, flatFee, userSettings);
                     const shipping     = uspsEstimate;
                     const verdict   = getVerdict(arb.netProfit);
 
@@ -1022,11 +1025,21 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                         )}
                                     </div>
 
-                                    {/* Scan Barcode button */}
-                                    <button onClick={() => setShowReconScanner(true)}
-                                        className="w-full py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 bg-slate-100 text-slate-600 hover:bg-emerald-50 hover:text-emerald-600 active:scale-95">
-                                        <Icon name="ScanLine" size={12}/> Scan Barcode
-                                    </button>
+                                    {/* Default scan engine toggle + Scan Barcode button */}
+                                    <div className="flex gap-2">
+                                        <div className="flex bg-slate-100 rounded-xl p-0.5 shrink-0">
+                                            {['ebay','amazon'].map(eng => (
+                                                <button key={eng} onClick={() => setReconDefaultEngine(eng)}
+                                                    className={"px-3 py-2 rounded-[10px] text-[9px] font-black uppercase transition-all " + (reconDefaultEngine === eng ? (eng === 'ebay' ? 'bg-blue-600 text-white shadow-sm' : 'bg-orange-500 text-white shadow-sm') : 'text-slate-400 hover:text-slate-600')}>
+                                                    {eng === 'ebay' ? 'eBay' : 'AMZ'}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        <button onClick={() => setShowReconScanner(true)}
+                                            className="flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 bg-slate-100 text-slate-600 hover:bg-emerald-50 hover:text-emerald-600 active:scale-95">
+                                            <Icon name="ScanLine" size={12}/> Scan Barcode
+                                        </button>
+                                    </div>
 
                                     {/* Scan results */}
                                     <ReconScanResultsPanel
@@ -1550,7 +1563,10 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const [userMgmtMsg,     setUserMgmtMsg]     = useState('');
             const [settings,        setSettings]        = useState({
                 shippingProfile: '', paymentProfile: '', returnProfile: '',
-                storeName: '', location: '', postalCode: '', country: 'US'
+                storeName: '', location: '', postalCode: '', country: 'US',
+                shippingCost: '6.95', ebayFeePercent: '13.25',
+                paymentFeePercent: '2.9', paymentFeeFlat: '0.30',
+                adFooter: ''
             });
             const [settingsSaving,  setSettingsSaving]  = useState(false);
             const [settingsSaved,   setSettingsSaved]   = useState(false);
@@ -1731,6 +1747,29 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 setUserMgmtMsg(`Removed ${email}.`);
                 loadApprovedUsers();
                 setTimeout(() => setUserMgmtMsg(''), 3000);
+            };
+
+            const createEmailUser = async () => {
+                const emailVal = newUserEmail.trim().toLowerCase();
+                if (!emailVal || !emailVal.includes('@')) { setUserMgmtMsg('Enter a valid email.'); return; }
+                setUserMgmtMsg('Creating user...');
+                try {
+                    const res = await fetch('/api/admin/create-user', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email: emailVal, requestedBy: user.email })
+                    });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.error || 'Failed');
+                    // Also whitelist them
+                    await dbRef.current.collection('system/access/approved').doc(emailVal).set({ addedBy: user.email, addedAt: Date.now(), authMethod: 'email' });
+                    setNewUserEmail('');
+                    setUserMgmtMsg(`✓ ${emailVal} created — password setup email sent.`);
+                    loadApprovedUsers();
+                } catch(e) {
+                    setUserMgmtMsg(`Error: ${e.message}`);
+                }
+                setTimeout(() => setUserMgmtMsg(''), 5000);
             };
 
             const exportEbayCSV = () => {
@@ -1992,7 +2031,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                             conditionId: finalConditionId,
                             timestamp: Date.now(),
                             sku: `BKA-${Date.now()}`,
-                            markdownDescription: buildDescription(aiData, currentCondition)
+                            markdownDescription: buildDescription(aiData, currentCondition, settings.adFooter)
                         });
 
                         // Background: refine category — Firestore listener auto-updates UI when done
@@ -2189,7 +2228,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         conditionId: batchCondition,
                         timestamp: Date.now(),
                         sku: 'BKA-' + Date.now(),
-                        markdownDescription: buildDescription(aiData, currentCondition),
+                        markdownDescription: buildDescription(aiData, currentCondition, settings.adFooter),
                         upc: barcodeListingData.upc || '',
                         buyItNowPrice: aiData.buyItNowPrice || (barcodeListingData.price ? parseFloat(barcodeListingData.price.replace(/[^0-9.]/g,'')) || 0 : 0)
                     });
@@ -2266,6 +2305,55 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         </div>
                     </div>
 
+                    {/* ── Fees & Costs ─────────────────────────────────────────────────── */}
+                    <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden">
+                        <div className="px-8 py-5 border-b border-slate-100 flex items-center gap-3">
+                            <Icon name="DollarSign" size={16} className="text-emerald-600"/>
+                            <div>
+                                <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Pricing</p>
+                                <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight">Fees & Costs</h3>
+                            </div>
+                        </div>
+                        <div className="p-8 grid grid-cols-2 gap-4">
+                            {[
+                                { key: 'shippingCost',       label: 'Shipping Cost ($)',    placeholder: '6.95' },
+                                { key: 'ebayFeePercent',     label: 'eBay FVF (%)',          placeholder: '13.25' },
+                                { key: 'paymentFeePercent',  label: 'Payment Fee (%)',       placeholder: '2.9' },
+                                { key: 'paymentFeeFlat',     label: 'Payment Fee Flat ($)',  placeholder: '0.30' },
+                            ].map(({ key, label, placeholder }) => (
+                                <div key={key}>
+                                    <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest block mb-2">{label}</label>
+                                    <input type="number" min="0" step="0.01"
+                                        value={settings[key] || ''}
+                                        onChange={e => setSettings(s => ({ ...s, [key]: e.target.value }))}
+                                        placeholder={placeholder}
+                                        className="w-full px-4 py-3 rounded-2xl border border-slate-200 text-sm font-bold text-slate-700 focus:outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-50 bg-slate-50"/>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* ── Ad Footer ────────────────────────────────────────── */}
+                    <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden">
+                        <div className="px-8 py-5 border-b border-slate-100 flex items-center gap-3">
+                            <Icon name="AlignLeft" size={16} className="text-blue-600"/>
+                            <div>
+                                <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Branding</p>
+                                <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight">Ad Footer</h3>
+                            </div>
+                        </div>
+                        <div className="p-8">
+                            <p className="text-[9px] text-slate-400 mb-3">Appended to the bottom of every generated ad and CSV description. Leave blank to omit.</p>
+                            <textarea
+                                value={settings.adFooter || ''}
+                                onChange={e => setSettings(s => ({ ...s, adFooter: e.target.value }))}
+                                rows={8}
+                                placeholder={"e.g.\n\nMAKING AN OFFER: Please don't hesitate to make a reasonable offer...\n\nRETURN POLICY: Buyer is responsible for return shipping..."}
+                                className="w-full px-4 py-3 rounded-2xl border border-slate-200 text-xs font-medium text-slate-700 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 bg-slate-50 resize-none leading-relaxed"
+                            />
+                        </div>
+                    </div>
+
                     <button
                         onClick={saveSettings}
                         disabled={settingsSaving}
@@ -2303,6 +2391,18 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                     />
                                     <button onClick={addApprovedUser} className="px-5 py-3 bg-violet-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-violet-500 active:scale-95 transition-all flex items-center gap-2">
                                         <Icon name="UserPlus" size={13}/> Add
+                                    </button>
+                                </div>
+                                <div className="flex gap-2 mt-1">
+                                    <input
+                                        type="email"
+                                        value={newUserEmail}
+                                        onChange={e => setNewUserEmail(e.target.value)}
+                                        placeholder="Create email/password user..."
+                                        className="flex-1 px-4 py-3 rounded-2xl border border-slate-200 text-sm font-bold text-slate-700 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 bg-slate-50 placeholder-slate-300"
+                                    />
+                                    <button onClick={createEmailUser} className="px-5 py-3 bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-blue-500 active:scale-95 transition-all flex items-center gap-2 whitespace-nowrap">
+                                        <Icon name="Mail" size={13}/> Create & Invite
                                     </button>
                                 </div>
                                 {userMgmtMsg && <p className="text-xs font-bold text-violet-600">{userMgmtMsg}</p>}
@@ -2473,6 +2573,60 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                     <span className="text-[9px] font-black text-slate-400 uppercase mb-2 block tracking-widest text-center">Listing Condition</span>
                                     <select value={l.conditionId || '1000'} onChange={e => dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({conditionId: e.target.value})} className="w-full bg-transparent text-xs font-black uppercase text-blue-600 cursor-pointer text-center focus:outline-none">{getConditionSet(l.categoryId).map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select>
                                 </div>
+                                {/* Profit Calculator — collapsed by default */}
+                                <details className="mb-6 group">
+                                    <summary className="text-[10px] font-black text-slate-400 uppercase tracking-widest cursor-pointer flex items-center gap-2 select-none hover:text-emerald-500 transition-colors">
+                                        <Icon name="ChevronRight" size={12} className="transition-transform group-open:rotate-90"/>
+                                        Profit Calculator
+                                    </summary>
+                                    <div className="mt-3 p-4 bg-emerald-50 rounded-2xl border border-emerald-100 space-y-3">
+                                        <div className="flex items-center gap-3">
+                                            <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest w-24 shrink-0">Purchase Price</span>
+                                            <div className="flex items-center gap-1 flex-1">
+                                                <span className="text-xs font-black text-slate-400">$</span>
+                                                <input type="number" min="0" step="0.01"
+                                                    defaultValue={l.purchasePrice || ''}
+                                                    placeholder="0.00"
+                                                    onBlur={async (e) => {
+                                                        const val = parseFloat(e.target.value);
+                                                        if (!isNaN(val) && val >= 0) {
+                                                            await dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({ purchasePrice: val });
+                                                            showToast("Purchase price saved.");
+                                                        }
+                                                    }}
+                                                    onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+                                                    className="flex-1 bg-white border border-emerald-200 rounded-xl px-3 py-2 text-sm font-black text-slate-700 focus:outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-50"/>
+                                            </div>
+                                        </div>
+                                        {(() => {
+                                            const profit = calcListingProfit(l.buyItNowPrice, l.purchasePrice, settings);
+                                            if (!profit || !l.purchasePrice) return (
+                                                <p className="text-[9px] text-slate-400 italic text-center">Enter purchase price to calculate profit</p>
+                                            );
+                                            const profitColor = profit.netProfit >= 15 ? 'text-emerald-600' : profit.netProfit >= 5 ? 'text-amber-600' : 'text-red-500';
+                                            return (
+                                                <div className="space-y-1.5 pt-1 border-t border-emerald-100">
+                                                    <div className="flex justify-between text-[9px] text-slate-500">
+                                                        <span>eBay Fee ({settings.ebayFeePercent || 13.25}%)</span>
+                                                        <span>-${profit.ebayFee.toFixed(2)}</span>
+                                                    </div>
+                                                    <div className="flex justify-between text-[9px] text-slate-500">
+                                                        <span>Payment Fee</span>
+                                                        <span>-${profit.paymentFee.toFixed(2)}</span>
+                                                    </div>
+                                                    <div className="flex justify-between text-[9px] text-slate-500">
+                                                        <span>Shipping Cost</span>
+                                                        <span>-${profit.shipping.toFixed(2)}</span>
+                                                    </div>
+                                                    <div className="flex justify-between text-[10px] font-black pt-1 border-t border-emerald-200">
+                                                        <span className={profitColor}>Net Profit</span>
+                                                        <span className={profitColor}>${profit.netProfit.toFixed(2)} ({profit.margin.toFixed(1)}%)</span>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })()}
+                                    </div>
+                                </details>
                                 {l.priceResearch && (
                                     <div className="bg-gradient-to-br from-blue-50 to-slate-50 rounded-2xl p-5 border border-blue-100 mb-6 shadow-sm">
                                         <div className="flex items-end gap-4 mb-3">
@@ -2612,6 +2766,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                 inline={true}
                                 scanPreload={reconPreload}
                                 onScanRequest={() => setShowScanner(true)}
+                                userSettings={settings}
                                 onSendToProcessing={(item) => {
                                     setBarcodeListingData({ title: item.title, image: item.imageUrl, price: item.price ? String(item.price) : '', upc: '' });
                                     setActiveTab('process');
@@ -2662,6 +2817,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     inline={false}
                     scanPreload={reconPreload}
                     onScanRequest={() => setShowScanner(true)}
+                    userSettings={settings}
                     onSendToProcessing={(item) => {
                         setBarcodeListingData({ title: item.title, image: item.imageUrl, price: item.price ? String(item.price) : '', upc: '' });
                         setActiveTab('process');
