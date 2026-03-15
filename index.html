@@ -1272,10 +1272,20 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                     </div>
                                                 )}
                                             </div>
-                                            <button onClick={() => setShowReconScanner(true)}
-                                                className="w-full py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 bg-slate-100 text-slate-600 hover:bg-emerald-50 hover:text-emerald-600 active:scale-95">
-                                                <Icon name="ScanLine" size={12}/> Scan Barcode
-                                            </button>
+                                            <div className="flex gap-2">
+                                                <div className="flex bg-slate-100 rounded-xl p-0.5 shrink-0">
+                                                    {['ebay','amazon'].map(eng => (
+                                                        <button key={eng} onClick={() => setReconDefaultEngine(eng)}
+                                                            className={"px-3 py-2 rounded-[10px] text-[9px] font-black uppercase transition-all " + (reconDefaultEngine === eng ? (eng === 'ebay' ? 'bg-blue-600 text-white shadow-sm' : 'bg-orange-500 text-white shadow-sm') : 'text-slate-400 hover:text-slate-600')}>
+                                                            {eng === 'ebay' ? 'eBay' : 'AMZ'}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                                <button onClick={() => setShowReconScanner(true)}
+                                                    className="flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 bg-slate-100 text-slate-600 hover:bg-emerald-50 hover:text-emerald-600 active:scale-95">
+                                                    <Icon name="ScanLine" size={12}/> Scan Barcode
+                                                </button>
+                                            </div>
                                             {reconScanResults && <ReconScanResultsPanel
                                                 reconScanResults={reconScanResults}
                                                 reconManualTitle={reconManualTitle}
@@ -2861,8 +2871,9 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                             </div>
                         </div>
                         <nav className="flex items-center bg-white rounded-xl shadow-sm p-1 border border-slate-200">
-                            <button onClick={() => setActiveTab('process')} className={`px-6 py-2 rounded-xl text-xs font-black transition-all ${activeTab === 'process' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500'}`}>PROCESSOR</button>
-                            <button onClick={() => setActiveTab('listings')} className={`px-6 py-2 rounded-xl text-xs font-black transition-all ${activeTab === 'listings' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500'}`}>INVENTORY ({listings.length})</button>
+                            <button onClick={() => setActiveTab('process')} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${activeTab === 'process' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500'}`}>PROCESSOR</button>
+                            <button onClick={() => setActiveTab('listings')} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${activeTab === 'listings' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500'}`}>INVENTORY ({listings.length})</button>
+                            <button onClick={() => setActiveTab('settings')} className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${activeTab === 'settings' ? 'bg-slate-800 text-white shadow-lg' : 'text-slate-500'}`}>SETTINGS</button>
                             <button onClick={() => setShowScanner(true)} className="p-2 text-emerald-500 hover:bg-emerald-50 rounded-xl transition-all" title="Scan Barcode"><Icon name="ScanLine" size={20}/></button>
                             <div className="w-[1px] h-6 bg-slate-200 mx-2"></div>
                             <button onClick={logout} className="p-2 text-slate-400 hover:text-red-500 transition-colors" title="Secure Logout"><Icon name="LogOut" size={20}/></button>
