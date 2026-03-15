@@ -1899,7 +1899,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 link.download = `ebay_add_import_${Date.now()}.csv`;
                 link.click();
                 setTimeout(() => URL.revokeObjectURL(blobUrl2), 5000);
-                showToast("CSV Exported (Add  -  Scheduled: " + formatScheduleTimeDisplay(isoScheduleTime) + ")");
+                showToast("✅ Add CSV Exported — Listings scheduled for: " + formatScheduleTimeDisplay(isoScheduleTime));
                 setShowSchedulePicker(false);
             };
 
@@ -2395,7 +2395,17 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                         className="px-5 py-3 bg-slate-700 text-white rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 shadow-md hover:bg-slate-600 transition-all disabled:bg-slate-200 active:scale-95">
                                         <Icon name="FileText" size={13}/> Export Draft
                                     </button>
-                                    <button onClick={() => { if (!scheduleDateTime) { const d = new Date(); d.setDate(d.getDate()+7); d.setSeconds(0,0); setScheduleDateTime(d.toISOString().slice(0,16)); } setShowSchedulePicker(true); }} disabled={listings.length === 0}
+                                    <button onClick={() => {
+                                        const isMobileExport = window.innerWidth < 768;
+                                        if (isMobileExport) {
+                                            // Mobile: skip picker — export immediately with +7 day default
+                                            const d = new Date(); d.setDate(d.getDate()+7); d.setSeconds(0,0);
+                                            exportEbayAddCSV(d.toISOString());
+                                        } else {
+                                            if (!scheduleDateTime) { const d = new Date(); d.setDate(d.getDate()+7); d.setSeconds(0,0); setScheduleDateTime(d.toISOString().slice(0,16)); }
+                                            setShowSchedulePicker(true);
+                                        }
+                                    }} disabled={listings.length === 0}
                                         className="px-5 py-3 bg-blue-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 shadow-md hover:bg-blue-500 transition-all disabled:bg-slate-200 active:scale-95 shadow-blue-100">
                                         <Icon name="CalendarClock" size={13}/> Export Add
                                     </button>
