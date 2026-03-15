@@ -1651,6 +1651,12 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     .catch(e => console.warn('[Settings] Load failed:', e.message));
             }, [user]);
 
+            // Auto-load approved users for owner on login
+            useEffect(() => {
+                if (!user || !dbRef.current) return;
+                if (user.email === OWNER_EMAIL) loadApprovedUsers();
+            }, [user]);
+
             // ── useMemo MUST be here — before ANY conditional returns (Rules of Hooks) ──
             const sortedListings = useMemo(() => [...listings].sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0)), [listings]);
 
