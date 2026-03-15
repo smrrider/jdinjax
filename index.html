@@ -1651,13 +1651,13 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     .catch(e => console.warn('[Settings] Load failed:', e.message));
             }, [user]);
 
-            // Real-time approved users listener — owner only
+            // Load approved users via Admin SDK endpoint (bypasses Firestore rules)
             useEffect(() => {
-                if (!user || !dbRef.current || user.email !== OWNER_EMAIL) return;
-                const unsubscribe = dbRef.current.collection('system/access/approved')
-                    .onSnapshot(snap => setApprovedUsers(snap.docs.map(d => d.id)),
-                                err  => console.warn('[Access] Snapshot error:', err.message));
-                return () => unsubscribe();
+                if (!user || user.email !== OWNER_EMAIL) return;
+                fetch('/api/admin/list-users')
+                    .then(r => r.json())
+                    .then(data => { if (data.users) setApprovedUsers(data.users.map(u => u.email)); })
+                    .catch(e => console.warn('[Access] List failed:', e.message));
             }, [user]);
 
             // ── useMemo MUST be here — before ANY conditional returns (Rules of Hooks) ──
@@ -1738,9 +1738,11 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
 
             // ── Access Management (owner only) ────────────────────────────────
             const loadApprovedUsers = async () => {
-                if (!dbRef.current) return;
-                const snap = await dbRef.current.collection('system/access/approved').get();
-                setApprovedUsers(snap.docs.map(d => d.id));
+                try {
+                    const res  = await fetch('/api/admin/list-users');
+                    const data = await res.json();
+                    if (data.users) setApprovedUsers(data.users.map(u => u.email));
+                } catch(e) { console.warn('[Access] List failed:', e.message); }
             };
             const addApprovedUser = async () => {
                 const email = newUserEmail.trim().toLowerCase();

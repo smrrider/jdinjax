@@ -9,13 +9,15 @@ const admin = require('firebase-admin');
 
 // ─── Firebase Admin SDK init ─────────────────────────────────────────────────
 let adminAuth = null;
+let adminFirestore = null;
 try {
     if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
         const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
         if (!admin.apps.length) {
             admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
         }
-        adminAuth = admin.auth();
+        adminAuth      = admin.auth();
+        adminFirestore = admin.firestore();
         console.log('[eBay Scout] Firebase Admin SDK: Ready');
     } else {
         console.warn('[eBay Scout] FIREBASE_SERVICE_ACCOUNT_JSON not set — admin user creation disabled');
@@ -438,6 +440,19 @@ app.post('/api/gemini', jsonImages, async (req, res) => {
         }
         res.json(data);
     } catch (err) { res.status(502).json({ error: { message: err.message } }); }
+});
+
+// ── Admin: List approved users (bypasses Firestore client rules) ──────────────
+app.get('/api/admin/list-users', async (req, res) => {
+    if (!adminFirestore) return res.status(503).json({ error: 'Firebase Admin SDK not configured.' });
+    try {
+        const snap = await adminFirestore.collection('system/access/approved').get();
+        const users = snap.docs.map(d => ({ email: d.id, ...d.data() }));
+        res.json({ users });
+    } catch(e) {
+        console.error('[Admin] List users failed:', e.message);
+        res.status(500).json({ error: e.message });
+    }
 });
 
 // ── Admin: Disable Firebase Auth user on removal ──────────────────────────────
