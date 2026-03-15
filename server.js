@@ -472,9 +472,9 @@ app.post('/api/admin/remove-user', jsonSmall, async (req, res) => {
     if (!adminAuth) return res.status(503).json({ error: 'Firebase Admin SDK not configured.' });
     try {
         const userRecord = await adminAuth.getUserByEmail(email);
-        await adminAuth.updateUser(userRecord.uid, { disabled: true });
-        console.log(`[Admin] Disabled Firebase Auth user: ${email}`);
-        res.json({ success: true, message: `${email} disabled in Firebase Auth.` });
+        await adminAuth.deleteUser(userRecord.uid);
+        console.log(`[Admin] Deleted Firebase Auth user: ${email}`);
+        res.json({ success: true, message: `${email} permanently deleted from Firebase Auth.` });
     } catch(e) {
         // If user not found in Firebase (e.g. Google SSO only), still succeed silently
         if (e.code === 'auth/user-not-found') return res.json({ success: true, message: 'User not in Firebase Auth (Google SSO) — whitelist removed only.' });
