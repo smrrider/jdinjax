@@ -240,6 +240,33 @@
             return _bgRemovalLib;
         };
 
+        // ── Compress a bg-removed PNG blob → resized WebP (preserves transparency) ─
+        // WebP gives ~80% smaller files vs PNG while keeping the alpha channel.
+        const compressBgRemoved = (blob, maxPx = 1024) => new Promise((resolve, reject) => {
+            const url = URL.createObjectURL(blob);
+            const image = new Image();
+            image.onload = () => {
+                URL.revokeObjectURL(url);
+                let w = image.width, h = image.height;
+                if (w > maxPx || h > maxPx) {
+                    if (w > h) { h = Math.round(h * maxPx / w); w = maxPx; }
+                    else       { w = Math.round(w * maxPx / h); h = maxPx; }
+                }
+                const canvas = document.createElement('canvas');
+                canvas.width = w; canvas.height = h;
+                // Do NOT fill background — preserve alpha channel
+                canvas.getContext('2d').drawImage(image, 0, 0, w, h);
+                canvas.toBlob(resized => {
+                    const reader = new FileReader();
+                    reader.onload = e => resolve({ blob: resized, b64: e.target.result.split(',')[1], mimeType: 'image/webp' });
+                    reader.onerror = reject;
+                    reader.readAsDataURL(resized);
+                }, 'image/webp', 0.88);
+            };
+            image.onerror = () => reject(new Error('Failed to load bg-removed image for compression'));
+            image.src = url;
+        });
+
         // ── Shared image compression utility ─────────────────────────────────────
         const compressImage = (img, maxPx = 1024) => new Promise((resolve, reject) => {
             const image = new Image();
@@ -1883,7 +1910,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     showToast('Removing background…');
                     // removeBackground accepts a URL and returns a transparent PNG Blob
                     const resultBlob = await removeBackground(imageUrl, { output: { format: 'image/png' } });
-                    showToast('Uploading to Cloudinary…');
+                    showToast('Resizing & uploading…');
+                    const { blob: uploadBlob, mimeType: uploadMime } = await compressBgRemoved(resultBlob);
                     // Sign + upload using existing pattern
                     const timestamp = Math.round(Date.now() / 1000);
                     const signRes = await fetch(SIGN_API_URL, {
@@ -1892,7 +1920,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     });
                     const { signature, folder } = await signRes.json();
                     const fd = new FormData();
-                    fd.append('file', resultBlob, 'bg-removed.png');
+                    fd.append('file', uploadBlob, 'bg-removed.webp');
                     fd.append('api_key', CLOUDINARY_CONFIG.apiKey);
                     fd.append('timestamp', timestamp);
                     fd.append('signature', signature);
@@ -2148,13 +2176,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         // Compress all images in this batch in parallel
                         const compressed = await Promise.all(processedBatch.map(img =>
                             img._bgBlob
-                                // BG-removed PNG: read b64 directly (preserves transparency for Cloudinary)
-                                ? new Promise((res, rej) => {
-                                    const reader = new FileReader();
-                                    reader.onload = e => res({ blob: img._bgBlob, b64: e.target.result.split(',')[1], mimeType: 'image/png' });
-                                    reader.onerror = rej;
-                                    reader.readAsDataURL(img._bgBlob);
-                                  })
+                                // BG-removed: resize to 1024px + convert to WebP (transparency + ~80% size reduction vs PNG)
+                                ? compressBgRemoved(img._bgBlob)
                                 : compressImage(img)
                         ));
                         const primaryB64 = { data: compressed[0].b64, mimeType: compressed[0].mimeType };
