@@ -74,8 +74,12 @@
          the dynamic import() natively — Babel (text/babel) transforms import()
          into require() which doesn't exist in the browser, causing the error. -->
     <script type="module">
+        // esm.sh does a full CJS→ESM conversion of the entire dependency tree.
+        // The bare jsDelivr package URL serves the CJS main entry which the
+        // browser cannot import as ESM — hence "Failed to fetch dynamically
+        // imported module". esm.sh resolves that.
         window._loadBgRemoval = () =>
-            import('https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.4.5');
+            import('https://esm.sh/@imgly/background-removal@1.4.5');
     </script>
 
     <script>
