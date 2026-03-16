@@ -211,6 +211,15 @@
             required: ["title", "buyItNowPrice", "categoryId", "categoryPath", "weightItem", "dimensions"]
         };
 
+        // ── Background removal — lazy CDN ESM loader (shared, cached per session) ─
+        let _bgRemovalLib = null;
+        const getBgRemovalLib = async () => {
+            if (!_bgRemovalLib) {
+                _bgRemovalLib = await import('https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.4.5/+esm');
+            }
+            return _bgRemovalLib;
+        };
+
         // ── Shared image compression utility ─────────────────────────────────────
         const compressImage = (img, maxPx = 1024) => new Promise((resolve, reject) => {
             const image = new Image();
@@ -1555,6 +1564,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const [status, setStatus] = useState("");
             const [processMode, setProcessMode] = useState('bulk');
             const [batchCondition, setBatchCondition] = useState('1000');
+            const [removeBgOnProcess, setRemoveBgOnProcess] = useState(false);
             const [errorMsg, setErrorMsg] = useState(null);
             const [toast, setToast] = useState(null); // { msg, type }
             const [editingCategoryId, setEditingCategoryId] = useState(null);
@@ -1798,6 +1808,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const [purgePreview,    setPurgePreview]    = useState(null); // { previewCount, previewBytes }
             const [purgeResult,     setPurgeResult]     = useState(null); // { deleted, freedBytes }
             const [purgeLoading,    setPurgeLoading]    = useState(false);
+            const [bgRemoving,      setBgRemoving]      = useState(new Set()); // listing IDs currently processing bg removal
 
             const cloudinaryPreview = async () => {
                 setPurgeLoading(true); setPurgePreview(null); setPurgeResult(null);
@@ -1818,6 +1829,46 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     if (d.error) { showToast(d.error, 'error'); } else { setPurgeResult(d); showToast(`Purge complete — ${d.deleted} images removed`, 'success'); }
                 } catch(e) { showToast('Purge failed: ' + e.message, 'error'); }
                 setPurgeLoading(false);
+            };
+
+            // ── Background Removal (client-side, @imgly/background-removal) ─────────
+            const removeBg = async (listingId, imageUrl) => {
+                if (bgRemoving.has(listingId)) return;
+                setBgRemoving(prev => new Set([...prev, listingId]));
+                try {
+                    showToast('Loading BG removal model…');
+                    const { removeBackground } = await getBgRemovalLib();
+                    showToast('Removing background…');
+                    // removeBackground accepts a URL and returns a transparent PNG Blob
+                    const resultBlob = await removeBackground(imageUrl, { output: { format: 'image/png' } });
+                    showToast('Uploading to Cloudinary…');
+                    // Sign + upload using existing pattern
+                    const timestamp = Math.round(Date.now() / 1000);
+                    const signRes = await fetch(SIGN_API_URL, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ userId: user.uid, timestamp })
+                    });
+                    const { signature, folder } = await signRes.json();
+                    const fd = new FormData();
+                    fd.append('file', resultBlob, 'bg-removed.png');
+                    fd.append('api_key', CLOUDINARY_CONFIG.apiKey);
+                    fd.append('timestamp', timestamp);
+                    fd.append('signature', signature);
+                    fd.append('folder', folder);
+                    const upRes = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CONFIG.cloudName}/image/upload`, { method: 'POST', body: fd });
+                    const upData = await upRes.json();
+                    if (!upData.secure_url) throw new Error(upData.error?.message || 'Upload failed');
+                    // Patch Firestore: replace images[0] with the new transparent PNG URL
+                    const listing = listings.find(l => l.id === listingId);
+                    const updatedImages = listing?.images ? [upData.secure_url, ...listing.images.slice(1)] : [upData.secure_url];
+                    await dbRef.current.doc(`${getListingsPath(user.uid)}/${listingId}`).update({ images: updatedImages });
+                    showToast('Background removed!', 'success');
+                } catch(e) {
+                    console.error('[BG Removal]', e);
+                    showToast('BG removal failed: ' + e.message, 'error');
+                } finally {
+                    setBgRemoving(prev => { const s = new Set(prev); s.delete(listingId); return s; });
+                }
             };
 
             const createEmailUser = async () => {
@@ -2034,9 +2085,37 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 setStatus(`Processing 0/${total}...`);
                 try {
                     const listingsPath = getListingsPath(user.uid);
+                    // If BG removal is enabled, load the library once before parallel processing
+                    let bgRemovalFn = null;
+                    if (removeBgOnProcess) {
+                        setStatus('Loading BG removal model…');
+                        const lib = await getBgRemovalLib();
+                        bgRemovalFn = lib.removeBackground;
+                        setStatus(`Processing 0/${total}…`);
+                    }
+
                     await Promise.all(batches.map(async (batch, i) => {
+                        // Optionally strip backgrounds before compress+upload
+                        const processedBatch = bgRemovalFn
+                            ? await Promise.all(batch.map(async img => {
+                                const bgBlob = await bgRemovalFn(img.url, { output: { format: 'image/png' } });
+                                const bgUrl  = URL.createObjectURL(bgBlob);
+                                return { ...img, url: bgUrl, _bgBlob: bgBlob };
+                              }))
+                            : batch;
+
                         // Compress all images in this batch in parallel
-                        const compressed = await Promise.all(batch.map(img => compressImage(img)));
+                        const compressed = await Promise.all(processedBatch.map(img =>
+                            img._bgBlob
+                                // BG-removed PNG: read b64 directly (preserves transparency for Cloudinary)
+                                ? new Promise((res, rej) => {
+                                    const reader = new FileReader();
+                                    reader.onload = e => res({ blob: img._bgBlob, b64: e.target.result.split(',')[1], mimeType: 'image/png' });
+                                    reader.onerror = rej;
+                                    reader.readAsDataURL(img._bgBlob);
+                                  })
+                                : compressImage(img)
+                        ));
                         const primaryB64 = { data: compressed[0].b64, mimeType: compressed[0].mimeType };
 
                         // Single sign-upload call for the whole batch — all images share timestamp+signature
@@ -2656,6 +2735,14 @@ www.ebay-scout.com`
                             <span className="text-[9px] font-black uppercase text-slate-400">Batch Condition</span>
                             <select value={batchCondition} onChange={(e) => setBatchCondition(e.target.value)} className="bg-transparent text-[10px] font-black uppercase text-blue-600 focus:outline-none">{EBAY_CONDITIONS_STANDARD.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select>
                         </div>
+                        <button
+                            onClick={() => setRemoveBgOnProcess(v => !v)}
+                            title="Strip backgrounds before upload — saves Cloudinary storage"
+                            className={`flex items-center gap-2 px-4 py-2 rounded-2xl border text-[9px] font-black uppercase tracking-widest transition-all shadow-sm ${removeBgOnProcess ? 'bg-purple-600 text-white border-purple-600 shadow-purple-100' : 'bg-white text-slate-500 border-slate-200 hover:border-purple-300 hover:text-purple-500'}`}>
+                            <Icon name="Scissors" size={11}/>
+                            Remove BG
+                            <span className={`w-1.5 h-1.5 rounded-full ${removeBgOnProcess ? 'bg-white' : 'bg-slate-300'}`}/>
+                        </button>
                         <button onClick={nuclearReset} className="px-5 py-2 bg-red-50 text-red-600 rounded-xl text-[9px] font-black border border-red-100 uppercase transition-all hover:bg-red-100 flex items-center gap-2 shadow-sm"><Icon name="Zap" size={12}/> Purge</button>
                     </div>
                     <div className="bg-white border-2 border-dashed border-slate-300 rounded-[2.5rem] p-12 text-center relative group hover:border-blue-400 transition-all shadow-sm">
@@ -2721,6 +2808,18 @@ www.ebay-scout.com`
                             <div className="md:w-72 h-72 md:h-auto shrink-0 bg-slate-50 border-r border-slate-100 relative group">
                                 <img src={l.images?.[0]} className="w-full h-full object-cover" />
                                 <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-md text-white text-[9px] font-black px-3 py-1 rounded-full uppercase tracking-widest">{l.images?.length || 0} Assets</div>
+                                {l.images?.[0] && (
+                                    <button
+                                        onClick={() => removeBg(l.id, l.images[0])}
+                                        disabled={bgRemoving.has(l.id)}
+                                        className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity bg-white/90 backdrop-blur-sm text-slate-700 hover:text-purple-600 hover:bg-white border border-slate-200 hover:border-purple-300 rounded-full px-3 py-1.5 text-[9px] font-black uppercase tracking-widest flex items-center gap-1.5 shadow-md disabled:opacity-60 disabled:cursor-wait active:scale-95"
+                                        title="Remove background (client-side AI, free)">
+                                        {bgRemoving.has(l.id)
+                                            ? <><Icon name="Loader2" size={10} className="animate-spin"/> Processing…</>
+                                            : <><Icon name="Scissors" size={10}/> Remove BG</>
+                                        }
+                                    </button>
+                                )}
                             </div>
                             <div className="p-8 flex-grow">
                                 <div className="flex justify-between items-start mb-4">
