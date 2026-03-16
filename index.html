@@ -1787,6 +1787,31 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const removeApprovedUser = (email) => userAction(email, 'disable');
 
             const [inviteLink, setInviteLink] = useState(null); // { email, link }
+            const [purgeDays,       setPurgeDays]       = useState(30);
+            const [purgePreview,    setPurgePreview]    = useState(null); // { previewCount, previewBytes }
+            const [purgeResult,     setPurgeResult]     = useState(null); // { deleted, freedBytes }
+            const [purgeLoading,    setPurgeLoading]    = useState(false);
+
+            const cloudinaryPreview = async () => {
+                setPurgeLoading(true); setPurgePreview(null); setPurgeResult(null);
+                try {
+                    const r = await fetch('/api/admin/cloudinary-purge', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ olderThanDays: purgeDays, preview: true }) });
+                    const d = await r.json();
+                    if (d.error) { showToast(d.error, 'error'); } else { setPurgePreview(d); }
+                } catch(e) { showToast('Preview failed: ' + e.message, 'error'); }
+                setPurgeLoading(false);
+            };
+
+            const cloudinaryPurge = async () => {
+                if (!window.confirm(`Permanently delete all Cloudinary images older than ${purgeDays} days? This cannot be undone.`)) return;
+                setPurgeLoading(true); setPurgePreview(null); setPurgeResult(null);
+                try {
+                    const r = await fetch('/api/admin/cloudinary-purge', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ olderThanDays: purgeDays, preview: false }) });
+                    const d = await r.json();
+                    if (d.error) { showToast(d.error, 'error'); } else { setPurgeResult(d); showToast(`Purge complete — ${d.deleted} images removed`, 'success'); }
+                } catch(e) { showToast('Purge failed: ' + e.message, 'error'); }
+                setPurgeLoading(false);
+            };
 
             const createEmailUser = async () => {
                 const emailVal = newUserEmail.trim().toLowerCase();
@@ -2520,6 +2545,56 @@ www.ebay-scout.com`
                                         ))}
                                     </ul>
                                 }
+                            </div>
+                        </div>
+                    )}
+
+                    {/* ── Owner-only: Cloudinary Storage ───────────────────── */}
+                    {user && user.email === OWNER_EMAIL && (
+                        <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden">
+                            <div className="px-8 py-5 border-b border-slate-100 flex items-center gap-3">
+                                <Icon name="HardDrive" size={16} className="text-orange-500"/>
+                                <div>
+                                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Admin</p>
+                                    <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight">Cloudinary Storage</h3>
+                                </div>
+                            </div>
+                            <div className="p-8 space-y-4">
+                                <p className="text-xs text-slate-500 leading-relaxed">Purge images from all <code className="bg-slate-100 px-1 rounded text-[10px]">jdinjax/</code> subfolders older than the selected threshold. Images are on eBay's servers after posting — safe to clear.</p>
+                                <div className="flex items-center gap-3 flex-wrap">
+                                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Older than</label>
+                                    <select value={purgeDays} onChange={e => { setPurgeDays(Number(e.target.value)); setPurgePreview(null); setPurgeResult(null); }}
+                                        className="px-4 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 bg-slate-50 focus:outline-none focus:border-orange-400">
+                                        <option value={7}>7 days</option>
+                                        <option value={14}>14 days</option>
+                                        <option value={30}>30 days</option>
+                                        <option value={60}>60 days</option>
+                                    </select>
+                                    <button onClick={cloudinaryPreview} disabled={purgeLoading}
+                                        className="px-5 py-2 bg-slate-200 text-slate-700 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-300 active:scale-95 transition-all disabled:opacity-50 flex items-center gap-1.5">
+                                        <Icon name="Search" size={11}/> Preview
+                                    </button>
+                                    <button onClick={cloudinaryPurge} disabled={purgeLoading}
+                                        className="px-5 py-2 bg-orange-500 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-orange-400 active:scale-95 transition-all disabled:opacity-50 flex items-center gap-1.5">
+                                        {purgeLoading ? <><Icon name="Loader2" size={11} className="animate-spin"/> Working...</> : <><Icon name="Trash2" size={11}/> Purge</>}
+                                    </button>
+                                </div>
+                                {purgePreview && (
+                                    <div className="bg-orange-50 border border-orange-200 rounded-2xl px-5 py-3 flex items-center gap-3">
+                                        <Icon name="AlertTriangle" size={14} className="text-orange-500 shrink-0"/>
+                                        <p className="text-xs font-bold text-orange-700">
+                                            Preview: <strong>{purgePreview.previewCount}</strong> images ({(purgePreview.previewBytes / 1024 / 1024).toFixed(1)} MB) would be deleted. Hit Purge to confirm.
+                                        </p>
+                                    </div>
+                                )}
+                                {purgeResult && (
+                                    <div className="bg-emerald-50 border border-emerald-200 rounded-2xl px-5 py-3 flex items-center gap-3">
+                                        <Icon name="CheckCircle" size={14} className="text-emerald-500 shrink-0"/>
+                                        <p className="text-xs font-bold text-emerald-700">
+                                            Done — <strong>{purgeResult.deleted}</strong> images removed, {(purgeResult.freedBytes / 1024 / 1024).toFixed(1)} MB freed.
+                                        </p>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     )}

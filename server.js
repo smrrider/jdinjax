@@ -508,6 +508,65 @@ app.post('/api/admin/create-user', jsonSmall, async (req, res) => {
     }
 });
 
+// ── Admin: Cloudinary storage purge ───────────────────────────────────────
+// Lists all resources under jdinjax/ prefix, filters by age, deletes in batches.
+// Body: { olderThanDays: number, preview: boolean }
+// Returns: { deleted, freedBytes, previewCount, previewBytes }
+app.post('/api/admin/cloudinary-purge', jsonSmall, async (req, res) => {
+    const cloudName  = process.env.CLOUDINARY_CLOUD_NAME;
+    const apiKey     = process.env.CLOUDINARY_API_KEY;
+    const apiSecret  = process.env.CLOUDINARY_API_SECRET;
+    if (!cloudName || !apiKey || !apiSecret)
+        return res.status(503).json({ error: 'Cloudinary credentials not configured.' });
+
+    const { olderThanDays = 30, preview = false } = req.body;
+    const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000);
+    const auth   = Buffer.from(`${apiKey}:${apiSecret}`).toString('base64');
+    const baseUrl = `https://api.cloudinary.com/v1_1/${cloudName}`;
+
+    // Paginate through all resources under jdinjax/
+    const toDelete = [];
+    let nextCursor = null;
+    do {
+        const params = new URLSearchParams({ prefix: 'jdinjax/', max_results: '500', resource_type: 'image' });
+        if (nextCursor) params.set('next_cursor', nextCursor);
+        const listRes  = await fetch(`${baseUrl}/resources/image/upload?${params}`, {
+            headers: { Authorization: `Basic ${auth}` }
+        });
+        const listData = await listRes.json();
+        if (!listRes.ok) return res.status(502).json({ error: listData.error?.message || 'Cloudinary list failed' });
+        for (const r of (listData.resources || [])) {
+            if (new Date(r.created_at) < cutoff) toDelete.push({ public_id: r.public_id, bytes: r.bytes });
+        }
+        nextCursor = listData.next_cursor || null;
+    } while (nextCursor);
+
+    const totalBytes = toDelete.reduce((s, r) => s + r.bytes, 0);
+
+    if (preview) {
+        return res.json({ previewCount: toDelete.length, previewBytes: totalBytes });
+    }
+
+    // Delete in batches of 100 (Cloudinary API limit)
+    let deleted = 0, freedBytes = 0;
+    for (let i = 0; i < toDelete.length; i += 100) {
+        const batch      = toDelete.slice(i, i + 100);
+        const publicIds  = batch.map(r => r.public_id);
+        const params     = new URLSearchParams();
+        publicIds.forEach(id => params.append('public_ids[]', id));
+        const delRes = await fetch(`${baseUrl}/resources/image/upload?${params}`, {
+            method: 'DELETE',
+            headers: { Authorization: `Basic ${auth}` }
+        });
+        const delData = await delRes.json();
+        const deletedCount = Object.keys(delData.deleted || {}).length;
+        deleted    += deletedCount;
+        freedBytes += batch.slice(0, deletedCount).reduce((s, r) => s + r.bytes, 0);
+    }
+    console.log(`[Admin] Cloudinary purge: deleted ${deleted} images (${(freedBytes/1024/1024).toFixed(1)} MB), threshold ${olderThanDays}d`);
+    res.json({ deleted, freedBytes });
+});
+
 // ── SPA catch-all — serves index.html for any non-API route ──────────────
 // Must be registered AFTER all API routes so /api/* are not intercepted
 app.get('*', (req, res) => {
