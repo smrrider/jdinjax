@@ -198,7 +198,7 @@
             return '1000'; // universal safe fallback — exists in all eBay condition schemas
         };
 
-        const JDINJAX_SYSTEM_PROMPT = "Role: eBay Listing Pro for Black Knight Armament. Identify the item in the photos. Title STRICT MAX 80 CHARS. Prices should end in .95. Calculate initial price assuming NEW/Excellent condition. For categoryId and categoryPath: be as specific as possible  -  use the deepest applicable eBay leaf category. For firearms accessories use categories like 73944 (Scopes, Sights & Optics), 73943 (Grips, Forends & Stocks), 73938 (Magazines), 177891 (Cleaning Equipment), 73949 (Slings & Swivels). For ammunition use category 26460 (Ammunition) and always populate ammunitionType (e.g. Centerfire, Rimfire, Shotgun Shell, Airsoft BB). For general items use the most precise leaf node. Format response as JSON strictly.";
+        const JDINJAX_SYSTEM_PROMPT = "Role: eBay Listing Pro for Black Knight Armament. Identify the item in the photos. Title STRICT MAX 80 CHARS. Prices should end in .95. Calculate initial price assuming NEW/Excellent condition. For categoryId and categoryPath: be as specific as possible  -  use the deepest applicable eBay leaf category. For firearms accessories use categories like 73944 (Scopes, Sights & Optics), 73943 (Grips, Forends & Stocks), 73938 (Magazines), 177891 (Cleaning Equipment), 73949 (Slings & Swivels). For ammunition use category 26460 (Ammunition) and always populate ammunitionType (e.g. Centerfire, Rimfire, Shotgun Shell, Airsoft BB). For general items use the most precise leaf node. For model: populate with the specific product model name or number when the item has one (electronics, appliances, tools, optics, smart home devices, sporting goods, toys, etc. — e.g. 'Hub Mini', 'Echo Dot 5th Gen', 'Glock 17'). Leave model as an empty string for items that do not have a meaningful model identifier (clothing, shoes, fabric, generic accessories, consumables). Format response as JSON strictly.";
 
 
 
@@ -218,6 +218,7 @@
                 dimensions:          { type: "STRING" },
                 brand:               { type: "STRING" },
                 itemType:            { type: "STRING" },
+                model:               { type: "STRING" },
                 markdownDescription: { type: "STRING" },
                 ammunitionType:      { type: "STRING" }
             },
@@ -1994,7 +1995,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     "StoreName",
                     "Location",
                     "PostalCode",
-                    "C:Ammunition Type"
+                    "C:Ammunition Type",
+                    "C:Model"
                 ];
 
                 const rows = listings.map(l => {
@@ -2023,7 +2025,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         `"${(settings.storeName       || "").replace(/"/g, '""')}"`,  // StoreName
                         settings.location   ? `"${settings.location}"`   : "",  // Location
                         settings.postalCode ? `"${settings.postalCode}"` : "",  // PostalCode
-                        `"${(l.ammunitionType || "Other").replace(/"/g, '""')}"`     // C:Ammunition Type
+                        `"${(l.ammunitionType || "Other").replace(/"/g, '""')}"`,    // C:Ammunition Type
+                        `"${(l.model          || "").replace(/"/g, '""')}"`           // C:Model
                     ];
                 });
 
@@ -2082,6 +2085,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     "C:Brand",
                     "C:Type",
                     "C:Ammunition Type",
+                    "C:Model",
                     "ScheduleTime",
                     "ShippingProfileName",
                     "PaymentProfileName",
@@ -2112,6 +2116,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         `"${(l.brand          || "").replace(/"/g, '""')}"`,
                         `"${(l.itemType       || "").replace(/"/g, '""')}"`,
                         `"${(l.ammunitionType || "Other").replace(/"/g, '""')}"`,
+                        `"${(l.model          || "").replace(/"/g, '""')}"`,
                         `"${schedStr}"`,   // quoted  -  contains spaces
                         `"${(settings.shippingProfile || "").replace(/"/g, '""')}"`,
                         `"${(settings.paymentProfile  || "").replace(/"/g, '""')}"`,
