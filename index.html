@@ -69,6 +69,15 @@
 </head>
 <body class="bg-slate-100 text-slate-900">
     <div id="root"></div>
+
+    <!-- BG removal loader lives in a real module script so the browser handles
+         the dynamic import() natively — Babel (text/babel) transforms import()
+         into require() which doesn't exist in the browser, causing the error. -->
+    <script type="module">
+        window._loadBgRemoval = () =>
+            import('https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.4.5');
+    </script>
+
     <script>
     window._loadErrors = [];
     window.onerror = function(msg, src, line, col, err) {
@@ -219,7 +228,10 @@
         let _bgRemovalLib = null;
         const getBgRemovalLib = async () => {
             if (!_bgRemovalLib) {
-                _bgRemovalLib = await import('https://esm.sh/@imgly/background-removal@1.4.5');
+                // Use the module-script loader — Babel transforms import() into require()
+                // which doesn't exist in the browser; the module script bypasses Babel.
+                if (!window._loadBgRemoval) throw new Error('BG removal loader not initialised — reload the page.');
+                _bgRemovalLib = await window._loadBgRemoval();
             }
             return _bgRemovalLib;
         };
