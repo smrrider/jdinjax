@@ -227,8 +227,8 @@
         // ── Background removal — lazy CDN ESM loader (shared, cached per session) ─
         // esm.sh performs a full CJS→ESM conversion of the entire dependency tree,
         // fixing the "require is not defined" error from jsDelivr's surface-level transform.
-        // publicPath tells the library where to fetch its WASM/ONNX model files from.
-        const BG_REMOVAL_PUBLIC_PATH = 'https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.4.5/dist/';
+        // No publicPath override — the library resolves model files from its own
+        // built-in CDN default (overriding it with jsDelivr caused "models/medium not found").
         let _bgRemovalLib = null;
         const getBgRemovalLib = async () => {
             if (!_bgRemovalLib) {
@@ -1882,7 +1882,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     const { removeBackground } = await getBgRemovalLib();
                     showToast('Removing background…');
                     // removeBackground accepts a URL and returns a transparent PNG Blob
-                    const resultBlob = await removeBackground(imageUrl, { publicPath: BG_REMOVAL_PUBLIC_PATH, output: { format: 'image/png' } });
+                    const resultBlob = await removeBackground(imageUrl, { output: { format: 'image/png' } });
                     showToast('Uploading to Cloudinary…');
                     // Sign + upload using existing pattern
                     const timestamp = Math.round(Date.now() / 1000);
@@ -2140,7 +2140,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         // Optionally strip backgrounds before compress+upload
                         const processedBatch = bgRemovalFn
                             ? await Promise.all(batch.map(async img => {
-                                const bgBlob = await bgRemovalFn(img.url, { publicPath: BG_REMOVAL_PUBLIC_PATH, output: { format: 'image/png' } });
+                                const bgBlob = await bgRemovalFn(img.url, { output: { format: 'image/png' } });
                                 return { ...img, _bgBlob: bgBlob };
                               }))
                             : batch;
