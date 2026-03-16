@@ -1664,10 +1664,11 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             // Load approved users via Admin SDK endpoint (bypasses Firestore rules)
             useEffect(() => {
                 if (!user || user.email !== OWNER_EMAIL) return;
-                fetch('/api/admin/list-users')
+                user.getIdToken().then(idToken =>
+                    fetch('/api/admin/list-users', { headers: { 'Authorization': `Bearer ${idToken}` } })
                     .then(r => r.json())
                     .then(data => { if (data.users) setApprovedUsers(data.users); })
-                    .catch(e => console.warn('[Access] List failed:', e.message));
+                    .catch(e => console.warn('[Access] List failed:', e.message)));
             }, [user]);
 
             // ── useMemo MUST be here — before ANY conditional returns (Rules of Hooks) ──
@@ -1746,10 +1747,16 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 finally { setSettingsSaving(false); }
             };
 
+            // ── Admin fetch helper — attaches owner ID token to every admin API call ──
+            const adminFetch = async (url, opts = {}) => {
+                const idToken = await user.getIdToken();
+                return fetch(url, { ...opts, headers: { ...(opts.headers || {}), 'Authorization': `Bearer ${idToken}` } });
+            };
+
             // ── Access Management (owner only) ────────────────────────────────
             const loadApprovedUsers = async () => {
                 try {
-                    const res  = await fetch('/api/admin/list-users');
+                    const res  = await adminFetch('/api/admin/list-users');
                     const data = await res.json();
                     if (data.users) setApprovedUsers(data.users);
                 } catch(e) { console.warn('[Access] List failed:', e.message); }
@@ -1765,7 +1772,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             };
             const userAction = async (email, action) => {
                 try {
-                    await fetch('/api/admin/update-user', {
+                    await adminFetch('/api/admin/update-user', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ email, action })
@@ -1795,7 +1802,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const cloudinaryPreview = async () => {
                 setPurgeLoading(true); setPurgePreview(null); setPurgeResult(null);
                 try {
-                    const r = await fetch('/api/admin/cloudinary-purge', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ olderThanDays: purgeDays, preview: true }) });
+                    const r = await adminFetch('/api/admin/cloudinary-purge', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ olderThanDays: purgeDays, preview: true }) });
                     const d = await r.json();
                     if (d.error) { showToast(d.error, 'error'); } else { setPurgePreview(d); }
                 } catch(e) { showToast('Preview failed: ' + e.message, 'error'); }
@@ -1806,7 +1813,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 if (!window.confirm(`Permanently delete all Cloudinary images older than ${purgeDays} days? This cannot be undone.`)) return;
                 setPurgeLoading(true); setPurgePreview(null); setPurgeResult(null);
                 try {
-                    const r = await fetch('/api/admin/cloudinary-purge', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ olderThanDays: purgeDays, preview: false }) });
+                    const r = await adminFetch('/api/admin/cloudinary-purge', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ olderThanDays: purgeDays, preview: false }) });
                     const d = await r.json();
                     if (d.error) { showToast(d.error, 'error'); } else { setPurgeResult(d); showToast(`Purge complete — ${d.deleted} images removed`, 'success'); }
                 } catch(e) { showToast('Purge failed: ' + e.message, 'error'); }
@@ -1819,7 +1826,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 setUserMgmtMsg('Creating user...');
                 setInviteLink(null);
                 try {
-                    const res = await fetch('/api/admin/create-user', {
+                    const res = await adminFetch('/api/admin/create-user', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ email: emailVal, requestedBy: user.email })
@@ -2042,7 +2049,9 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         const { signature, folder } = await signRes.json();
 
                         // Fire Cloudinary uploads + Gemini in parallel
+                        const MAX_UPLOAD_BYTES = 15 * 1024 * 1024; // 15 MB hard cap
                         const uploadPromise = Promise.allSettled(compressed.map(async (comp) => {
+                            if (comp.blob.size > MAX_UPLOAD_BYTES) throw new Error(`Image exceeds 15 MB limit (${(comp.blob.size/1024/1024).toFixed(1)} MB)`);
                             const fd = new FormData();
                             fd.append("file", comp.blob);
                             fd.append("api_key", CLOUDINARY_CONFIG.apiKey);

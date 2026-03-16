@@ -5,7 +5,8 @@
  */
 
 require('dotenv').config();
-const admin = require('firebase-admin');
+const admin     = require('firebase-admin');
+const rateLimit = require('express-rate-limit');
 
 // ─── Firebase Admin SDK init ─────────────────────────────────────────────────
 let adminAuth = null;
@@ -33,7 +34,10 @@ const crypto  = require('crypto');
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
-const APP_VERSION = "5.6.0";
+const APP_VERSION = "5.7.0";
+
+// Owner email — drives server-side admin gate
+const OWNER_EMAIL = process.env.OWNER_EMAIL || 'thedeboks@gmail.com';
 
 // ─── CATEGORY RESOLUTION ENGINE ─────────────────────────────────────────
 
@@ -109,13 +113,41 @@ app.use(cors({
         callback(new Error('CORS: origin not allowed'));
     },
     methods: ['GET', 'POST'],
-    allowedHeaders: ['Content-Type']
+    allowedHeaders: ['Content-Type', 'Authorization']
 }));
 app.use(express.static(path.join(__dirname)));
 
 // Route-specific body parsers — tighter limits where images aren't needed
 const jsonSmall  = express.json({ limit: '64kb'  });   // text-only routes
 const jsonImages = express.json({ limit: '50mb'  });   // Gemini image proxy
+
+// ─── Rate limiters ────────────────────────────────────────────────────────────
+// Standard: 60 req/min per IP — category, barcode, image proxy
+const stdLimiter = rateLimit({ windowMs: 60_000, max: 60, standardHeaders: true, legacyHeaders: false,
+    message: { error: 'Too many requests — slow down.' } });
+// Heavy: 20 req/min per IP — Gemini (expensive + quota-sensitive)
+const heavyLimiter = rateLimit({ windowMs: 60_000, max: 20, standardHeaders: true, legacyHeaders: false,
+    message: { error: 'Gemini rate limit reached — wait a moment.' } });
+
+// ─── Admin auth gate — server-side owner verification ────────────────────────
+// Verifies Firebase ID token from Authorization: Bearer <token> header.
+// Returns 401 if missing/invalid, 403 if not owner, 503 if Admin SDK offline.
+const requireOwner = async (req, res, next) => {
+    if (!adminAuth) return res.status(503).json({ error: 'Admin SDK not configured. Add FIREBASE_SERVICE_ACCOUNT_JSON to Railway env vars.' });
+    const header  = req.headers['authorization'] || '';
+    const idToken = header.startsWith('Bearer ') ? header.slice(7) : null;
+    if (!idToken) return res.status(401).json({ error: 'Authorization header required.' });
+    try {
+        const decoded = await adminAuth.verifyIdToken(idToken);
+        if (decoded.email !== OWNER_EMAIL) {
+            console.warn(`[Admin] Unauthorized attempt by ${decoded.email}`);
+            return res.status(403).json({ error: 'Owner access required.' });
+        }
+        next();
+    } catch(e) {
+        return res.status(401).json({ error: 'Invalid or expired token.' });
+    }
+};
 
 // ─── API Routes ───────────────────────────────────────────────────────────
 
@@ -251,7 +283,7 @@ const resolveViaGeminiOnly = async (title, keyFeatures, description) => {
 // In-flight request deduplication — bulk batches with similar titles share one API call
 const _inflightCategoryReqs = new Map();
 
-app.post("/api/category-resolve", jsonSmall, async (req, res) => {
+app.post("/api/category-resolve", stdLimiter, jsonSmall, async (req, res) => {
     const { title, keyFeatures = [], description = "" } = req.body;
     if (!title) return res.status(400).json({ error: "Title required." });
 
@@ -305,7 +337,7 @@ app.post("/api/category-resolve", jsonSmall, async (req, res) => {
  * GEMINI PROXY
  */
 // ── Barcode Search ────────────────────────────────────────────────────────────
-app.post('/api/barcode-search', jsonSmall, async (req, res) => {
+app.post('/api/barcode-search', stdLimiter, jsonSmall, async (req, res) => {
     const { upc, engine = 'ebay' } = req.body;
     if (!upc) return res.status(400).json({ error: 'UPC required' });
     try {
@@ -355,7 +387,7 @@ app.post('/api/barcode-search', jsonSmall, async (req, res) => {
 });
 
 // ── Image Proxy (for barcode listing — fetch external image → b64 + Cloudinary) ─
-app.post('/api/proxy-image', jsonSmall, async (req, res) => {
+app.post('/api/proxy-image', stdLimiter, jsonSmall, async (req, res) => {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL required' });
     // SSRF guard — only fetch from known image CDNs
@@ -416,7 +448,7 @@ app.post('/api/proxy-image', jsonSmall, async (req, res) => {
 });
 
 // ── Gemini Proxy ──────────────────────────────────────────────────────────────
-app.post('/api/gemini', jsonImages, async (req, res) => {
+app.post('/api/gemini', heavyLimiter, jsonImages, async (req, res) => {
     const { model = 'gemini-2.5-flash', ...payload } = req.body;
     // Model allowlist — prevent injection of arbitrary model strings into the API URL
     if (!ALLOWED_GEMINI_MODELS.has(model)) {
@@ -443,7 +475,7 @@ app.post('/api/gemini', jsonImages, async (req, res) => {
 });
 
 // ── Admin: List all Firebase Auth users + whitelist status ────────────────────
-app.get('/api/admin/list-users', async (req, res) => {
+app.get('/api/admin/list-users', requireOwner, async (req, res) => {
     if (!adminAuth || !adminFirestore) return res.status(503).json({ error: 'Firebase Admin SDK not configured.' });
     try {
         // Get all Firebase Auth users
@@ -466,7 +498,7 @@ app.get('/api/admin/list-users', async (req, res) => {
 });
 
 // ── Admin: Enable / Disable / Delete Firebase Auth user ───────────────────────
-app.post('/api/admin/update-user', jsonSmall, async (req, res) => {
+app.post('/api/admin/update-user', requireOwner, jsonSmall, async (req, res) => {
     const { email, action } = req.body; // action: 'enable' | 'disable' | 'delete'
     if (!email || !action) return res.status(400).json({ error: 'Email and action required' });
     if (!adminAuth) return res.status(503).json({ error: 'Firebase Admin SDK not configured.' });
@@ -488,7 +520,7 @@ app.post('/api/admin/update-user', jsonSmall, async (req, res) => {
 });
 
 // ── Admin: Create email/password user ─────────────────────────────────────────
-app.post('/api/admin/create-user', jsonSmall, async (req, res) => {
+app.post('/api/admin/create-user', requireOwner, jsonSmall, async (req, res) => {
     const { email, requestedBy } = req.body;
     if (!email) return res.status(400).json({ error: 'Email required' });
     if (!adminAuth) return res.status(503).json({ error: 'Firebase Admin SDK not configured. Add FIREBASE_SERVICE_ACCOUNT_JSON to Railway env vars.' });
@@ -512,7 +544,7 @@ app.post('/api/admin/create-user', jsonSmall, async (req, res) => {
 // Lists all resources under jdinjax/ prefix, filters by age, deletes in batches.
 // Body: { olderThanDays: number, preview: boolean }
 // Returns: { deleted, freedBytes, previewCount, previewBytes }
-app.post('/api/admin/cloudinary-purge', jsonSmall, async (req, res) => {
+app.post('/api/admin/cloudinary-purge', requireOwner, jsonSmall, async (req, res) => {
     const cloudName  = process.env.CLOUDINARY_CLOUD_NAME;
     const apiKey     = process.env.CLOUDINARY_API_KEY;
     const apiSecret  = process.env.CLOUDINARY_API_SECRET;
@@ -565,6 +597,11 @@ app.post('/api/admin/cloudinary-purge', jsonSmall, async (req, res) => {
     }
     console.log(`[Admin] Cloudinary purge: deleted ${deleted} images (${(freedBytes/1024/1024).toFixed(1)} MB), threshold ${olderThanDays}d`);
     res.json({ deleted, freedBytes });
+});
+
+// ── Health check — Railway/uptime monitors ────────────────────────────────
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok', version: APP_VERSION, ts: new Date().toISOString() });
 });
 
 // ── SPA catch-all — serves index.html for any non-API route ──────────────

@@ -1,0 +1,42 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    // User must be signed in AND their email must exist in the whitelist.
+    function isWhitelisted() {
+      return request.auth != null
+          && exists(/databases/$(database)/documents/system/access/approved/$(request.auth.token.email));
+    }
+
+    // User must own the document (uid matches path segment).
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    // ── Whitelist ─────────────────────────────────────────────────────────────
+    // Users may read only their own whitelist entry (to check access on login).
+    // Writes go through the Admin SDK server only — never from the client.
+    match /system/access/approved/{email} {
+      allow read:  if request.auth != null && request.auth.token.email == email;
+      allow write: if false;
+    }
+
+    // ── Listings ──────────────────────────────────────────────────────────────
+    // Each user can only read/write their own listings subtree.
+    match /listings/{userId}/{document=**} {
+      allow read, write: if isOwner(userId) && isWhitelisted();
+    }
+
+    // ── Settings ─────────────────────────────────────────────────────────────
+    // Per-user settings document.
+    match /settings/{userId} {
+      allow read, write: if isOwner(userId) && isWhitelisted();
+    }
+
+    // ── Catch-all — deny everything else ─────────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
