@@ -212,10 +212,14 @@
         };
 
         // ── Background removal — lazy CDN ESM loader (shared, cached per session) ─
+        // esm.sh performs a full CJS→ESM conversion of the entire dependency tree,
+        // fixing the "require is not defined" error from jsDelivr's surface-level transform.
+        // publicPath tells the library where to fetch its WASM/ONNX model files from.
+        const BG_REMOVAL_PUBLIC_PATH = 'https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.4.5/dist/';
         let _bgRemovalLib = null;
         const getBgRemovalLib = async () => {
             if (!_bgRemovalLib) {
-                _bgRemovalLib = await import('https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.4.5/+esm');
+                _bgRemovalLib = await import('https://esm.sh/@imgly/background-removal@1.4.5');
             }
             return _bgRemovalLib;
         };
@@ -1652,10 +1656,32 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             useEffect(() => {
                 if (!user || !dbRef.current) return;
                 const path = getListingsPath(user.uid);
-                const unsubscribe = dbRef.current.collection(path).onSnapshot(snap => {
-                    setListings(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-                }, (err) => setErrorMsg("Sync error: " + err.message));
-                return () => unsubscribe();
+                let unsubscribe = null;
+                let retryTimer = null;
+                let retryDelay = 3000;
+
+                const subscribe = () => {
+                    unsubscribe = dbRef.current.collection(path).onSnapshot(
+                        snap => {
+                            retryDelay = 3000; // reset backoff on success
+                            setListings(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                        },
+                        err => {
+                            console.warn('[Listings] onSnapshot error, retrying in', retryDelay, 'ms:', err.message);
+                            // Retry with backoff — covers transient auth/permission hiccups
+                            retryTimer = setTimeout(() => {
+                                retryDelay = Math.min(retryDelay * 2, 30000);
+                                subscribe();
+                            }, retryDelay);
+                        }
+                    );
+                };
+
+                subscribe();
+                return () => {
+                    if (unsubscribe) unsubscribe();
+                    if (retryTimer) clearTimeout(retryTimer);
+                };
             }, [user]);
 
             // Load settings from Firestore whenever user session is established
@@ -1840,7 +1866,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     const { removeBackground } = await getBgRemovalLib();
                     showToast('Removing background…');
                     // removeBackground accepts a URL and returns a transparent PNG Blob
-                    const resultBlob = await removeBackground(imageUrl, { output: { format: 'image/png' } });
+                    const resultBlob = await removeBackground(imageUrl, { publicPath: BG_REMOVAL_PUBLIC_PATH, output: { format: 'image/png' } });
                     showToast('Uploading to Cloudinary…');
                     // Sign + upload using existing pattern
                     const timestamp = Math.round(Date.now() / 1000);
@@ -2098,9 +2124,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         // Optionally strip backgrounds before compress+upload
                         const processedBatch = bgRemovalFn
                             ? await Promise.all(batch.map(async img => {
-                                const bgBlob = await bgRemovalFn(img.url, { output: { format: 'image/png' } });
-                                const bgUrl  = URL.createObjectURL(bgBlob);
-                                return { ...img, url: bgUrl, _bgBlob: bgBlob };
+                                const bgBlob = await bgRemovalFn(img.url, { publicPath: BG_REMOVAL_PUBLIC_PATH, output: { format: 'image/png' } });
+                                return { ...img, _bgBlob: bgBlob };
                               }))
                             : batch;
 
