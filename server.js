@@ -61,7 +61,11 @@ const BKA_CATEGORY_MAP = {
     "57881":  "Consumer Electronics > Multipurpose Batteries & Power",
     "175759": "Sporting Goods > Hunting > Gun Storage",
     "20710":  "Home & Garden > Tools & Workshop Equipment > Tool Storage",
-    "183446": "Home & Garden > Tools & Workshop Equipment"
+    "183446": "Home & Garden > Tools & Workshop Equipment",
+    "79976":  "Sporting Goods > Hunting > Clothing, Shoes & Accessories > Hearing Protection",
+    "185068": "Consumer Electronics > Portable Audio & Headphones > Headphones",
+    "15052":  "Sporting Goods > Safety & Protection > Eye & Ear Protection",
+    "11731":  "Home & Garden > Tools & Workshop Equipment > Safety Equipment > Ear Protection"
 };
 
 // ─── Startup env validation ───────────────────────────────────────────────
@@ -234,6 +238,10 @@ const geminiPick = async (title, keyFeatures, description, candidates) => {
         "LIVE EBAY CATEGORY CANDIDATES (ID | Name):\n" + candidateList + "\n\n" +
         "Select the SINGLE most appropriate category ID for listing this item on eBay. " +
         "Prefer the most specific subcategory. " +
+        "CRITICAL RULES — follow these before selecting:\n" +
+        "- NEVER assign firearms/gun-part categories (Scopes, Optics, Barrels, Triggers, Handguards, Stocks, Magazines, Suppressors, Gun Parts) to hearing protection, ear muffs, earmuffs, or general safety/PPE items.\n" +
+        "- For ear muffs, hearing protection, or noise-reduction headwear → choose a Hearing Protection or Safety Equipment category.\n" +
+        "- Only assign hunting-specific categories to items that are unambiguously hunting/firearms accessories.\n" +
         'Return ONLY valid JSON: {"categoryId": "<id>", "categoryPath": "<full path>", "confidence": "High", "source": "Hybrid"}';
     const url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + process.env.GEMINI_API_KEY;
     const resp = await fetch(url, {
