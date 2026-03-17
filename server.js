@@ -497,23 +497,51 @@ app.get('/api/admin/list-users', requireOwner, async (req, res) => {
     }
 });
 
+// ── Admin: Approve (whitelist) an existing user ────────────────────────────────
+app.post('/api/admin/approve-user', requireOwner, jsonSmall, async (req, res) => {
+    const { email, addedBy } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email required' });
+    if (!adminFirestore) return res.status(503).json({ error: 'Firebase Admin SDK not configured.' });
+    try {
+        await adminFirestore.collection('system/access/approved').doc(email.toLowerCase()).set({
+            addedBy: addedBy || 'owner',
+            addedAt: Date.now()
+        });
+        console.log(`[Admin] Approved: ${email}`);
+        res.json({ success: true });
+    } catch(e) {
+        console.error('[Admin] Approve failed:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // ── Admin: Enable / Disable / Delete Firebase Auth user ───────────────────────
 app.post('/api/admin/update-user', requireOwner, jsonSmall, async (req, res) => {
     const { email, action } = req.body; // action: 'enable' | 'disable' | 'delete'
     if (!email || !action) return res.status(400).json({ error: 'Email and action required' });
-    if (!adminAuth) return res.status(503).json({ error: 'Firebase Admin SDK not configured.' });
+    if (!adminAuth || !adminFirestore) return res.status(503).json({ error: 'Firebase Admin SDK not configured.' });
     try {
-        const userRecord = await adminAuth.getUserByEmail(email);
+        const wlRef = adminFirestore.collection('system/access/approved').doc(email.toLowerCase());
         if (action === 'delete') {
-            await adminAuth.deleteUser(userRecord.uid);
+            try { const u = await adminAuth.getUserByEmail(email); await adminAuth.deleteUser(u.uid); } catch(e) { if (e.code !== 'auth/user-not-found') throw e; }
+            await wlRef.delete();
             console.log(`[Admin] Deleted: ${email}`);
             return res.json({ success: true });
         }
-        await adminAuth.updateUser(userRecord.uid, { disabled: action === 'disable' });
-        console.log(`[Admin] ${action}d: ${email}`);
-        res.json({ success: true });
+        if (action === 'disable') {
+            try { const u = await adminAuth.getUserByEmail(email); await adminAuth.updateUser(u.uid, { disabled: true }); } catch(e) { if (e.code !== 'auth/user-not-found') throw e; }
+            await wlRef.delete();
+            console.log(`[Admin] Disabled: ${email}`);
+            return res.json({ success: true });
+        }
+        if (action === 'enable') {
+            try { const u = await adminAuth.getUserByEmail(email); await adminAuth.updateUser(u.uid, { disabled: false }); } catch(e) { if (e.code !== 'auth/user-not-found') throw e; }
+            await wlRef.set({ addedBy: 'owner', addedAt: Date.now() }, { merge: true });
+            console.log(`[Admin] Enabled: ${email}`);
+            return res.json({ success: true });
+        }
+        res.status(400).json({ error: 'Unknown action' });
     } catch(e) {
-        if (e.code === 'auth/user-not-found') return res.json({ success: true }); // Google SSO — no Auth record
         console.error(`[Admin] ${action} failed:`, e.message);
         res.status(400).json({ error: e.message });
     }
@@ -528,11 +556,15 @@ app.post('/api/admin/create-user', requireOwner, jsonSmall, async (req, res) => 
         // Create the Firebase Auth user with a random temp password
         const tempPassword = Math.random().toString(36).slice(-10) + Math.random().toString(36).slice(-6).toUpperCase() + '!';
         await adminAuth.createUser({ email, password: tempPassword, emailVerified: false });
+        // Whitelist them immediately via Admin SDK (client cannot write whitelist — rules deny it)
+        await adminFirestore.collection('system/access/approved').doc(email.toLowerCase()).set({
+            addedBy: requestedBy || 'owner',
+            addedAt: Date.now(),
+            authMethod: 'email'
+        });
         // Send password reset email so they set their own password
         const resetLink = await adminAuth.generatePasswordResetLink(email);
-        console.log(`[Admin] Created user ${email} (by ${requestedBy}) — reset link: ${resetLink}`);
-        // Note: in production you'd send this via an email service
-        // For now return the link to the admin so they can share it
+        console.log(`[Admin] Created + whitelisted ${email} (by ${requestedBy}) — reset link: ${resetLink}`);
         res.json({ success: true, resetLink, message: `User ${email} created. Share the reset link to let them set their password.` });
     } catch(e) {
         console.error('[Admin] Create user failed:', e.message);

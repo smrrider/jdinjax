@@ -1844,29 +1844,29 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const addApprovedUser = async (emailOverride) => {
                 const email = (emailOverride || newUserEmail).trim().toLowerCase();
                 if (!email || !email.includes('@')) { setUserMgmtMsg('Enter a valid email.'); return; }
-                await dbRef.current.collection('system/access/approved').doc(email).set({ addedBy: user.email, addedAt: Date.now() });
-                if (!emailOverride) setNewUserEmail('');
-                setUserMgmtMsg(`✓ ${email} approved.`);
-                loadApprovedUsers();
-                setTimeout(() => setUserMgmtMsg(''), 3000);
+                try {
+                    const res = await adminFetch('/api/admin/approve-user', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email, addedBy: user.email })
+                    });
+                    if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Failed'); }
+                    if (!emailOverride) setNewUserEmail('');
+                    setUserMgmtMsg(`✓ ${email} approved.`);
+                    loadApprovedUsers();
+                    setTimeout(() => setUserMgmtMsg(''), 3000);
+                } catch(e) { setUserMgmtMsg(`Error: ${e.message}`); }
             };
             const userAction = async (email, action) => {
                 try {
-                    await adminFetch('/api/admin/update-user', {
+                    const res = await adminFetch('/api/admin/update-user', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ email, action })
                     });
-                    if (action === 'delete') {
-                        await dbRef.current.collection('system/access/approved').doc(email).delete();
-                        setUserMgmtMsg(`${email} deleted.`);
-                    } else if (action === 'disable') {
-                        await dbRef.current.collection('system/access/approved').doc(email).delete();
-                        setUserMgmtMsg(`${email} disabled.`);
-                    } else if (action === 'enable') {
-                        await dbRef.current.collection('system/access/approved').doc(email).set({ addedBy: user.email, addedAt: Date.now() });
-                        setUserMgmtMsg(`${email} enabled.`);
-                    }
+                    if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Failed'); }
+                    const labels = { delete: 'deleted', disable: 'disabled', enable: 'enabled' };
+                    setUserMgmtMsg(`${email} ${labels[action] || action}.`);
                     loadApprovedUsers();
                     setTimeout(() => setUserMgmtMsg(''), 3000);
                 } catch(e) { setUserMgmtMsg(`Error: ${e.message}`); }
@@ -1955,8 +1955,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     });
                     const data = await res.json();
                     if (!res.ok) throw new Error(data.error || 'Failed');
-                    // Also whitelist them
-                    await dbRef.current.collection('system/access/approved').doc(emailVal).set({ addedBy: user.email, addedAt: Date.now(), authMethod: 'email' });
+                    // Whitelist is written server-side in /api/admin/create-user via Admin SDK
                     setNewUserEmail('');
                     setUserMgmtMsg(`✓ ${emailVal} created.`);
                     setInviteLink({ email: emailVal, link: data.resetLink });
