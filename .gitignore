@@ -1,10 +1,24 @@
-# Environment — NEVER commit this
-.env
-
-# Node
+# ── Dependencies ──────────────────────────────────────────────────────────────
 node_modules/
-npm-debug.log*
 
-# OS junk
+# ── Environment & Secrets ─────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# Firebase service account keys — NEVER commit credentials
+*-firebase-adminsdk-*.json
+firebase-adminsdk*.json
+serviceAccountKey.json
+
+# ── Temp / Build Artifacts ────────────────────────────────────────────────────
+.tmp.driveupload/
+*.log
+dist/
+build/
+
+# ── OS & Editor ───────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+.vscode/
+*.swp
