@@ -553,19 +553,40 @@ app.post('/api/admin/create-user', requireOwner, jsonSmall, async (req, res) => 
     if (!email) return res.status(400).json({ error: 'Email required' });
     if (!adminAuth) return res.status(503).json({ error: 'Firebase Admin SDK not configured. Add FIREBASE_SERVICE_ACCOUNT_JSON to Railway env vars.' });
     try {
-        // Create the Firebase Auth user with a random temp password
-        const tempPassword = Math.random().toString(36).slice(-10) + Math.random().toString(36).slice(-6).toUpperCase() + '!';
-        await adminAuth.createUser({ email, password: tempPassword, emailVerified: false });
-        // Whitelist them immediately via Admin SDK (client cannot write whitelist — rules deny it)
+        let resetLink = null;
+        let authMethod = 'email';
+
+        // Check if user already exists (e.g. signed in with Google before)
+        let existingUser = null;
+        try { existingUser = await adminAuth.getUserByEmail(email); } catch(e) { /* not found — will create */ }
+
+        if (existingUser) {
+            // Already in Firebase Auth (Google SSO user or prior account) — just whitelist them
+            authMethod = existingUser.providerData?.[0]?.providerId === 'google.com' ? 'google' : 'email';
+            console.log(`[Admin] User ${email} already exists (${authMethod}) — whitelisting only`);
+        } else {
+            // Brand new user — create email/password account and generate reset link
+            const tempPassword = Math.random().toString(36).slice(-10) + Math.random().toString(36).slice(-6).toUpperCase() + '!';
+            await adminAuth.createUser({ email, password: tempPassword, emailVerified: false });
+            resetLink = await adminAuth.generatePasswordResetLink(email);
+            console.log(`[Admin] Created + whitelisted ${email} (by ${requestedBy}) — reset link: ${resetLink}`);
+        }
+
+        // Whitelist via Admin SDK (client-side write is blocked by Firestore rules)
         await adminFirestore.collection('system/access/approved').doc(email.toLowerCase()).set({
             addedBy: requestedBy || 'owner',
             addedAt: Date.now(),
-            authMethod: 'email'
+            authMethod
         });
-        // Send password reset email so they set their own password
-        const resetLink = await adminAuth.generatePasswordResetLink(email);
-        console.log(`[Admin] Created + whitelisted ${email} (by ${requestedBy}) — reset link: ${resetLink}`);
-        res.json({ success: true, resetLink, message: `User ${email} created. Share the reset link to let them set their password.` });
+
+        res.json({
+            success: true,
+            resetLink,
+            alreadyExisted: !!existingUser,
+            message: existingUser
+                ? `${email} already had an account — access granted.`
+                : `User ${email} created. Share the reset link to let them set their password.`
+        });
     } catch(e) {
         console.error('[Admin] Create user failed:', e.message);
         res.status(400).json({ error: e.message });

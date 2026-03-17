@@ -1955,10 +1955,9 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     });
                     const data = await res.json();
                     if (!res.ok) throw new Error(data.error || 'Failed');
-                    // Whitelist is written server-side in /api/admin/create-user via Admin SDK
                     setNewUserEmail('');
-                    setUserMgmtMsg(`✓ ${emailVal} created.`);
-                    setInviteLink({ email: emailVal, link: data.resetLink });
+                    setUserMgmtMsg(data.alreadyExisted ? `✓ ${emailVal} — access granted.` : `✓ ${emailVal} created.`);
+                    if (data.resetLink) setInviteLink({ email: emailVal, link: data.resetLink });
                     loadApprovedUsers();
                 } catch(e) {
                     setUserMgmtMsg(`Error: ${e.message}`);
