@@ -1,7 +1,7 @@
 {
-  "name": "JDINJAX eBay Listing Pro",
-  "short_name": "JDINJAX",
-  "description": "eBay listing automation console for Captain John Philip DeBok",
+  "name": "Scout Recon",
+  "short_name": "Scout Recon",
+  "description": "AI-powered eBay listing agent by Black Knight Armament Logistics",
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait-primary",

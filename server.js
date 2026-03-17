@@ -19,12 +19,12 @@ try {
         }
         adminAuth      = admin.auth();
         adminFirestore = admin.firestore();
-        console.log('[eBay Scout] Firebase Admin SDK: Ready');
+        console.log('[Scout Recon] Firebase Admin SDK: Ready');
     } else {
-        console.warn('[eBay Scout] FIREBASE_SERVICE_ACCOUNT_JSON not set — admin user creation disabled');
+        console.warn('[Scout Recon] FIREBASE_SERVICE_ACCOUNT_JSON not set — admin user creation disabled');
     }
 } catch(e) {
-    console.error('[eBay Scout] Firebase Admin init failed:', e.message);
+    console.error('[Scout Recon] Firebase Admin init failed:', e.message);
 }
 
 const express = require('express');
@@ -34,7 +34,7 @@ const crypto  = require('crypto');
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
-const APP_VERSION = "5.7.0";
+const APP_VERSION = "6.0.0";
 
 // Owner email — drives server-side admin gate
 const OWNER_EMAIL = process.env.OWNER_EMAIL || 'thedeboks@gmail.com';
@@ -71,8 +71,8 @@ const REQUIRED_ENV = [
 ];
 const missingEnv = REQUIRED_ENV.filter(k => !process.env[k]);
 if (missingEnv.length > 0) {
-    console.error(`[eBay Scout] ❌ MISSING ENV VARS: ${missingEnv.join(', ')}`);
-    console.error('[eBay Scout] Server will start but affected endpoints will fail.');
+    console.error(`[Scout Recon] ❌ MISSING ENV VARS: ${missingEnv.join(', ')}`);
+    console.error('[Scout Recon] Server will start but affected endpoints will fail.');
 }
 
 // ─── Gemini model allowlist — prevent model injection via /api/gemini ─────
@@ -99,6 +99,8 @@ const ALLOWED_IMAGE_HOSTS = new Set([
 // ─── Middleware ────────────────────────────────────────────────────────────
 // CORS: lock to your Railway domain in production, allow localhost for dev
 const allowedOrigins = [
+    'https://scout-recon.com',
+    'https://www.scout-recon.com',
     'https://ebay-scout.com',
     'https://www.ebay-scout.com',
     'https://ebay-lister.up.railway.app',
@@ -268,7 +270,7 @@ const fetchSerpApiCandidates = async (title) => {
     const data = await response.json();
     const cats = (data.categories || []).filter(c => c.id && c.name);
     if (!cats.length) throw new Error("SerpApi returned no category candidates");
-    console.log("[eBay Scout] SerpApi candidates: " + cats.map(c => c.id + ":" + c.name).join(", "));
+    console.log("[Scout Recon] SerpApi candidates: " + cats.map(c => c.id + ":" + c.name).join(", "));
     return cats;
 };
 
@@ -276,7 +278,7 @@ const resolveViaGeminiOnly = async (title, keyFeatures, description) => {
     const candidates = Object.entries(BKA_CATEGORY_MAP).map(([id, name]) => ({ id, name }));
     const result = await geminiPick(title, keyFeatures, description, candidates);
     result.source = "Gemini";
-    console.log("[eBay Scout] Gemini-only: " + result.categoryId + " -> " + result.categoryPath);
+    console.log("[Scout Recon] Gemini-only: " + result.categoryId + " -> " + result.categoryPath);
     return result;
 };
 
@@ -686,6 +688,6 @@ app.get('*', (req, res) => {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[eBay Scout] 🚀 Black Knight Command Center: v${APP_VERSION} active on port ${PORT}`);
-    console.log(`[eBay Scout] 🛒 SerpApi Category Engine: ${process.env.SERPAPI_KEY ? 'Ready' : '⚠️  SERPAPI_KEY missing'}`);
+    console.log(`[Scout Recon] 🚀 Black Knight Command Center: v${APP_VERSION} active on port ${PORT}`);
+    console.log(`[Scout Recon] 🛒 SerpApi Category Engine: ${process.env.SERPAPI_KEY ? 'Ready' : '⚠️  SERPAPI_KEY missing'}`);
 });

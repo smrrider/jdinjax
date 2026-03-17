@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>eBay Listing Agent v5.6.0</title>
+    <title>Scout Recon v6.0.0</title>
 
     <!-- PWA Manifest -->
     <link rel="manifest" href="/manifest.json">
@@ -11,7 +11,7 @@
     <!-- iOS PWA Support -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="eBay Scout">
+    <meta name="apple-mobile-web-app-title" content="Scout Recon">
     <link rel="apple-touch-icon" href="/icon-192.png">
 
     <meta name="theme-color" content="#2563eb">
@@ -121,7 +121,7 @@
     <script type="text/babel">
         const { useState, useEffect, useCallback, useRef, useMemo } = React;
 
-        const APP_VERSION = "5.6.0"; // 3-panel desktop + barcode scanner
+        const APP_VERSION = "6.0.0"; // Scout Recon rebrand
 
         const _host    = window.location.hostname;
         const _isLocal = (_host === '127.0.0.1' || _host === 'localhost' || _host === '');
@@ -2321,7 +2321,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                             <Icon name="ShieldX" size={28} className="text-red-500"/>
                         </div>
                         <h2 className="text-lg font-black text-red-700 uppercase tracking-tight mb-2">Access Denied</h2>
-                        <p className="text-sm text-slate-500 mb-6">Your account has not been approved for eBay Scout. Contact the administrator to request access.</p>
+                        <p className="text-sm text-slate-500 mb-6">Your account has not been approved for Scout Recon. Contact the administrator to request access.</p>
                         <button onClick={() => { setAccessDenied(false); }} className="w-full py-3 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-700 text-sm uppercase tracking-widest">Back to Login</button>
                     </div>
                 </div>
@@ -2355,7 +2355,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     <div className="max-w-md w-full auth-card rounded-[3rem] shadow-2xl p-10 border border-slate-200 animate-in fade-in zoom-in-95 duration-500">
                         <div className="text-center mb-8">
                             <div className="w-20 h-20 bg-blue-600 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-xl shadow-blue-200 shadow-blue-200/50"><Icon name="Shield" size={40} className="text-white" /></div>
-                            <h1 className="text-3xl font-black uppercase tracking-tight">eBay Scout</h1>
+                            <h1 className="text-3xl font-black uppercase tracking-tight">Scout Recon</h1>
                             <p className="text-blue-600 text-xs font-black uppercase tracking-[0.3em] mt-2">Access Bridge Perimeter</p>
                             <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mt-1">Black Knight Armament Logistics</p>
                         </div>
@@ -2650,25 +2650,25 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                 </p>
                                 {userMgmtMsg && <p className="text-xs font-bold text-violet-600">{userMgmtMsg}</p>}
                                 {inviteLink && (() => {
-                                    const subject = encodeURIComponent("You've been invited to eBay Scout");
+                                    const subject = encodeURIComponent("You've been invited to Scout Recon");
                                     const body = encodeURIComponent(
 `Greetings,
 
-You've been invited to eBay Scout — an AI-powered listing tool for eBay sellers designed and used by Black Knight Armament Logistics.
+You've been invited to Scout Recon — an AI-powered listing tool for eBay sellers designed and used by Black Knight Armament Logistics.
 
 To get started, click the link below to set your password:
 
 ${inviteLink.link}
 
 Once your password is set, sign in at:
-https://www.ebay-scout.com
+https://www.scout-recon.com
 
 If you have any issues signing in, reply to this email and we'll get you sorted right away.
 
 Welcome aboard!
 
 Black Knight Armament Logistics
-www.ebay-scout.com`
+www.scout-recon.com`
                                     );
                                     const gmailUrl = `https://mail.google.com/mail/?view=cm&to=${encodeURIComponent(inviteLink.email)}&su=${subject}&body=${body}`;
                                     return (
@@ -2678,9 +2678,9 @@ www.ebay-scout.com`
                                                 <button onClick={() => setInviteLink(null)} className="text-[9px] text-slate-400 hover:text-slate-600 font-bold uppercase tracking-widest">Dismiss</button>
                                             </div>
                                             <div className="bg-white border border-blue-100 rounded-xl p-3 text-[10px] text-slate-600 leading-relaxed space-y-1">
-                                                <p>Greetings, You've been invited to <strong>eBay Scout</strong> — an AI-powered listing tool designed and used by Black Knight Armament Logistics.</p>
+                                                <p>Greetings, You've been invited to <strong>Scout Recon</strong> — an AI-powered listing tool designed and used by Black Knight Armament Logistics.</p>
                                                 <p className="text-blue-500 font-bold break-all">{inviteLink.link}</p>
-                                                <p>After setting your password, sign in at <strong>www.ebay-scout.com</strong></p>
+                                                <p>After setting your password, sign in at <strong>www.scout-recon.com</strong></p>
                                             </div>
                                             <div className="flex gap-2">
                                                 <button onClick={() => { navigator.clipboard.writeText(inviteLink.link); showToast('Link copied!'); }}
@@ -3098,7 +3098,7 @@ www.ebay-scout.com`
                             <div className="px-5 py-5 border-b border-slate-100">
                                 <div className="flex items-center gap-2 mb-1">
                                     <Icon name="Package" size={18} className="text-blue-600"/>
-                                    <span className="text-sm font-black text-slate-800 uppercase tracking-tight">eBay Scout</span>
+                                    <span className="text-sm font-black text-slate-800 uppercase tracking-tight">Scout Recon</span>
                                 </div>
                                 <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest truncate">{user.email}</p>
                             </div>
@@ -3188,7 +3188,7 @@ www.ebay-scout.com`
                     {toast && <div className={`fixed top-8 left-1/2 -translate-x-1/2 z-50 px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest shadow-2xl animate-in slide-in-from-top-4 ${toast.type === 'error' ? 'bg-red-600 text-white' : 'bg-slate-900 text-white'}`}>{toast.msg}</div>}
                     <header className="flex flex-col md:flex-row justify-between items-center mb-10 gap-4">
                         <div className="flex items-center gap-6">
-                            <h1 className="text-2xl font-black flex items-center gap-3"><Icon name="Package" className="text-blue-600" size={32} /> eBay Scout</h1>
+                            <h1 className="text-2xl font-black flex items-center gap-3"><Icon name="Package" className="text-blue-600" size={32} /> Scout Recon</h1>
                             <div className="flex flex-col border-l border-slate-300 pl-6">
                                 <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest leading-none mb-1">Authenticated Operator</span>
                                 <span className="text-xs font-black text-blue-600 truncate max-w-[200px]">{user.email || 'Tactical Session Active'}</span>
@@ -3217,7 +3217,7 @@ www.ebay-scout.com`
                                 <Icon name="PlayCircle" size={13}/> Video Tutorial
                             </a>
                         </div>
-                        <p className="text-[9px] font-black uppercase tracking-[0.4em] text-slate-400 opacity-60 italic">© 2026 eBay Scout * BLACK KNIGHT ARMAMENT * v{APP_VERSION}</p>
+                        <p className="text-[9px] font-black uppercase tracking-[0.4em] text-slate-400 opacity-60 italic">© 2026 Scout Recon * BLACK KNIGHT ARMAMENT * v{APP_VERSION}</p>
                     </footer>
                 </div>
                 {/* Mobile Recon FAB */}
