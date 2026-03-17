@@ -497,41 +497,38 @@ app.get('/api/admin/list-users', requireOwner, async (req, res) => {
     }
 });
 
-// ── Admin: Approve Google SSO user — creates Firebase Auth account + whitelist ──
+// ── Admin: Approve Google SSO user — whitelist only ───────────────────────────
+// DO NOT pre-create a Firebase Auth account. A passwordless account blocks
+// Google Sign-In (Firebase rejects the Google credential with
+// auth/invalid-credential because the email exists without a Google provider).
+// Firebase creates the Auth account automatically on the user's first Google
+// sign-in. They appear in the admin list after that first sign-in.
 app.post('/api/admin/approve-user', requireOwner, jsonSmall, async (req, res) => {
     const { email, addedBy } = req.body;
     if (!email) return res.status(400).json({ error: 'Email required' });
     if (!adminAuth || !adminFirestore) return res.status(503).json({ error: 'Firebase Admin SDK not configured.' });
     try {
-        // Check if user already exists in Firebase Auth
-        let authCreated = false;
+        // Clean up any orphaned passwordless accounts created by earlier broken
+        // versions of this endpoint — they block Google Sign-In for this email.
         try {
-            await adminAuth.getUserByEmail(email);
-            // Already exists — just whitelist below
-        } catch(e) {
-            if (e.code === 'auth/user-not-found') {
-                // Create a passwordless Firebase Auth account so the user appears
-                // in the admin list immediately. Google Sign-In will link to this
-                // account automatically on their first sign-in.
-                await adminAuth.createUser({ email, emailVerified: true });
-                authCreated = true;
-            } else {
-                throw e;
+            const existing = await adminAuth.getUserByEmail(email);
+            const hasNoProviders = !existing.providerData || existing.providerData.length === 0;
+            if (hasNoProviders) {
+                await adminAuth.deleteUser(existing.uid);
+                console.log(`[Admin] Removed orphaned passwordless account for ${email}`);
             }
-        }
+        } catch(e) { /* auth/user-not-found is expected — nothing to clean up */ }
+
         // Whitelist via Admin SDK
         await adminFirestore.collection('system/access/approved').doc(email.toLowerCase()).set({
             addedBy: addedBy || 'owner',
             addedAt: Date.now(),
             authMethod: 'google'
         });
-        console.log(`[Admin] Google access granted: ${email} (authCreated=${authCreated})`);
+        console.log(`[Admin] Google access granted (whitelist): ${email}`);
         res.json({
             success: true,
-            authCreated,
-            message: authCreated
-                ? `${email} added to Firebase and whitelisted. They can now sign in with Google.`
-                : `${email} already had an account — access granted.`
+            message: `${email} approved. They can now sign in with Google.`
         });
     } catch(e) {
         console.error('[Admin] Approve failed:', e.message);

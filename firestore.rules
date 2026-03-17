@@ -6,7 +6,7 @@ service cloud.firestore {
     // User must be signed in AND their email must exist in the whitelist.
     function isWhitelisted() {
       return request.auth != null
-          && exists(/databases/$(database)/documents/system/access/approved/$(request.auth.token.email));
+          && exists(/databases/$(database)/documents/system/access/approved/$(request.auth.token.email.lower()));
     }
 
     // User must own the document (uid matches path segment).
@@ -18,19 +18,18 @@ service cloud.firestore {
     // Users may read only their own whitelist entry (to check access on login).
     // Writes go through the Admin SDK server only — never from the client.
     match /system/access/approved/{email} {
-      allow read:  if request.auth != null && request.auth.token.email == email;
+      allow read:  if request.auth != null && request.auth.token.email.lower() == email;
       allow write: if false;
     }
 
-    // ── Listings ──────────────────────────────────────────────────────────────
-    // Each user can only read/write their own listings subtree.
-    match /listings/{userId}/{document=**} {
+    // ── App data — scoped under artifacts/jdinjax-console/users/{userId} ─────
+    // Listings subtree: artifacts/jdinjax-console/users/{uid}/listings/{doc}
+    match /artifacts/jdinjax-console/users/{userId}/listings/{document=**} {
       allow read, write: if isOwner(userId) && isWhitelisted();
     }
 
-    // ── Settings ─────────────────────────────────────────────────────────────
-    // Per-user settings document.
-    match /settings/{userId} {
+    // Config/settings: artifacts/jdinjax-console/users/{uid}/config/{doc}
+    match /artifacts/jdinjax-console/users/{userId}/config/{document=**} {
       allow read, write: if isOwner(userId) && isWhitelisted();
     }
 
