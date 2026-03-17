@@ -497,18 +497,42 @@ app.get('/api/admin/list-users', requireOwner, async (req, res) => {
     }
 });
 
-// ── Admin: Approve (whitelist) an existing user ────────────────────────────────
+// ── Admin: Approve Google SSO user — creates Firebase Auth account + whitelist ──
 app.post('/api/admin/approve-user', requireOwner, jsonSmall, async (req, res) => {
     const { email, addedBy } = req.body;
     if (!email) return res.status(400).json({ error: 'Email required' });
-    if (!adminFirestore) return res.status(503).json({ error: 'Firebase Admin SDK not configured.' });
+    if (!adminAuth || !adminFirestore) return res.status(503).json({ error: 'Firebase Admin SDK not configured.' });
     try {
+        // Check if user already exists in Firebase Auth
+        let authCreated = false;
+        try {
+            await adminAuth.getUserByEmail(email);
+            // Already exists — just whitelist below
+        } catch(e) {
+            if (e.code === 'auth/user-not-found') {
+                // Create a passwordless Firebase Auth account so the user appears
+                // in the admin list immediately. Google Sign-In will link to this
+                // account automatically on their first sign-in.
+                await adminAuth.createUser({ email, emailVerified: true });
+                authCreated = true;
+            } else {
+                throw e;
+            }
+        }
+        // Whitelist via Admin SDK
         await adminFirestore.collection('system/access/approved').doc(email.toLowerCase()).set({
             addedBy: addedBy || 'owner',
-            addedAt: Date.now()
+            addedAt: Date.now(),
+            authMethod: 'google'
         });
-        console.log(`[Admin] Approved: ${email}`);
-        res.json({ success: true });
+        console.log(`[Admin] Google access granted: ${email} (authCreated=${authCreated})`);
+        res.json({
+            success: true,
+            authCreated,
+            message: authCreated
+                ? `${email} added to Firebase and whitelisted. They can now sign in with Google.`
+                : `${email} already had an account — access granted.`
+        });
     } catch(e) {
         console.error('[Admin] Approve failed:', e.message);
         res.status(500).json({ error: e.message });

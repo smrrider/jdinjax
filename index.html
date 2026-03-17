@@ -1861,17 +1861,19 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const addApprovedUser = async (emailOverride) => {
                 const email = (emailOverride || newUserEmail).trim().toLowerCase();
                 if (!email || !email.includes('@')) { setUserMgmtMsg('Enter a valid email.'); return; }
+                setUserMgmtMsg('Adding user…');
                 try {
                     const res = await adminFetch('/api/admin/approve-user', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ email, addedBy: user.email })
                     });
-                    if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Failed'); }
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.error || 'Failed');
                     if (!emailOverride) setNewUserEmail('');
-                    setUserMgmtMsg(`✓ ${email} approved.`);
+                    setUserMgmtMsg(`✓ ${data.message}`);
                     loadApprovedUsers();
-                    setTimeout(() => setUserMgmtMsg(''), 3000);
+                    setTimeout(() => setUserMgmtMsg(''), 5000);
                 } catch(e) { setUserMgmtMsg(`Error: ${e.message}`); }
             };
             const userAction = async (email, action) => {
