@@ -1765,12 +1765,16 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     window.history.replaceState({}, '', '/');
                 }
                 user.getIdToken().then(async tok => {
+                    // Load connection status — isolated from policy load so a policy
+                    // failure never wipes the connected state
                     try {
                         const d = await fetch('/api/ebay/status', { headers: { 'Authorization': `Bearer ${tok}` } }).then(r => r.json());
                         setEbayConn(d.connected ? d : { connected: false });
                         if (d.connected) {
-                            const pol = await fetch('/api/ebay/policies', { headers: { 'Authorization': `Bearer ${tok}` } }).then(r => r.json());
-                            if (pol.fulfillment) setEbayPolicies(pol);
+                            try {
+                                const pol = await fetch('/api/ebay/policies', { headers: { 'Authorization': `Bearer ${tok}` } }).then(r => r.json());
+                                if (pol.fulfillment) setEbayPolicies(pol);
+                            } catch(pe) { console.warn('[eBay] Policy load failed:', pe.message); }
                         }
                     } catch(e) { setEbayConn({ connected: false }); }
                 });
