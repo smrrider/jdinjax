@@ -318,6 +318,110 @@ SHIPPING LOGISTICS:
                 : body;
         };
 
+        // ── SpecPicker — searchable dropdown with custom-value fallback for mandatory eBay specs ──
+        // Used in the edit-mode spec panel. Has a search field, filtered list, and a free-text
+        // input at the bottom. Custom values not in eBay's allowed list trigger a warning modal.
+        const SpecPicker = ({ spec, specKey, fillVal, borderCol, onSave }) => {
+            const [open, setOpen]               = React.useState(false);
+            const [search, setSearch]           = React.useState('');
+            const [customInput, setCustomInput] = React.useState('');
+            const [pendingCustom, setPendingCustom] = React.useState(null);
+            const dropRef = React.useRef(null);
+
+            React.useEffect(() => {
+                if (!open) return;
+                const handler = (e) => { if (dropRef.current && !dropRef.current.contains(e.target)) { setOpen(false); setSearch(''); } };
+                document.addEventListener('mousedown', handler);
+                return () => document.removeEventListener('mousedown', handler);
+            }, [open]);
+
+            const filtered = (spec.values || []).filter(v => v.toLowerCase().includes(search.toLowerCase()));
+
+            const pick = (val) => { onSave(val); setOpen(false); setSearch(''); setCustomInput(''); };
+
+            const tryCustom = () => {
+                const val = customInput.trim();
+                if (!val) return;
+                const inList = (spec.values || []).some(v => v.toLowerCase() === val.toLowerCase());
+                if (inList) { pick(val); } else { setPendingCustom(val); }
+            };
+
+            return (
+                <div className="relative" ref={dropRef}>
+                    {/* Trigger */}
+                    <button onClick={() => setOpen(o => !o)}
+                        className={`text-[10px] font-black text-slate-700 bg-white border rounded-lg px-2 py-1 max-w-[160px] flex items-center gap-1 ${borderCol}`}>
+                        <span className="truncate max-w-[130px]">{fillVal || '— select —'}</span>
+                        <Icon name="ChevronDown" size={9} className="shrink-0 text-slate-400"/>
+                    </button>
+
+                    {/* Dropdown panel */}
+                    {open && (
+                        <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-slate-200 rounded-xl shadow-2xl w-56 overflow-hidden">
+                            {/* Search */}
+                            <div className="p-2 border-b border-slate-100">
+                                <input autoFocus type="text" placeholder="Search options…"
+                                    value={search} onChange={e => setSearch(e.target.value)}
+                                    className="w-full text-[10px] font-bold border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-blue-400"/>
+                            </div>
+                            {/* Filtered options */}
+                            <div className="max-h-44 overflow-y-auto">
+                                {filtered.length > 0
+                                    ? filtered.map(v => (
+                                        <button key={v} onClick={() => pick(v)}
+                                            className={`w-full text-left text-[10px] font-bold px-3 py-1.5 hover:bg-blue-50 hover:text-blue-700 transition-colors ${fillVal === v ? 'bg-blue-50 text-blue-700' : 'text-slate-700'}`}>
+                                            {v}
+                                        </button>
+                                    ))
+                                    : <p className="text-[9px] text-slate-400 font-black uppercase text-center py-3 px-2">No matches — use custom below</p>
+                                }
+                            </div>
+                            {/* Custom input */}
+                            <div className="border-t border-slate-100 p-2 flex gap-1">
+                                <input type="text" placeholder="Enter custom value…"
+                                    value={customInput} onChange={e => setCustomInput(e.target.value)}
+                                    onKeyDown={e => e.key === 'Enter' && tryCustom()}
+                                    className="flex-1 text-[10px] font-bold border border-slate-200 rounded-lg px-2 py-1 focus:outline-none focus:border-amber-400"/>
+                                <button onClick={tryCustom}
+                                    className="bg-slate-800 text-white text-[9px] font-black px-2 py-1 rounded-lg hover:bg-slate-700 transition-colors shrink-0">
+                                    Use
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Warning modal — custom value not in eBay's list */}
+                    {pendingCustom && (
+                        <div className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-4" onClick={() => setPendingCustom(null)}>
+                            <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-xs w-full" onClick={e => e.stopPropagation()}>
+                                <div className="flex items-start gap-3 mb-4">
+                                    <div className="w-9 h-9 bg-amber-100 rounded-xl flex items-center justify-center shrink-0">
+                                        <Icon name="AlertTriangle" size={18} className="text-amber-600"/>
+                                    </div>
+                                    <div>
+                                        <p className="text-xs font-black text-slate-800 mb-1">Not in eBay's allowed list</p>
+                                        <p className="text-[10px] text-slate-500 font-bold leading-relaxed">
+                                            "<span className="text-slate-700 font-black">{pendingCustom}</span>" is not one of eBay's accepted values for <span className="text-slate-700 font-black">{spec.name}</span>. eBay may reject this listing at publish time.
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button onClick={() => { pick(pendingCustom); setPendingCustom(null); setCustomInput(''); }}
+                                        className="flex-1 bg-amber-500 text-white text-[10px] font-black py-2.5 rounded-xl hover:bg-amber-600 transition-colors">
+                                        Save Anyway
+                                    </button>
+                                    <button onClick={() => setPendingCustom(null)}
+                                        className="flex-1 bg-slate-100 text-slate-700 text-[10px] font-black py-2.5 rounded-xl hover:bg-slate-200 transition-colors">
+                                        Cancel
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
         const Icon = ({ name, size = 24, className = "" }) => {
             const ref = useRef(null);
             useEffect(() => {
@@ -1632,6 +1736,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const [localPriceResults, setLocalPriceResults] = useState({});  // { listingId: priceResearch } — immediate display
             const [autoPricingIds,   setAutoPricingIds]   = useState(new Set()); // listings currently being auto-priced
             const [listingStatus,    setListingStatus]    = useState({});       // { [docId]: 'publishing' | { status:'live', url, listingId } | { status:'error', message } }
+            const [expandedImageListingId, setExpandedImageListingId] = useState(null); // which listing's image strip is open
 
             const dbRef = useRef(null);
             const [showScanner,    setShowScanner]    = useState(false);
@@ -2179,6 +2284,48 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     if (d.error) { showToast(d.error, 'error'); } else { setPurgeResult(d); showToast(`Purge complete — ${d.deleted} images removed`, 'success'); }
                 } catch(e) { showToast('Purge failed: ' + e.message, 'error'); }
                 setPurgeLoading(false);
+            };
+
+            // ── Image strip helpers ───────────────────────────────────────────────────
+            // Delete one image from a listing's images array
+            const deleteImageFromListing = async (listingId, images, urlToDelete) => {
+                const newImages = (images || []).filter(u => u !== urlToDelete);
+                await dbRef.current.doc(`${getListingsPath(user.uid)}/${listingId}`).update({ images: newImages });
+            };
+
+            // Add images to a listing via Cloudinary upload (same signing flow as main processor)
+            const addImagesToListing = async (listingId, existingImages, files) => {
+                if (!files.length || !CLOUDINARY_CONFIG) return;
+                try {
+                    const slots = 12 - (existingImages?.length || 0);
+                    if (slots <= 0) { showToast('Max 12 images per listing', 'error'); return; }
+                    const timestamp = Math.round(Date.now() / 1000);
+                    const signRes = await fetch('/api/sign-upload', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ timestamp })
+                    });
+                    const { signature, folder } = await signRes.json();
+                    const results = await Promise.allSettled(
+                        Array.from(files).slice(0, slots).map(async file => {
+                            const fd = new FormData();
+                            fd.append('file', file);
+                            fd.append('api_key', CLOUDINARY_CONFIG.apiKey);
+                            fd.append('timestamp', timestamp);
+                            fd.append('signature', signature);
+                            fd.append('folder', folder);
+                            const r = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CONFIG.cloudName}/image/upload`, { method: 'POST', body: fd });
+                            const d = await r.json();
+                            if (!d.secure_url) throw new Error(d.error?.message || 'Upload failed');
+                            return d.secure_url;
+                        })
+                    );
+                    const uploaded = results.filter(r => r.status === 'fulfilled').map(r => r.value);
+                    if (!uploaded.length) { showToast('All uploads failed', 'error'); return; }
+                    const newImages = [...(existingImages || []), ...uploaded];
+                    await dbRef.current.doc(`${getListingsPath(user.uid)}/${listingId}`).update({ images: newImages });
+                    showToast(`${uploaded.length} image${uploaded.length > 1 ? 's' : ''} added`);
+                } catch(e) { showToast(`Upload failed: ${e.message}`, 'error'); }
             };
 
             // ── Background Removal (client-side, @imgly/background-removal) ─────────
@@ -3364,20 +3511,61 @@ www.scout-recon.com`
                     {sortedListings.map(l => (
                         <ErrorBoundary key={l.id}>
                         <div className="bg-white rounded-[2rem] border border-slate-200 flex flex-col md:flex-row overflow-hidden shadow-sm hover:border-blue-300 transition-all animate-in fade-in duration-500 listing-card">
-                            <div className="md:w-72 h-72 md:h-auto shrink-0 bg-slate-50 border-r border-slate-100 relative group">
-                                <img src={l.images?.[0]} className="w-full h-full object-cover" />
-                                <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-md text-white text-[9px] font-black px-3 py-1 rounded-full uppercase tracking-widest">{l.images?.length || 0} Assets</div>
-                                {l.images?.[0] && (
+                            {/* Image column — flex-col so the expandable strip sits below the main photo */}
+                            <div className="md:w-72 shrink-0 bg-slate-50 border-r border-slate-100 flex flex-col">
+                                {/* Main photo */}
+                                <div className="relative group flex-1 overflow-hidden min-h-72 md:min-h-0">
+                                    <img src={l.images?.[0]} className="w-full h-full object-cover" />
+                                    {/* Assets badge — click to toggle strip */}
                                     <button
-                                        onClick={() => removeBg(l.id, l.images[0])}
-                                        disabled={bgRemoving.has(l.id)}
-                                        className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity bg-white/90 backdrop-blur-sm text-slate-700 hover:text-purple-600 hover:bg-white border border-slate-200 hover:border-purple-300 rounded-full px-3 py-1.5 text-[9px] font-black uppercase tracking-widest flex items-center gap-1.5 shadow-md disabled:opacity-60 disabled:cursor-wait active:scale-95"
-                                        title="Remove background (client-side AI, free)">
-                                        {bgRemoving.has(l.id)
-                                            ? <><Icon name="Loader2" size={10} className="animate-spin"/> Processing…</>
-                                            : <><Icon name="Scissors" size={10}/> Remove BG</>
-                                        }
+                                        onClick={() => setExpandedImageListingId(expandedImageListingId === l.id ? null : l.id)}
+                                        className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-md text-white text-[9px] font-black px-3 py-1 rounded-full uppercase tracking-widest hover:bg-black/80 transition-colors flex items-center gap-1.5 active:scale-95">
+                                        <Icon name={expandedImageListingId === l.id ? 'ChevronUp' : 'Images'} size={10}/>
+                                        {l.images?.length || 0} Assets
                                     </button>
+                                    {l.images?.[0] && (
+                                        <button
+                                            onClick={() => removeBg(l.id, l.images[0])}
+                                            disabled={bgRemoving.has(l.id)}
+                                            className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity bg-white/90 backdrop-blur-sm text-slate-700 hover:text-purple-600 hover:bg-white border border-slate-200 hover:border-purple-300 rounded-full px-3 py-1.5 text-[9px] font-black uppercase tracking-widest flex items-center gap-1.5 shadow-md disabled:opacity-60 disabled:cursor-wait active:scale-95"
+                                            title="Remove background (client-side AI, free)">
+                                            {bgRemoving.has(l.id)
+                                                ? <><Icon name="Loader2" size={10} className="animate-spin"/> Processing…</>
+                                                : <><Icon name="Scissors" size={10}/> Remove BG</>
+                                            }
+                                        </button>
+                                    )}
+                                </div>
+                                {/* Expandable image strip */}
+                                {expandedImageListingId === l.id && (
+                                    <div className="border-t border-slate-200 bg-slate-100/70 p-2">
+                                        <div className="flex gap-1.5 overflow-x-auto pb-1">
+                                            {(l.images || []).map((url, idx) => (
+                                                <div key={url + idx} className="relative shrink-0 w-[3.75rem] h-[3.75rem] rounded-xl overflow-hidden border border-slate-200 bg-white group/thumb shadow-sm">
+                                                    <img src={url} className="w-full h-full object-cover" />
+                                                    <button
+                                                        onClick={() => deleteImageFromListing(l.id, l.images, url)}
+                                                        className="absolute top-0.5 right-0.5 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover/thumb:opacity-100 transition-opacity hover:bg-red-600 active:scale-90"
+                                                        title="Remove image">
+                                                        <Icon name="X" size={9}/>
+                                                    </button>
+                                                    {idx === 0 && (
+                                                        <span className="absolute bottom-0.5 left-0.5 bg-black/60 text-white text-[6px] font-black px-1 py-0.5 rounded leading-none">MAIN</span>
+                                                    )}
+                                                </div>
+                                            ))}
+                                            {/* Add image button */}
+                                            {(l.images?.length || 0) < 12 && (
+                                                <label className="shrink-0 w-[3.75rem] h-[3.75rem] rounded-xl border-2 border-dashed border-slate-300 flex flex-col items-center justify-center cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors gap-0.5" title="Add image">
+                                                    <Icon name="Plus" size={14} className="text-slate-400"/>
+                                                    <span className="text-[7px] font-black text-slate-400 uppercase">Add</span>
+                                                    <input type="file" accept="image/*" multiple className="hidden"
+                                                        onChange={e => { addImagesToListing(l.id, l.images, Array.from(e.target.files)); e.target.value = ''; }}/>
+                                                </label>
+                                            )}
+                                        </div>
+                                        <p className="text-[7px] font-black text-slate-400 uppercase tracking-widest mt-1 text-center">{l.images?.length || 0} / 12 images · hover to remove</p>
+                                    </div>
                                 )}
                             </div>
                             <div className="p-8 flex-grow">
@@ -3601,14 +3789,13 @@ www.scout-recon.com`
                                                                 {needsConfirm && <span className="text-[7px] text-amber-500 font-black uppercase tracking-widest">confirm</span>}
                                                             </span>
                                                             {spec.values?.length > 0 ? (
-                                                                <select
-                                                                    key={fillVal}
-                                                                    className={`text-[10px] font-black text-slate-700 bg-white border rounded-lg px-2 py-1 focus:outline-none max-w-[160px] ${borderCol}`}
-                                                                    defaultValue={fillVal}
-                                                                    onChange={e => dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({ [specKey]: e.target.value })}>
-                                                                    <option value="">— select —</option>
-                                                                    {spec.values.map(v => <option key={v} value={v}>{v}</option>)}
-                                                                </select>
+                                                                <SpecPicker
+                                                                    spec={spec}
+                                                                    specKey={specKey}
+                                                                    fillVal={fillVal}
+                                                                    borderCol={borderCol}
+                                                                    onSave={val => dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({ [specKey]: val })}
+                                                                />
                                                             ) : (
                                                                 <input type="text"
                                                                     key={fillVal}
