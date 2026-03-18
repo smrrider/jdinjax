@@ -572,10 +572,10 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
 
         const token  = await getEbayToken(req.uid);
         const headers = {
-            'Authorization':            `Bearer ${token}`,
-            'X-EBAY-C-MARKETPLACE-ID':  'EBAY_US',
-            'Content-Type':             'application/json',
-            'Content-Language':         'en-US'
+            'Authorization':           `Bearer ${token}`,
+            'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
+            'Content-Type':            'application/json'
+            // Note: Content-Language NOT sent — Sell Inventory API rejects it
         };
 
         // SR conditionId integers → eBay Sell API condition enums
