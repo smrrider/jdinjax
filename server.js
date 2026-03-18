@@ -335,6 +335,113 @@ app.get('/api/ebay/policies', requireUser, async (req, res) => {
     } catch(e) { res.status(e.message.includes('not connected') ? 401 : 502).json({ error: e.message }); }
 });
 
+// ─── eBay Taxonomy API — Phase 3 ─────────────────────────────────────────────
+// Uses Client Credentials Grant (no user OAuth needed) for read-only taxonomy calls.
+
+let _ebayAppToken    = null;
+let _ebayAppTokenExp = 0;
+let _ebayTreeId      = null;
+
+const getEbayAppToken = async () => {
+    if (_ebayAppToken && Date.now() < _ebayAppTokenExp - 60_000) return _ebayAppToken;
+    const creds = Buffer.from(`${EBAY_APP_ID}:${EBAY_CERT_ID}`).toString('base64');
+    const r = await fetch(EBAY_TOKEN_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Authorization': `Basic ${creds}` },
+        body: new URLSearchParams({ grant_type: 'client_credentials', scope: 'https://api.ebay.com/oauth/api_scope' })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(`App token failed: ${d.error_description || d.error}`);
+    _ebayAppToken    = d.access_token;
+    _ebayAppTokenExp = Date.now() + d.expires_in * 1000;
+    return _ebayAppToken;
+};
+
+const getEbayCategoryTreeId = async () => {
+    if (_ebayTreeId) return _ebayTreeId;
+    const token = await getEbayAppToken();
+    const r = await fetch(`${EBAY_API_BASE}/commerce/taxonomy/v1/get_default_category_tree_id?marketplace_id=EBAY_US`, {
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Language': 'en-US' }
+    });
+    const d = await r.json();
+    _ebayTreeId = d.categoryTreeId;
+    console.log(`[eBay Taxonomy] Tree ID: ${_ebayTreeId}`);
+    return _ebayTreeId;
+};
+
+// Cache for taxonomy calls (24h TTL — category tree rarely changes)
+const _taxonomyCache = new Map();
+const taxonomyCacheGet = (key) => { const e = _taxonomyCache.get(key); return (e && Date.now() < e.exp) ? e.val : null; };
+const taxonomyCacheSet = (key, val) => _taxonomyCache.set(key, { val, exp: Date.now() + 86_400_000 });
+
+// GET /api/ebay/category-suggest?q=... — eBay Taxonomy category suggestions
+app.get('/api/ebay/category-suggest', async (req, res) => {
+    try {
+        const q = (req.query.q || '').trim();
+        if (!q) return res.status(400).json({ error: 'q required' });
+        const cacheKey = `suggest:${q.toLowerCase()}`;
+        const cached = taxonomyCacheGet(cacheKey);
+        if (cached) return res.json(cached);
+        const [token, treeId] = await Promise.all([getEbayAppToken(), getEbayCategoryTreeId()]);
+        const r = await fetch(`${EBAY_API_BASE}/commerce/taxonomy/v1/category_tree/${treeId}/get_category_suggestions?q=${encodeURIComponent(q)}`, {
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Language': 'en-US' }
+        });
+        const d = await r.json();
+        const suggestions = (d.categorySuggestions || []).slice(0, 10).map(s => ({
+            id:   s.category?.categoryId,
+            name: s.category?.categoryName,
+            path: s.categoryTreeNodeAncestors?.map(a => a.categoryName).reverse().join(' > ') + ' > ' + s.category?.categoryName
+        }));
+        taxonomyCacheSet(cacheKey, suggestions);
+        res.json(suggestions);
+    } catch(e) { res.status(502).json({ error: e.message }); }
+});
+
+// GET /api/ebay/category-validate?id=... — validate a category ID + get details
+app.get('/api/ebay/category-validate', async (req, res) => {
+    try {
+        const id = (req.query.id || '').trim();
+        if (!id) return res.status(400).json({ error: 'id required' });
+        const cacheKey = `validate:${id}`;
+        const cached = taxonomyCacheGet(cacheKey);
+        if (cached) return res.json(cached);
+        const [token, treeId] = await Promise.all([getEbayAppToken(), getEbayCategoryTreeId()]);
+        const r = await fetch(`${EBAY_API_BASE}/commerce/taxonomy/v1/category_tree/${treeId}/get_category_subtree?category_id=${id}`, {
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Language': 'en-US' }
+        });
+        const d = await r.json();
+        const result = { valid: r.ok && !!d.categorySubtreeNode, id, name: d.categorySubtreeNode?.category?.categoryName };
+        taxonomyCacheSet(cacheKey, result);
+        res.json(result);
+    } catch(e) { res.status(502).json({ error: e.message }); }
+});
+
+// GET /api/ebay/category-specifics?id=... — mandatory item specifics for a category
+app.get('/api/ebay/category-specifics', async (req, res) => {
+    try {
+        const id = (req.query.id || '').trim();
+        if (!id) return res.status(400).json({ error: 'id required' });
+        const cacheKey = `specifics:${id}`;
+        const cached = taxonomyCacheGet(cacheKey);
+        if (cached) return res.json(cached);
+        const [token, treeId] = await Promise.all([getEbayAppToken(), getEbayCategoryTreeId()]);
+        const r = await fetch(`${EBAY_API_BASE}/commerce/taxonomy/v1/category_tree/${treeId}/get_item_aspects_for_category?category_id=${id}`, {
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Language': 'en-US' }
+        });
+        const d = await r.json();
+        const aspects = d.aspects || [];
+        const mandatory = aspects
+            .filter(a => a.aspectConstraint?.aspectRequired)
+            .map(a => ({ name: a.localizedAspectName, values: (a.aspectValues || []).map(v => v.localizedValue) }));
+        const optional = aspects
+            .filter(a => !a.aspectConstraint?.aspectRequired)
+            .map(a => ({ name: a.localizedAspectName, values: (a.aspectValues || []).map(v => v.localizedValue) }));
+        const result = { categoryId: id, mandatory, optional };
+        taxonomyCacheSet(cacheKey, result);
+        res.json(result);
+    } catch(e) { res.status(502).json({ error: e.message }); }
+});
+
 // ─── eBay Marketplace Account Deletion Notifications ─────────────────────────
 // Required for production API access. Handles eBay's ownership challenge (GET)
 // and actual account deletion events (POST).
@@ -492,10 +599,28 @@ const fetchSerpApiCandidates = async (title) => {
 };
 
 const resolveViaGeminiOnly = async (title, keyFeatures, description) => {
-    const candidates = Object.entries(BKA_CATEGORY_MAP).map(([id, name]) => ({ id, name }));
+    // Try eBay Taxonomy suggestions first — gives Gemini eBay-validated candidates
+    let candidates = [];
+    try {
+        const searchTerm = title.split(' ').slice(0, 4).join(' ');
+        const [token, treeId] = await Promise.all([getEbayAppToken(), getEbayCategoryTreeId()]);
+        const r = await fetch(`${EBAY_API_BASE}/commerce/taxonomy/v1/category_tree/${treeId}/get_category_suggestions?q=${encodeURIComponent(searchTerm)}`, {
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Language': 'en-US' }
+        });
+        const d = await r.json();
+        candidates = (d.categorySuggestions || []).slice(0, 15).map(s => ({
+            id:   s.category?.categoryId,
+            name: (s.categoryTreeNodeAncestors?.map(a => a.categoryName).reverse().join(' > ') || '') + ' > ' + s.category?.categoryName
+        })).filter(c => c.id);
+        console.log(`[Cat] eBay Taxonomy candidates for "${searchTerm}": ${candidates.length}`);
+    } catch(e) {
+        console.warn('[Cat] Taxonomy suggest failed, falling back to BKA map:', e.message);
+    }
+    // Fallback to hardcoded map if taxonomy returned nothing
+    if (!candidates.length) candidates = Object.entries(BKA_CATEGORY_MAP).map(([id, name]) => ({ id, name }));
     const result = await geminiPick(title, keyFeatures, description, candidates);
-    result.source = "Gemini";
-    console.log("[Scout Recon] Gemini-only: " + result.categoryId + " -> " + result.categoryPath);
+    result.source = "Gemini+Taxonomy";
+    console.log("[Scout Recon] Gemini+Taxonomy: " + result.categoryId + " -> " + result.categoryPath);
     return result;
 };
 
