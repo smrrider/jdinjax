@@ -2571,10 +2571,13 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                 count: ebayData.count, source: 'eBay Live'
                             };
                         }
-                    } catch(e) { console.warn('[Price] Browse API unavailable, falling back to Gemini:', e.message); }
+                    } catch(e) { console.warn('[Price] Browse API error:', e.message); }
+
+                    console.log('[Price] After eBay browse, prices=', prices ? prices.source : 'null');
 
                     // ── Gemini fallback (AI estimate) ────────────────────────────────
                     if (!prices) {
+                        console.log('[Price] Falling back to Gemini...');
                         const res = await fetch(PROXY_API_URL, {
                             method: 'POST', headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
@@ -2585,13 +2588,16 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                             })
                         });
                         const data = await res.json();
+                        console.log('[Price] Gemini raw response:', JSON.stringify(data).slice(0, 200));
                         const gPrices = JSON.parse(cleanJson(data.candidates[0].content.parts[0].text));
                         prices = { ...gPrices, source: 'AI Estimate', count: null };
                     }
 
+                    console.log('[Price] Saving to Firestore:', prices);
                     await dbRef.current.doc(`${getListingsPath(user.uid)}/${listing.id}`)
                         .update({ priceResearch: prices, buyItNowPrice: prices.mid });
-                } catch (e) { setErrorMsg("Research Failed."); }
+                    console.log('[Price] Firestore write complete.');
+                } catch (e) { console.error('[Price] FAILED:', e); setErrorMsg("Research Failed."); }
                 finally { setPricingListingId(null); }
             };
 
