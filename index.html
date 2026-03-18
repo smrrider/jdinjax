@@ -1779,12 +1779,15 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 try {
                     const tok = await user.getIdToken();
                     // Step 1: store credentials and attempt connection
-                    const connRes = await fetch('/api/ebay/connect', {
+                    const connRes  = await fetch('/api/ebay/connect', {
                         method: 'POST',
                         headers: { 'Authorization': `Bearer ${tok}`, 'Content-Type': 'application/json' },
                         body: JSON.stringify({ username: ebayUsername, password: ebayPassword })
                     });
-                    const connData = await connRes.json();
+                    const connText = await connRes.text();
+                    let connData;
+                    try { connData = JSON.parse(connText); }
+                    catch(e) { throw new Error('Server not ready — wait a moment and try again'); }
                     if (!connRes.ok) throw new Error(connData.error || 'Connection failed');
                     // If server says OAuth redirect needed, do full-page redirect
                     if (connData.redirectUrl) {
