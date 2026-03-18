@@ -1955,11 +1955,13 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                             loadedCatIdsRef.current.add(listing.categoryId);
                         }
                         setCategorySpecifics(d);
+                        console.log('[SR] Mandatory specs →', d.mandatory?.map(s => ({ name: s.name, values: s.values?.slice(0,8) })));
                         const fills = {};
                         const toSave = {};
                         (d.mandatory || []).forEach(spec => {
                             const key = `spec_${spec.name.replace(/\s+/g,'_')}`;
                             const val = getSpecAutoFill(spec.name, listing, spec.values);
+                            console.log(`[SR] auto-fill "${spec.name}": "${val}"  (${spec.values?.length ?? 0} allowed vals, listing.itemType="${listing.itemType}")`);
                             if (val) {
                                 fills[key] = val;
                                 if (!listing[key]) toSave[key] = val;
