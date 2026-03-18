@@ -208,11 +208,11 @@ const EBAY_TOKEN_URL = `${EBAY_API_BASE}/identity/v1/oauth2/token`;
 const EBAY_SCOPES = [
     'https://api.ebay.com/oauth/api_scope',
     'https://api.ebay.com/oauth/api_scope/sell.account',
+    'https://api.ebay.com/oauth/api_scope/sell.account.readonly',
     'https://api.ebay.com/oauth/api_scope/sell.inventory',
     'https://api.ebay.com/oauth/api_scope/sell.inventory.readonly',
-    'https://api.ebay.com/oauth/api_scope/sell.marketing',
-    'https://api.ebay.com/oauth/api_scope/sell.marketing.readonly',
-    'https://api.ebay.com/oauth/api_scope/buy.order.readonly',
+    'https://api.ebay.com/oauth/api_scope/sell.fulfillment',
+    'https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly',
 ].join(' ');
 console.log(`[eBay] env: ${EBAY_ENV} | app: ${EBAY_APP_ID ? EBAY_APP_ID.slice(0,8)+'...' : 'NOT SET'}`);
 
