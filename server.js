@@ -105,6 +105,7 @@ const ALLOWED_IMAGE_HOSTS = new Set([
 const allowedOrigins = [
     'https://scout-recon.com',
     'https://www.scout-recon.com',
+    'https://scout-recon.up.railway.app',
     'https://ebay-scout.com',
     'https://www.ebay-scout.com',
     'https://ebay-lister.up.railway.app',
