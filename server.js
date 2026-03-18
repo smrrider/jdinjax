@@ -174,6 +174,22 @@ app.get('/api/config', (req, res) => {
         cloudinary: {
             cloudName:    process.env.CLOUDINARY_CLOUD_NAME,
             apiKey:       process.env.CLOUDINARY_API_KEY
+        },
+        ebay: {
+            appId:   process.env.EBAY_APP_ID,
+            ruName:  process.env.EBAY_RUNAME,
+            env:     process.env.EBAY_ENV || 'sandbox',
+            authUrl: process.env.EBAY_ENV === 'production'
+                ? 'https://auth.ebay.com/oauth2/authorize'
+                : 'https://auth.sandbox.ebay.com/oauth2/authorize',
+            scopes: [
+                'https://api.ebay.com/oauth/api_scope',
+                'https://api.ebay.com/oauth/api_scope/sell.account',
+                'https://api.ebay.com/oauth/api_scope/sell.inventory',
+                'https://api.ebay.com/oauth/api_scope/sell.fulfillment',
+                'https://api.ebay.com/oauth/api_scope/commerce.catalog.readonly',
+                'https://api.ebay.com/oauth/api_scope/buy.browse',
+            ].join(' ')
         }
     });
 });

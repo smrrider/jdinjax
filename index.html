@@ -137,12 +137,14 @@
 
         let firebaseConfig    = null;
         let CLOUDINARY_CONFIG = null;
+        let EBAY_CONFIG       = null;
 
         const fetchAppConfig = async () => {
             const res = await fetch(CONFIG_URL);
             const cfg = await res.json();
             firebaseConfig    = cfg.firebase;
             CLOUDINARY_CONFIG = cfg.cloudinary;
+            EBAY_CONFIG       = cfg.ebay || null;
         };
 
         const getListingsPath = (uid) => `artifacts/jdinjax-console/users/${uid}/listings`;
@@ -2554,7 +2556,15 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                 <div className="flex flex-col items-center gap-4 py-4">
                                     <p className="text-xs text-slate-400 text-center">Connect your eBay seller account to sync business policies and enable direct listing.</p>
                                     <button
-                                        onClick={() => window.open(`/auth/ebay?uid=${user.uid}`, '_blank', 'width=600,height=700')}
+                                        onClick={() => {
+                                            if (!EBAY_CONFIG?.appId) { alert('eBay config not loaded. Try refreshing.'); return; }
+                                            const state  = btoa(JSON.stringify({ uid: user.uid, ts: Date.now() }));
+                                            const params = new URLSearchParams({
+                                                client_id: EBAY_CONFIG.appId, redirect_uri: EBAY_CONFIG.ruName,
+                                                response_type: 'code', scope: EBAY_CONFIG.scopes, state
+                                            });
+                                            window.open(`${EBAY_CONFIG.authUrl}?${params}`, '_blank', 'width=600,height=700');
+                                        }}
                                         className="flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-500 transition-all shadow-md shadow-blue-100 active:scale-95">
                                         <Icon name="Link" size={13}/> Connect eBay Account
                                     </button>
