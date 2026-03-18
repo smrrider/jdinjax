@@ -574,8 +574,8 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
         const headers = {
             'Authorization':           `Bearer ${token}`,
             'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
-            'Content-Type':            'application/json'
-            // Note: Content-Language NOT sent — Sell Inventory API rejects it
+            'Content-Type':            'application/json',
+            'Accept-Language':         'en-US'   // undici auto-injects system locale; override with valid eBay value
         };
 
         // SR conditionId integers → eBay Sell API condition enums
