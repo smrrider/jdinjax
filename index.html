@@ -1625,7 +1625,9 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const [tempListingData, setTempListingData] = useState({ title: '', buyItNowPrice: '', markdownDescription: '' });
             const [categorySpecifics, setCategorySpecifics] = useState(null);   // mandatory fields for editing listing
             const [categorySpecificsLoading, setCategorySpecificsLoading] = useState(false);
-            const [validatedCategories, setValidatedCategories] = useState({});  // { categoryId: { valid, name } }
+            const [validatedCategories, setValidatedCategories] = useState({});  // { categoryId: { mandatory: [] } }
+            const [specAutoFills, setSpecAutoFills] = useState({});             // { spec_Key: 'value' } — best-guess fills
+            const loadedCatIdsRef = React.useRef(new Set());                    // tracks which categoryIds we've fetched
             const [pricingListingId, setPricingListingId] = useState(null);
 
             const dbRef = useRef(null);
@@ -1839,6 +1841,40 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
 
             // ── useMemo MUST be here — before ANY conditional returns (Rules of Hooks) ──
             const sortedListings = useMemo(() => [...listings].sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0)), [listings]);
+
+            // Bulk-fetch mandatory specifics for every unique categoryId so warning badges show without opening edit mode
+            useEffect(() => {
+                const uniqueIds = [...new Set(listings.map(l => l.categoryId).filter(Boolean))];
+                const toLoad = uniqueIds.filter(id => !loadedCatIdsRef.current.has(id));
+                if (!toLoad.length) return;
+                toLoad.forEach(async (catId) => {
+                    loadedCatIdsRef.current.add(catId);
+                    try {
+                        const r = await fetch(`/api/ebay/category-specifics?id=${catId}`);
+                        if (!r.ok) throw new Error(r.status);
+                        const d = await r.json();
+                        setValidatedCategories(prev => ({ ...prev, [catId]: d }));
+                    } catch(e) {
+                        loadedCatIdsRef.current.delete(catId); // allow retry next time
+                    }
+                });
+            }, [listings]);
+
+            // Map an eBay mandatory spec name → best-guess value from Gemini-extracted listing fields
+            const getSpecAutoFill = (specName, listing) => {
+                const saved = listing[`spec_${specName.replace(/\s+/g,'_')}`];
+                if (saved) return saved;
+                const n = specName.toLowerCase().replace(/[^a-z]/g,'');
+                if (n === 'brand')                          return listing.brand    || '';
+                if (n === 'type' || n === 'itemtype')       return listing.itemType || '';
+                if (n === 'model')                          return listing.model    || '';
+                if (n === 'mpn' || n === 'manufacturerpartnumber') return listing.mpn || '';
+                if (n === 'color' || n === 'colour')        return listing.color    || '';
+                if (n === 'material')                       return listing.material || '';
+                if (n === 'size')                           return listing.size     || '';
+                if (n === 'storage' || n === 'storagecapacity') return listing.storage || '';
+                return '';
+            };
 
             const showToast = (msg, type = 'default') => { setToast({ msg, type }); setTimeout(() => setToast(null), 4000); };
             const cleanJson = (text) => text.replace(/```json|```/g, '').trim();
@@ -3100,6 +3136,12 @@ www.scout-recon.com`
                                             <span className={`text-[8px] font-black uppercase ml-2 ${l.categorySource === 'AI Predicted' ? 'text-amber-400 italic' : l.categorySource === 'AI Verified' ? 'text-blue-400' : 'text-red-400 animate-pulse'}`}>
                                                 {l.categorySource === 'AI Predicted' ? 'CSV Match Failed - Using AI Suggestion' : l.categorySource === 'AI Verified' ? 'Gemini Verified' : 'Action Required: Assign Category'}
                                             </span>
+                                            {/* ⚠ Required fields badge — visible on card without opening edit mode */}
+                                            {l.categoryId && validatedCategories[l.categoryId]?.mandatory?.length > 0 && (
+                                                <span className="ml-2 flex items-center gap-1 text-[8px] font-black uppercase tracking-widest text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                                                    <Icon name="AlertTriangle" size={8}/> {validatedCategories[l.categoryId].mandatory.length} required field{validatedCategories[l.categoryId].mandatory.length > 1 ? 's' : ''} — click ✏ to fill
+                                                </span>
+                                            )}
                                         </div>
                                     )}
                                     {editingCategoryId !== l.id && (
@@ -3240,21 +3282,33 @@ www.scout-recon.com`
                                                     <Icon name="AlertTriangle" size={10}/> Required by eBay for this category
                                                 </p>
                                                 <div className="space-y-2">
-                                                    {categorySpecifics.mandatory.map(spec => (
+                                                    {categorySpecifics.mandatory.map(spec => {
+                                                        const specKey  = `spec_${spec.name.replace(/\s+/g,'_')}`;
+                                                        const fillVal  = specAutoFills[specKey] || '';
+                                                        const isGuess  = fillVal && !l[specKey];
+                                                        return (
                                                         <div key={spec.name} className="flex items-center justify-between gap-2">
-                                                            <span className="text-[10px] font-black text-slate-600 min-w-0 truncate">{spec.name}</span>
+                                                            <span className="text-[10px] font-black text-slate-600 min-w-0 truncate flex items-center gap-1">
+                                                                {spec.name}
+                                                                {isGuess && <span className="text-[7px] text-blue-400 font-black uppercase tracking-widest">AI</span>}
+                                                            </span>
                                                             {spec.values?.length > 0 ? (
                                                                 <select className="text-[10px] font-black text-slate-700 bg-white border border-amber-200 rounded-lg px-2 py-1 focus:outline-none focus:border-amber-400 max-w-[160px]"
-                                                                    onChange={e => dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({ [`spec_${spec.name.replace(/\s+/g,'_')}`]: e.target.value })}>
+                                                                    defaultValue={fillVal}
+                                                                    onChange={e => dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({ [specKey]: e.target.value })}>
                                                                     <option value="">— select —</option>
                                                                     {spec.values.map(v => <option key={v} value={v}>{v}</option>)}
                                                                 </select>
                                                             ) : (
-                                                                <input type="text" placeholder="Enter value" className="text-[10px] font-black text-slate-700 bg-white border border-amber-200 rounded-lg px-2 py-1 focus:outline-none focus:border-amber-400 w-32"
-                                                                    onBlur={e => e.target.value && dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({ [`spec_${spec.name.replace(/\s+/g,'_')}`]: e.target.value })}/>
+                                                                <input type="text"
+                                                                    placeholder="Enter value"
+                                                                    defaultValue={fillVal}
+                                                                    className="text-[10px] font-black text-slate-700 bg-white border border-amber-200 rounded-lg px-2 py-1 focus:outline-none focus:border-amber-400 w-32"
+                                                                    onBlur={e => e.target.value && dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({ [specKey]: e.target.value })}/>
                                                             )}
                                                         </div>
-                                                    ))}
+                                                        );
+                                                    })}
                                                 </div>
                                             </div>
                                         )}
@@ -3304,17 +3358,33 @@ www.scout-recon.com`
                                                     setEditingListingId(l.id);
                                                     setTempListingData({ title: l.title || '', buyItNowPrice: String(l.buyItNowPrice || ''), markdownDescription: l.markdownDescription || '' });
                                                     setCategorySpecifics(null);
+                                                    setSpecAutoFills({});
                                                     if (l.categoryId) {
                                                         setCategorySpecificsLoading(true);
                                                         try {
-                                                            const r = await fetch(`/api/ebay/category-specifics?id=${l.categoryId}`);
-                                                            const d = await r.json();
+                                                            // Use cached specifics if already loaded by bulk-fetch, otherwise fetch now
+                                                            let d = validatedCategories[l.categoryId];
+                                                            if (!d) {
+                                                                const r = await fetch(`/api/ebay/category-specifics?id=${l.categoryId}`);
+                                                                d = await r.json();
+                                                                setValidatedCategories(prev => ({ ...prev, [l.categoryId]: d }));
+                                                                loadedCatIdsRef.current.add(l.categoryId);
+                                                            }
                                                             setCategorySpecifics(d);
-                                                            // Also cache validation result
-                                                            if (!validatedCategories[l.categoryId]) {
-                                                                const vr = await fetch(`/api/ebay/category-validate?id=${l.categoryId}`);
-                                                                const vd = await vr.json();
-                                                                setValidatedCategories(prev => ({ ...prev, [l.categoryId]: vd }));
+                                                            // Auto-fill mandatory fields from Gemini-extracted listing data
+                                                            const fills = {};
+                                                            const toSave = {};
+                                                            (d.mandatory || []).forEach(spec => {
+                                                                const key  = `spec_${spec.name.replace(/\s+/g,'_')}`;
+                                                                const val  = getSpecAutoFill(spec.name, l);
+                                                                if (val) {
+                                                                    fills[key] = val;
+                                                                    if (!l[key]) toSave[key] = val; // only persist if not already set
+                                                                }
+                                                            });
+                                                            setSpecAutoFills(fills);
+                                                            if (Object.keys(toSave).length) {
+                                                                dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update(toSave).catch(()=>{});
                                                             }
                                                         } catch(e) { console.warn('Specifics load failed:', e.message); }
                                                         finally { setCategorySpecificsLoading(false); }
