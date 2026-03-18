@@ -1892,12 +1892,22 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 if (allowedValues.length > 0) {
                     const searchText = [listing.title, listing.markdownDescription, listing.keyFeatures]
                         .filter(Boolean).join(' ');
-                    const match = allowedValues.find(v => {
+                    const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    // Pass 1: full phrase match (e.g. "Rust" or "Backpack" found as whole word)
+                    let match = allowedValues.find(v => {
                         if (!v || v.length < 2) return false;
-                        // Escape regex special chars, require whole-word match
-                        const escaped = v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                        return new RegExp(`\\b${escaped}\\b`, 'i').test(searchText);
+                        return new RegExp(`\\b${esc(v)}\\b`, 'i').test(searchText);
                     });
+                    // Pass 2: for multi-word eBay values (e.g. "DDR5 SDRAM"), check if the
+                    // first significant token appears in the text ("DDR5" found in title)
+                    if (!match) {
+                        match = allowedValues.find(v => {
+                            if (!v || !v.includes(' ')) return false;
+                            const firstToken = v.split(/\s+/)[0];
+                            if (firstToken.length < 3) return false;
+                            return new RegExp(`\\b${esc(firstToken)}\\b`, 'i').test(searchText);
+                        });
+                    }
                     if (match) return match;
                 }
 
@@ -1926,6 +1936,42 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     }
                     return false; // free-text spec with any value → resolved
                 }).length;
+            };
+
+            // Shared function — called from both the warning badge AND the pencil button
+            const enterEditMode = async (listing) => {
+                setEditingListingId(listing.id);
+                setTempListingData({ title: listing.title || '', buyItNowPrice: String(listing.buyItNowPrice || ''), markdownDescription: listing.markdownDescription || '' });
+                setCategorySpecifics(null);
+                setSpecAutoFills({});
+                if (listing.categoryId) {
+                    setCategorySpecificsLoading(true);
+                    try {
+                        let d = validatedCategories[listing.categoryId];
+                        if (!d) {
+                            const r = await fetch(`/api/ebay/category-specifics?id=${listing.categoryId}`);
+                            d = await r.json();
+                            setValidatedCategories(prev => ({ ...prev, [listing.categoryId]: d }));
+                            loadedCatIdsRef.current.add(listing.categoryId);
+                        }
+                        setCategorySpecifics(d);
+                        const fills = {};
+                        const toSave = {};
+                        (d.mandatory || []).forEach(spec => {
+                            const key = `spec_${spec.name.replace(/\s+/g,'_')}`;
+                            const val = getSpecAutoFill(spec.name, listing, spec.values);
+                            if (val) {
+                                fills[key] = val;
+                                if (!listing[key]) toSave[key] = val;
+                            }
+                        });
+                        setSpecAutoFills(fills);
+                        if (Object.keys(toSave).length) {
+                            dbRef.current.doc(`${getListingsPath(user.uid)}/${listing.id}`).update(toSave).catch(()=>{});
+                        }
+                    } catch(e) { console.warn('Specifics load failed:', e.message); }
+                    finally { setCategorySpecificsLoading(false); }
+                }
             };
 
             const showToast = (msg, type = 'default') => { setToast({ msg, type }); setTimeout(() => setToast(null), 4000); };
@@ -3192,8 +3238,8 @@ www.scout-recon.com`
                                             {l.categoryId && validatedCategories[l.categoryId]?.mandatory?.length > 0 && (() => {
                                                 const unresolved = getUnresolvedSpecCount(l, validatedCategories[l.categoryId]);
                                                 return unresolved > 0 ? (
-                                                    <span className="ml-2 flex items-center gap-1 text-[8px] font-black uppercase tracking-widest text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
-                                                        <Icon name="AlertTriangle" size={8}/> {unresolved} field{unresolved > 1 ? 's' : ''} need confirmation — click ✏
+                                                    <span onClick={() => enterEditMode(l)} className="ml-2 flex items-center gap-1 text-[8px] font-black uppercase tracking-widest text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full cursor-pointer hover:bg-amber-100 transition-colors active:scale-95">
+                                                        <Icon name="AlertTriangle" size={8}/> {unresolved} field{unresolved > 1 ? 's' : ''} need confirmation — tap to fill
                                                     </span>
                                                 ) : (
                                                     <span className="ml-2 flex items-center gap-1 text-[8px] font-black uppercase tracking-widest text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
@@ -3364,7 +3410,9 @@ www.scout-recon.com`
                                                                 {needsConfirm && <span className="text-[7px] text-amber-500 font-black uppercase tracking-widest">confirm</span>}
                                                             </span>
                                                             {spec.values?.length > 0 ? (
-                                                                <select className={`text-[10px] font-black text-slate-700 bg-white border rounded-lg px-2 py-1 focus:outline-none max-w-[160px] ${borderCol}`}
+                                                                <select
+                                                                    key={fillVal}
+                                                                    className={`text-[10px] font-black text-slate-700 bg-white border rounded-lg px-2 py-1 focus:outline-none max-w-[160px] ${borderCol}`}
                                                                     defaultValue={fillVal}
                                                                     onChange={e => dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({ [specKey]: e.target.value })}>
                                                                     <option value="">— select —</option>
@@ -3372,6 +3420,7 @@ www.scout-recon.com`
                                                                 </select>
                                                             ) : (
                                                                 <input type="text"
+                                                                    key={fillVal}
                                                                     placeholder="Enter value"
                                                                     defaultValue={fillVal}
                                                                     className={`text-[10px] font-black text-slate-700 bg-white border rounded-lg px-2 py-1 focus:outline-none w-32 ${borderCol}`}
@@ -3425,43 +3474,7 @@ www.scout-recon.com`
                                         </div>
                                         <div className="flex gap-2">
                                             <button
-                                                onClick={async () => {
-                                                    setEditingListingId(l.id);
-                                                    setTempListingData({ title: l.title || '', buyItNowPrice: String(l.buyItNowPrice || ''), markdownDescription: l.markdownDescription || '' });
-                                                    setCategorySpecifics(null);
-                                                    setSpecAutoFills({});
-                                                    if (l.categoryId) {
-                                                        setCategorySpecificsLoading(true);
-                                                        try {
-                                                            // Use cached specifics if already loaded by bulk-fetch, otherwise fetch now
-                                                            let d = validatedCategories[l.categoryId];
-                                                            if (!d) {
-                                                                const r = await fetch(`/api/ebay/category-specifics?id=${l.categoryId}`);
-                                                                d = await r.json();
-                                                                setValidatedCategories(prev => ({ ...prev, [l.categoryId]: d }));
-                                                                loadedCatIdsRef.current.add(l.categoryId);
-                                                            }
-                                                            setCategorySpecifics(d);
-                                                            // Auto-fill mandatory fields — pass eBay's allowed values so
-                                                            // title/description scanning kicks in (DDR5, Rust, Backpack, etc.)
-                                                            const fills = {};
-                                                            const toSave = {};
-                                                            (d.mandatory || []).forEach(spec => {
-                                                                const key  = `spec_${spec.name.replace(/\s+/g,'_')}`;
-                                                                const val  = getSpecAutoFill(spec.name, l, spec.values);
-                                                                if (val) {
-                                                                    fills[key] = val;
-                                                                    if (!l[key]) toSave[key] = val; // only persist if not already set
-                                                                }
-                                                            });
-                                                            setSpecAutoFills(fills);
-                                                            if (Object.keys(toSave).length) {
-                                                                dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update(toSave).catch(()=>{});
-                                                            }
-                                                        } catch(e) { console.warn('Specifics load failed:', e.message); }
-                                                        finally { setCategorySpecificsLoading(false); }
-                                                    }
-                                                }}
+                                                onClick={() => enterEditMode(l)}
                                                 className="p-3 text-blue-500 hover:bg-blue-50 rounded-xl transition-all active:scale-90" title="Edit listing">
                                                 <Icon name="Pencil" size={18}/>
                                             </button>
