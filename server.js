@@ -845,6 +845,13 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok', version: APP_VERSION, ts: new Date().toISOString() });
 });
 
+// ── Global JSON error handler — catches any next(err) and returns JSON ───────
+// Must be registered BEFORE the catch-all so /api/* errors don't return HTML
+app.use((err, req, res, next) => {
+    console.error('[Server] Error:', err.status, err.message);
+    res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
+});
+
 // ── SPA catch-all — serves index.html for any non-API route ──────────────
 // Must be registered AFTER all API routes so /api/* are not intercepted
 app.get('*', (req, res) => {

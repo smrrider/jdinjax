@@ -1787,7 +1787,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     const connText = await connRes.text();
                     let connData;
                     try { connData = JSON.parse(connText); }
-                    catch(e) { throw new Error(`Response(${connRes.status}): ${connText.slice(0,120)}`); }
+                    catch(e) { throw new Error(connText.slice(0, 200) || 'Server error — check Railway logs'); }
                     if (!connRes.ok) throw new Error(connData.error || 'Connection failed');
                     // If server says OAuth redirect needed, do full-page redirect
                     if (connData.redirectUrl) {
