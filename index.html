@@ -2554,19 +2554,45 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 setPricingListingId(listing.id);
                 const condition = EBAY_CONDITIONS.find(c => c.id === listing.conditionId)?.label || 'Used';
                 try {
-                    const res = await fetch(PROXY_API_URL, {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            model: 'gemini-2.5-flash',
-                            contents: [{ role: "user", parts: [{ text: `Estimate current eBay market value for: "${listing.title}". Condition: ${condition}. Return ONLY JSON with keys: low, mid, high (all numbers ending in .95), confidence (string: Low/Medium/High), basis (string: brief 1-sentence rationale).` }] }],
-                            systemInstruction: { parts: [{ text: "You are an expert eBay pricing analyst specializing in firearms accessories, tactical gear, and general merchandise. Analyze real eBay sold listings data. All prices must end in .95. Return ONLY valid JSON with no markdown or preamble." }] },
-                            generationConfig: { responseMimeType: "application/json" }
-                        })
-                    });
-                    const data = await res.json();
-                    const prices = JSON.parse(cleanJson(data.candidates[0].content.parts[0].text));
-                    await dbRef.current.doc(`${getListingsPath(user.uid)}/${listing.id}`).update({ priceResearch: prices, buyItNowPrice: prices.mid });
-                } catch (e) { setErrorMsg("Research Failed."); } finally { setPricingListingId(null); }
+                    // ── Phase 4: eBay Browse API (live active listings) ──────────────
+                    let prices = null;
+                    try {
+                        const tok = await user.getIdToken();
+                        const ebayRes = await fetch('/api/ebay/price-research', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${tok}` },
+                            body: JSON.stringify({ title: listing.title, conditionId: listing.conditionId, categoryId: listing.categoryId })
+                        });
+                        const ebayData = await ebayRes.json();
+                        if (ebayData.source === 'ebay_browse' && ebayData.mid) {
+                            prices = {
+                                low: ebayData.low, mid: ebayData.mid, high: ebayData.high,
+                                confidence: ebayData.confidence, basis: ebayData.basis,
+                                count: ebayData.count, source: 'eBay Live'
+                            };
+                        }
+                    } catch(e) { console.warn('[Price] Browse API unavailable, falling back to Gemini:', e.message); }
+
+                    // ── Gemini fallback (AI estimate) ────────────────────────────────
+                    if (!prices) {
+                        const res = await fetch(PROXY_API_URL, {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                model: 'gemini-2.5-flash',
+                                contents: [{ role: "user", parts: [{ text: `Estimate current eBay market value for: "${listing.title}". Condition: ${condition}. Return ONLY JSON with keys: low, mid, high (all numbers ending in .95), confidence (string: Low/Medium/High), basis (string: brief 1-sentence rationale).` }] }],
+                                systemInstruction: { parts: [{ text: "You are an expert eBay pricing analyst specializing in firearms accessories, tactical gear, and general merchandise. Analyze real eBay sold listings data. All prices must end in .95. Return ONLY valid JSON with no markdown or preamble." }] },
+                                generationConfig: { responseMimeType: "application/json" }
+                            })
+                        });
+                        const data = await res.json();
+                        const gPrices = JSON.parse(cleanJson(data.candidates[0].content.parts[0].text));
+                        prices = { ...gPrices, source: 'AI Estimate', count: null };
+                    }
+
+                    await dbRef.current.doc(`${getListingsPath(user.uid)}/${listing.id}`)
+                        .update({ priceResearch: prices, buyItNowPrice: prices.mid });
+                } catch (e) { setErrorMsg("Research Failed."); }
+                finally { setPricingListingId(null); }
             };
 
             if (authLoading) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><Icon name="Loader2" size={48} className="text-blue-600 animate-spin" /></div>;
@@ -3404,11 +3430,23 @@ www.scout-recon.com`
                                 </details>
                                 {l.priceResearch && (
                                     <div className="bg-gradient-to-br from-blue-50 to-slate-50 rounded-2xl p-5 border border-blue-100 mb-6 shadow-sm">
+                                        {/* Source + confidence header */}
+                                        <div className="flex items-center gap-2 mb-3">
+                                            <span className={`text-[8px] font-black px-2 py-1 rounded-lg uppercase tracking-widest ${l.priceResearch?.source === 'eBay Live' ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-500'}`}>
+                                                {l.priceResearch?.source === 'eBay Live' ? '⚡ eBay Live' : '🤖 AI Estimate'}
+                                            </span>
+                                            {l.priceResearch?.count && (
+                                                <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">{l.priceResearch.count} active listings</span>
+                                            )}
+                                            <span className="ml-auto text-[8px] font-black px-2 py-1 rounded-lg uppercase bg-green-100 text-green-700">{l.priceResearch?.confidence || 'N/A'}</span>
+                                        </div>
                                         <div className="flex items-end gap-4 mb-3">
                                             <div className="text-center"><span className="text-[8px] text-slate-400 font-black uppercase block mb-1">Low</span><span className="text-sm font-black text-slate-500">${Number(l.priceResearch?.low || 0).toFixed(2)}</span></div>
-                                            <div className="flex-1 text-center bg-white rounded-2xl px-4 py-3 border border-blue-200 shadow-sm"><span className="text-[8px] text-blue-500 font-black uppercase block mb-1">Recommended</span><span className="text-2xl font-black text-blue-700">${Number(l.priceResearch?.mid || 0).toFixed(2)}</span></div>
+                                            <div className="flex-1 text-center bg-white rounded-2xl px-4 py-3 border border-blue-200 shadow-sm">
+                                                <span className="text-[8px] text-blue-500 font-black uppercase block mb-1">Recommended</span>
+                                                <span className="text-2xl font-black text-blue-700">${Number(l.priceResearch?.mid || 0).toFixed(2)}</span>
+                                            </div>
                                             <div className="text-center"><span className="text-[8px] text-slate-400 font-black uppercase block mb-1">High</span><span className="text-sm font-black text-slate-500">${Number(l.priceResearch?.high || 0).toFixed(2)}</span></div>
-                                            <span className="text-[8px] font-black px-2 py-1 rounded-lg uppercase bg-green-100 text-green-700 shadow-sm">{l.priceResearch?.confidence || 'N/A'}</span>
                                         </div>
                                         <p className="text-[10px] text-slate-600 italic leading-relaxed border-l-2 border-blue-200 pl-3">{l.priceResearch?.basis}</p>
                                     </div>

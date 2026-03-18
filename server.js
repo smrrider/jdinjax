@@ -442,6 +442,69 @@ app.get('/api/ebay/category-specifics', async (req, res) => {
     } catch(e) { res.status(502).json({ error: e.message }); }
 });
 
+// POST /api/ebay/price-research — Phase 4 Live Price Intelligence
+// Queries eBay Browse API for active fixed-price listings matching the item title.
+// Returns low/mid/high price band + listing count.  Falls back gracefully so the
+// client can call Gemini if fewer than MIN_COMPS results are found.
+app.post('/api/ebay/price-research', requireUser, async (req, res) => {
+    const MIN_COMPS = 4;
+    try {
+        const { title, conditionId, categoryId } = req.body;
+        if (!title) return res.status(400).json({ error: 'title required' });
+
+        const token = await getEbayAppToken();
+
+        // Use first 6 meaningful words as search query (broad enough to get comps)
+        const searchQuery = title.split(/\s+/).slice(0, 6).join(' ');
+
+        // Map SR conditionId → eBay condition filter groups
+        const cid = parseInt(conditionId || '3000');
+        let conditionFilter = '';
+        if (cid === 1000)                          conditionFilter = 'conditionIds:{1000}';
+        else if (cid >= 2000 && cid <= 2750)       conditionFilter = 'conditionIds:{2000|2010|2020|2030|2500|2750}';
+        else                                        conditionFilter = 'conditionIds:{3000|4000|5000|6000|7000}';
+
+        const filters = ['buyingOptions:{FIXED_PRICE}', conditionFilter].join(',');
+        const params  = new URLSearchParams({ q: searchQuery, limit: '100', filter: filters });
+        if (categoryId) params.set('category_ids', categoryId);
+
+        const r = await fetch(`${EBAY_API_BASE}/buy/browse/v1/item_summary/search?${params}`, {
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
+                'Content-Type': 'application/json'
+            }
+        });
+        const d = await r.json();
+
+        const prices = (d.itemSummaries || [])
+            .map(i => parseFloat(i.price?.value))
+            .filter(p => p > 0)
+            .sort((a, b) => a - b);
+
+        console.log(`[Price] "${searchQuery}" → ${prices.length} comps (conditionFilter: ${conditionFilter})`);
+
+        if (prices.length < MIN_COMPS) {
+            // Not enough live data — tell client to fall back to Gemini
+            return res.json({ source: 'insufficient', count: prices.length, searchQuery });
+        }
+
+        // Statistical price band: 10th / 50th / 90th percentile — trims outliers
+        const p = (pct) => prices[Math.max(0, Math.min(prices.length - 1, Math.floor(prices.length * pct)))];
+        const low  = parseFloat(p(0.10).toFixed(2));
+        const mid  = parseFloat(p(0.50).toFixed(2));
+        const high = parseFloat(p(0.90).toFixed(2));
+
+        const confidence = prices.length >= 30 ? 'High' : prices.length >= 12 ? 'Medium' : 'Low';
+        const basis = `Based on ${prices.length} active eBay listings (${conditionFilter.includes('1000') ? 'New' : 'Used/Similar condition'})`;
+
+        res.json({ source: 'ebay_browse', low, mid, high, count: prices.length, confidence, basis, searchQuery });
+    } catch(e) {
+        console.error('[Price] Browse API error:', e.message);
+        res.status(502).json({ error: e.message, source: 'error' });
+    }
+});
+
 // POST /api/ebay/spec-fill — Gemini fallback when text-scan can't match a mandatory spec value
 // Called only when getSpecAutoFill can't find a valid match in eBay's allowed list.
 // Body: { specName, values: string[], title, description }
