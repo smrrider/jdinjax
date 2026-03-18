@@ -544,6 +544,144 @@ app.post('/api/ebay/spec-fill', requireUser, async (req, res) => {
     }
 });
 
+// POST /api/ebay/list — Phase 5 Direct Listing Submission
+// Three-step Sell Inventory API flow:
+//   1. PUT  /sell/inventory/v1/inventory_item/{sku}  — create / update inventory item
+//   2. POST /sell/inventory/v1/offer                 — create offer with price & policies
+//   3. POST /sell/inventory/v1/offer/{offerId}/publish — make listing live on eBay
+// Body: { sku, title, description, price, categoryId, conditionId, images[],
+//         aspects{}, fulfillmentPolicyId, paymentPolicyId, returnPolicyId, listingDocId }
+// Returns: { success, listingId, offerId, listingUrl }
+app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async (req, res) => {
+    try {
+        const {
+            sku, title, description, price, categoryId,
+            conditionId,           // SR integer string e.g. "3000"
+            images,                // flat array of CDN image URLs
+            aspects,               // { "Brand": ["Samsung"], "Type": ["DDR5 SDRAM"], … }
+            fulfillmentPolicyId, paymentPolicyId, returnPolicyId,
+            listingDocId           // Firestore doc ID to patch after publish
+        } = req.body;
+
+        if (!sku || !title || !price || !categoryId) {
+            return res.status(400).json({ error: 'Missing required fields: sku, title, price, categoryId' });
+        }
+        if (!fulfillmentPolicyId || !paymentPolicyId || !returnPolicyId) {
+            return res.status(400).json({ error: 'Missing policy IDs — configure eBay policies in Settings' });
+        }
+
+        const token  = await getEbayToken(req.uid);
+        const headers = {
+            'Authorization':            `Bearer ${token}`,
+            'X-EBAY-C-MARKETPLACE-ID':  'EBAY_US',
+            'Content-Type':             'application/json',
+            'Content-Language':         'en-US'
+        };
+
+        // SR conditionId integers → eBay Sell API condition enums
+        const CONDITION_MAP = {
+            '1000': 'NEW',
+            '1500': 'NEW_OTHER',
+            '1750': 'NEW_WITH_DEFECTS',
+            '2000': 'LIKE_NEW',
+            '2010': 'LIKE_NEW',
+            '2020': 'LIKE_NEW',
+            '2030': 'USED_EXCELLENT',
+            '2500': 'USED_EXCELLENT',
+            '2750': 'USED_VERY_GOOD',
+            '3000': 'USED_EXCELLENT',
+            '4000': 'USED_VERY_GOOD',
+            '5000': 'USED_GOOD',
+            '6000': 'USED_ACCEPTABLE',
+            '7000': 'FOR_PARTS_OR_NOT_WORKING'
+        };
+        const conditionEnum = CONDITION_MAP[String(conditionId)] || 'USED_GOOD';
+
+        // ── Step 1: PUT inventory item ────────────────────────────────────────
+        const inventoryItem = {
+            availability: { shipToLocationAvailability: { quantity: 1 } },
+            condition:    conditionEnum,
+            product: {
+                title,
+                description,
+                imageUrls: (images || []).slice(0, 12),   // eBay max 12 images per listing
+                aspects:   aspects || {}
+            }
+        };
+
+        const putRes = await fetch(
+            `${EBAY_API_BASE}/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
+            { method: 'PUT', headers, body: JSON.stringify(inventoryItem) }
+        );
+        // 204 No Content = success; anything else is an error
+        if (!putRes.ok) {
+            const putErr = await putRes.json().catch(() => ({}));
+            const msg = putErr.errors?.[0]?.message || `PUT inventory_item failed (${putRes.status})`;
+            console.error('[eBay/list] PUT inventory_item failed:', JSON.stringify(putErr));
+            return res.status(502).json({ error: msg, detail: putErr });
+        }
+        console.log(`[eBay/list] ✅ inventory_item: ${sku}`);
+
+        // ── Step 2: POST offer ────────────────────────────────────────────────
+        const offerPayload = {
+            sku,
+            marketplaceId:      'EBAY_US',
+            format:             'FIXED_PRICE',
+            availableQuantity:  1,
+            categoryId:         String(categoryId),
+            listingDescription: description,
+            listingPolicies:    { fulfillmentPolicyId, paymentPolicyId, returnPolicyId },
+            pricingSummary: {
+                price: { currency: 'USD', value: Number(price).toFixed(2) }
+            }
+        };
+
+        const offerRes  = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/offer`,
+            { method: 'POST', headers, body: JSON.stringify(offerPayload) }
+        );
+        const offerData = await offerRes.json();
+        if (!offerRes.ok) {
+            const msg = offerData.errors?.[0]?.message || `POST offer failed (${offerRes.status})`;
+            console.error('[eBay/list] POST offer failed:', JSON.stringify(offerData));
+            return res.status(502).json({ error: msg, detail: offerData });
+        }
+        const offerId = offerData.offerId;
+        console.log(`[eBay/list] ✅ offer: ${offerId}`);
+
+        // ── Step 3: Publish offer ─────────────────────────────────────────────
+        const publishRes  = await fetch(
+            `${EBAY_API_BASE}/sell/inventory/v1/offer/${offerId}/publish`,
+            { method: 'POST', headers }
+        );
+        const publishData = await publishRes.json();
+        if (!publishRes.ok) {
+            const msg = publishData.errors?.[0]?.message || `Publish failed (${publishRes.status})`;
+            console.error('[eBay/list] Publish failed:', JSON.stringify(publishData));
+            return res.status(502).json({ error: msg, detail: publishData });
+        }
+        const listingId  = publishData.listingId;
+        const listingUrl = `https://www.ebay.com/itm/${listingId}`;
+        console.log(`[eBay/list] 🚀 LIVE: listingId=${listingId} offerId=${offerId} sku=${sku}`);
+
+        // ── Step 4: Patch Firestore doc (best-effort, non-blocking) ──────────
+        if (listingDocId && adminFirestore) {
+            adminFirestore.doc(`users/${req.uid}/listings/${listingDocId}`).update({
+                ebayListingId:  listingId,
+                ebayOfferId:    offerId,
+                ebaySku:        sku,
+                ebayListingUrl: listingUrl,
+                ebayStatus:     'live',
+                ebayListedAt:   Date.now()
+            }).catch(e => console.warn('[eBay/list] Firestore patch failed:', e.message));
+        }
+
+        res.json({ success: true, listingId, offerId, listingUrl });
+    } catch(e) {
+        console.error('[eBay/list] Error:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // ─── eBay Marketplace Account Deletion Notifications ─────────────────────────
 // Required for production API access. Handles eBay's ownership challenge (GET)
 // and actual account deletion events (POST).
