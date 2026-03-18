@@ -3351,8 +3351,8 @@ www.scout-recon.com`
                                                     />
                                                 </div>
                                             ) : (
+                                                <>
                                                 <span className="text-2xl font-black text-slate-900 tracking-tighter leading-none">${Number(l.buyItNowPrice || 0).toFixed(2)}</span>
-                                                {/* Unverified badge — shows while auto-pricing runs or if never priced */}
                                                 {autoPricingIds.has(l.id) ? (
                                                     <span className="flex items-center gap-1 text-[7px] font-black uppercase text-blue-500 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded-full">
                                                         <Icon name="Loader2" size={7} className="animate-spin"/> Pricing...
@@ -3362,6 +3362,7 @@ www.scout-recon.com`
                                                 ) : (localPriceResults[l.id] || l.priceResearch)?.conditionId !== l.conditionId ? (
                                                     <span className="text-[7px] font-black uppercase text-amber-500 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full">Condition changed — Re-Price</span>
                                                 ) : null}
+                                                </>
                                             )}
                                             <input type="text" defaultValue={l.sku || ''} placeholder="SKU"
                                                 onBlur={async (e) => { const val = e.target.value.trim(); if (val && val !== l.sku) { await dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({ sku: val }); showToast("SKU Updated."); }}}
