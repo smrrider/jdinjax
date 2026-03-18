@@ -1955,21 +1955,59 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                             loadedCatIdsRef.current.add(listing.categoryId);
                         }
                         setCategorySpecifics(d);
-                        (d.mandatory || []).forEach(s => console.log(`[SR] SPEC "${s.name}" (${s.values?.length ?? 0} vals): ${JSON.stringify(s.values?.slice(0,30))}`));
                         const fills = {};
                         const toSave = {};
+                        const needsGemini = []; // specs where text-scan couldn't find a valid list match
+
                         (d.mandatory || []).forEach(spec => {
                             const key = `spec_${spec.name.replace(/\s+/g,'_')}`;
                             const val = getSpecAutoFill(spec.name, listing, spec.values);
-                            console.log(`[SR] auto-fill "${spec.name}": "${val}"  (${spec.values?.length ?? 0} allowed vals, listing.itemType="${listing.itemType}")`);
-                            if (val) {
+                            const inList = !spec.values?.length || spec.values.some(v => v.toLowerCase() === (val||'').toLowerCase());
+                            if (val && inList) {
+                                // Text-scan found a confirmed match — use it immediately
+                                fills[key] = val;
+                                if (!listing[key]) toSave[key] = val;
+                            } else if (spec.values?.length > 0) {
+                                // eBay has an allowed list but we couldn't match — Gemini fallback
+                                needsGemini.push({ spec, key });
+                                if (val) fills[key] = val; // show tentative value while Gemini loads
+                            } else if (val) {
+                                // Free-text spec with a value — use it
                                 fills[key] = val;
                                 if (!listing[key]) toSave[key] = val;
                             }
                         });
-                        setSpecAutoFills(fills);
+
+                        setSpecAutoFills({ ...fills });
                         if (Object.keys(toSave).length) {
                             dbRef.current.doc(`${getListingsPath(user.uid)}/${listing.id}`).update(toSave).catch(()=>{});
+                        }
+
+                        // Gemini fallback — runs in parallel for all unresolved specs
+                        if (needsGemini.length > 0) {
+                            const tok = await user.getIdToken();
+                            await Promise.all(needsGemini.map(async ({ spec, key }) => {
+                                try {
+                                    const r = await fetch('/api/ebay/spec-fill', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${tok}` },
+                                        body: JSON.stringify({
+                                            specName: spec.name,
+                                            values: spec.values,
+                                            title: listing.title,
+                                            description: listing.markdownDescription
+                                        })
+                                    });
+                                    const data = await r.json();
+                                    if (data.value) {
+                                        setSpecAutoFills(prev => ({ ...prev, [key]: data.value }));
+                                        if (!listing[key]) {
+                                            dbRef.current.doc(`${getListingsPath(user.uid)}/${listing.id}`)
+                                                .update({ [key]: data.value }).catch(()=>{});
+                                        }
+                                    }
+                                } catch(e) { console.warn(`[SR] Gemini spec fallback failed for "${spec.name}":`, e.message); }
+                            }));
                         }
                     } catch(e) { console.warn('Specifics load failed:', e.message); }
                     finally { setCategorySpecificsLoading(false); }

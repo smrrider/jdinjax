@@ -442,6 +442,45 @@ app.get('/api/ebay/category-specifics', async (req, res) => {
     } catch(e) { res.status(502).json({ error: e.message }); }
 });
 
+// POST /api/ebay/spec-fill — Gemini fallback when text-scan can't match a mandatory spec value
+// Called only when getSpecAutoFill can't find a valid match in eBay's allowed list.
+// Body: { specName, values: string[], title, description }
+// Returns: { value: string } — the best matching allowed value picked by Gemini
+app.post('/api/ebay/spec-fill', requireUser, async (req, res) => {
+    try {
+        const { specName, values, title, description } = req.body;
+        if (!specName || !Array.isArray(values) || !values.length || !title) {
+            return res.status(400).json({ error: 'specName, values[], and title are required' });
+        }
+        const valueList = values.slice(0, 60).map((v, i) => `${i + 1}. ${v}`).join('\n');
+        const prompt =
+            `You are an expert eBay seller filling in item specifics for a listing.\n\n` +
+            `LISTING TITLE: ${title}\n` +
+            (description ? `DESCRIPTION (first 400 chars): ${description.slice(0, 400)}\n` : '') +
+            `\nFor the eBay item specific "${specName}", choose the SINGLE best matching value from this list:\n` +
+            valueList + '\n\n' +
+            `Rules:\n` +
+            `- Reply with ONLY the exact text of the chosen option — no punctuation, no explanation.\n` +
+            `- If none of the options fits well, pick the closest/most general one.\n` +
+            `- Never invent a value not in the list.`;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }] })
+        });
+        const d = await resp.json();
+        const picked = (d.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+        // Verify it's actually in the list (case-insensitive); fall back to raw if not
+        const confirmed = values.find(v => v.toLowerCase() === picked.toLowerCase()) || picked;
+        console.log(`[eBay/spec-fill] "${specName}" → "${confirmed}" (raw: "${picked}")`);
+        res.json({ value: confirmed });
+    } catch(e) {
+        console.error('[eBay/spec-fill] Error:', e.message);
+        res.status(502).json({ error: e.message });
+    }
+});
+
 // ─── eBay Marketplace Account Deletion Notifications ─────────────────────────
 // Required for production API access. Handles eBay's ownership challenge (GET)
 // and actual account deletion events (POST).
