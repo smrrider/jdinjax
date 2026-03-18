@@ -1629,6 +1629,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const [specAutoFills, setSpecAutoFills] = useState({});             // { spec_Key: 'value' } — best-guess fills
             const loadedCatIdsRef = React.useRef(new Set());                    // tracks which categoryIds we've fetched
             const [pricingListingId, setPricingListingId] = useState(null);
+            const [localPriceResults, setLocalPriceResults] = useState({});  // { listingId: priceResearch } — immediate display
 
             const dbRef = useRef(null);
             const [showScanner,    setShowScanner]    = useState(false);
@@ -2593,10 +2594,10 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         prices = { ...gPrices, source: 'AI Estimate', count: null };
                     }
 
-                    console.log('[Price] Saving to Firestore:', prices);
                     await dbRef.current.doc(`${getListingsPath(user.uid)}/${listing.id}`)
                         .update({ priceResearch: prices, buyItNowPrice: prices.mid });
-                    console.log('[Price] Firestore write complete.');
+                    // Update local state immediately — don't wait for Firestore listener
+                    setLocalPriceResults(prev => ({ ...prev, [listing.id]: prices }));
                 } catch (e) { console.error('[Price] FAILED:', e); setErrorMsg("Research Failed."); }
                 finally { setPricingListingId(null); }
             };
@@ -3434,29 +3435,32 @@ www.scout-recon.com`
                                         })()}
                                     </div>
                                 </details>
-                                {l.priceResearch && (
+                                {(localPriceResults[l.id] || l.priceResearch) && (() => {
+                                    const pr = localPriceResults[l.id] || l.priceResearch;
+                                    return (
                                     <div className="bg-gradient-to-br from-blue-50 to-slate-50 rounded-2xl p-5 border border-blue-100 mb-6 shadow-sm">
                                         {/* Source + confidence header */}
                                         <div className="flex items-center gap-2 mb-3">
-                                            <span className={`text-[8px] font-black px-2 py-1 rounded-lg uppercase tracking-widest ${l.priceResearch?.source === 'eBay Live' ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-500'}`}>
-                                                {l.priceResearch?.source === 'eBay Live' ? '⚡ eBay Live' : '🤖 AI Estimate'}
+                                            <span className={`text-[8px] font-black px-2 py-1 rounded-lg uppercase tracking-widest ${pr.source === 'eBay Live' ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-500'}`}>
+                                                {pr.source === 'eBay Live' ? '⚡ eBay Live' : '🤖 AI Estimate'}
                                             </span>
-                                            {l.priceResearch?.count && (
-                                                <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">{l.priceResearch.count} active listings</span>
+                                            {pr.count && (
+                                                <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">{pr.count} active listings</span>
                                             )}
-                                            <span className="ml-auto text-[8px] font-black px-2 py-1 rounded-lg uppercase bg-green-100 text-green-700">{l.priceResearch?.confidence || 'N/A'}</span>
+                                            <span className="ml-auto text-[8px] font-black px-2 py-1 rounded-lg uppercase bg-green-100 text-green-700">{pr.confidence || 'N/A'}</span>
                                         </div>
                                         <div className="flex items-end gap-4 mb-3">
-                                            <div className="text-center"><span className="text-[8px] text-slate-400 font-black uppercase block mb-1">Low</span><span className="text-sm font-black text-slate-500">${Number(l.priceResearch?.low || 0).toFixed(2)}</span></div>
+                                            <div className="text-center"><span className="text-[8px] text-slate-400 font-black uppercase block mb-1">Low</span><span className="text-sm font-black text-slate-500">${Number(pr.low || 0).toFixed(2)}</span></div>
                                             <div className="flex-1 text-center bg-white rounded-2xl px-4 py-3 border border-blue-200 shadow-sm">
                                                 <span className="text-[8px] text-blue-500 font-black uppercase block mb-1">Recommended</span>
-                                                <span className="text-2xl font-black text-blue-700">${Number(l.priceResearch?.mid || 0).toFixed(2)}</span>
+                                                <span className="text-2xl font-black text-blue-700">${Number(pr.mid || 0).toFixed(2)}</span>
                                             </div>
-                                            <div className="text-center"><span className="text-[8px] text-slate-400 font-black uppercase block mb-1">High</span><span className="text-sm font-black text-slate-500">${Number(l.priceResearch?.high || 0).toFixed(2)}</span></div>
+                                            <div className="text-center"><span className="text-[8px] text-slate-400 font-black uppercase block mb-1">High</span><span className="text-sm font-black text-slate-500">${Number(pr.high || 0).toFixed(2)}</span></div>
                                         </div>
-                                        <p className="text-[10px] text-slate-600 italic leading-relaxed border-l-2 border-blue-200 pl-3">{l.priceResearch?.basis}</p>
+                                        <p className="text-[10px] text-slate-600 italic leading-relaxed border-l-2 border-blue-200 pl-3">{pr.basis}</p>
                                     </div>
-                                )}
+                                    );
+                                })()}
                                 {/* ── Mandatory Item Specifics (edit mode) ─────────── */}
                                 {editingListingId === l.id && (
                                     <div className="mb-4">
