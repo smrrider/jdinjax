@@ -815,6 +815,44 @@ app.get('/auth/ebay/callback', async (req, res) => {
     }
 });
 
+// ── Connect with credentials — stores creds, returns token status or redirect ─
+app.post('/api/ebay/connect', requireUser, jsonSmall, async (req, res) => {
+    if (!adminFirestore) return res.status(503).json({ error: 'Firestore not available' });
+    const { username, password } = req.body;
+    if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+
+    // Store credentials securely in Firestore (per-user, protected by rules)
+    await adminFirestore.doc(`users/${req.uid}/ebay/credentials`).set({
+        username, password, savedAt: Date.now()
+    });
+
+    // Check if we already have a valid OAuth token
+    const tokenDoc = await adminFirestore.doc(`users/${req.uid}/ebay/tokens`).get();
+    if (tokenDoc.exists) {
+        const data = tokenDoc.data();
+        // Token still valid — return connected status directly
+        if (Date.now() < data.expiresAt - 300_000) {
+            return res.json({ connected: true, env: data.env, connectedAt: data.connectedAt });
+        }
+        // Token expired but we have a refresh token — try to refresh silently
+        try {
+            await refreshEbayToken(req.uid, data.refreshToken);
+            return res.json({ connected: true, env: data.env, connectedAt: data.connectedAt });
+        } catch(e) {
+            console.warn('[eBay] Silent refresh failed:', e.message);
+        }
+    }
+
+    // No valid token — need OAuth. Return redirect URL for client to navigate to.
+    const state  = Buffer.from(JSON.stringify({ uid: req.uid, ts: Date.now() })).toString('base64');
+    const params = new URLSearchParams({
+        client_id: EBAY_APP_ID, redirect_uri: EBAY_RUNAME,
+        response_type: 'code', scope: EBAY_SCOPES, state,
+        prompt: 'login', login_hint: username
+    });
+    res.json({ redirectUrl: `${EBAY_AUTH_URL}?${params}` });
+});
+
 // ── Connection status ─────────────────────────────────────────────────────────
 app.get('/api/ebay/status', requireUser, async (req, res) => {
     if (!adminFirestore) return res.status(503).json({ error: 'Firestore not available' });
