@@ -1860,36 +1860,68 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 });
             }, [listings]);
 
-            // Map an eBay mandatory spec name → best-guess value from Gemini-extracted listing fields
-            // Brand always returns something — "Unbranded" as last resort so eBay never rejects for missing brand
-            const getSpecAutoFill = (specName, listing) => {
+            // Map an eBay mandatory spec name → best-guess value from Gemini-extracted listing fields.
+            // Pass allowedValues (eBay's enumeration for this spec) to enable title/description scanning —
+            // this catches things like DDR5 for RAM Type, Rust for Exterior Color, Backpack for Style, etc.
+            const getSpecAutoFill = (specName, listing, allowedValues = []) => {
+                // 1. Already saved to Firestore — highest priority
                 const saved = listing[`spec_${specName.replace(/\s+/g,'_')}`];
                 if (saved) return saved;
+
                 const n = specName.toLowerCase().replace(/[^a-z]/g,'');
-                if (n === 'brand')                               return listing.brand || 'Unbranded';
-                if (n === 'type' || n === 'itemtype')            return listing.itemType || '';
-                if (n === 'model')                               return listing.model    || '';
-                if (n === 'mpn' || n === 'manufacturerpartnumber') return listing.mpn   || '';
-                if (n === 'color' || n === 'colour')             return listing.color    || '';
-                if (n === 'material')                            return listing.material || '';
-                if (n === 'size')                                return listing.size     || '';
-                if (n === 'storage' || n === 'storagecapacity')  return listing.storage  || '';
+
+                // 2. Direct Gemini-field mappings
+                const directVal = (() => {
+                    if (n === 'brand')                                 return listing.brand    || '';
+                    if (n === 'type' || n === 'itemtype')              return listing.itemType || '';
+                    if (n === 'model')                                 return listing.model    || '';
+                    if (n === 'mpn' || n === 'manufacturerpartnumber') return listing.mpn      || '';
+                    if (n === 'color' || n === 'colour' || n === 'exteriorcolor') return listing.color || '';
+                    if (n === 'material' || n === 'exteriormaterial')  return listing.material || '';
+                    if (n === 'size')                                   return listing.size    || '';
+                    if (n === 'storage' || n === 'storagecapacity')    return listing.storage  || '';
+                    return '';
+                })();
+                // If direct mapping gave a value AND it's in the allowed list (or free-text), use it
+                if (directVal && (!allowedValues.length || allowedValues.some(v => v.toLowerCase() === directVal.toLowerCase()))) {
+                    return directVal;
+                }
+
+                // 3. Scan title + description against eBay's allowed values list (word-boundary match)
+                //    This catches: DDR5 in RAM title, Rust/Brown in bag title, Backpack/Tote in style, etc.
+                if (allowedValues.length > 0) {
+                    const searchText = [listing.title, listing.markdownDescription, listing.keyFeatures]
+                        .filter(Boolean).join(' ');
+                    const match = allowedValues.find(v => {
+                        if (!v || v.length < 2) return false;
+                        // Escape regex special chars, require whole-word match
+                        const escaped = v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                        return new RegExp(`\\b${escaped}\\b`, 'i').test(searchText);
+                    });
+                    if (match) return match;
+                }
+
+                // 4. Use the direct Gemini value even if not in the list (user will see "confirm" label)
+                if (directVal) return directVal;
+
+                // 5. Brand last-resort: always return something so eBay never rejects for missing brand
+                if (n === 'brand') return 'Unbranded';
+
                 return '';
             };
 
             // Returns count of mandatory specs that still need user attention:
             //   - no value at all, OR
-            //   - has a value but it isn't in eBay's allowed list for that spec
-            // A field is considered resolved only when the effective value is in eBay's enumerated list
+            //   - value isn't in eBay's allowed list for that spec
+            // A field is considered resolved when the effective value is in eBay's enumerated list
             // (or the spec accepts free text and has any non-empty value).
             const getUnresolvedSpecCount = (listing, categoryData) => {
                 if (!categoryData?.mandatory?.length) return 0;
                 return categoryData.mandatory.filter(spec => {
                     const key = `spec_${spec.name.replace(/\s+/g,'_')}`;
-                    const val = listing[key] || getSpecAutoFill(spec.name, listing);
+                    const val = listing[key] || getSpecAutoFill(spec.name, listing, spec.values);
                     if (!val) return true; // no value at all → unresolved
                     if (spec.values?.length > 0) {
-                        // eBay provides an allowed list — value must be in it to be resolved
                         return !spec.values.some(v => v.toLowerCase() === val.toLowerCase());
                     }
                     return false; // free-text spec with any value → resolved
@@ -3311,7 +3343,7 @@ www.scout-recon.com`
                                                 <div className="space-y-2">
                                                     {categorySpecifics.mandatory.map(spec => {
                                                         const specKey  = `spec_${spec.name.replace(/\s+/g,'_')}`;
-                                                        const fillVal  = specAutoFills[specKey] || '';
+                                                        const fillVal  = specAutoFills[specKey] || getSpecAutoFill(spec.name, l, spec.values) || '';
                                                         const isGuess   = fillVal && !l[specKey];
                                                         // Determine resolution status for this field
                                                         const inList    = spec.values?.length > 0
@@ -3410,12 +3442,13 @@ www.scout-recon.com`
                                                                 loadedCatIdsRef.current.add(l.categoryId);
                                                             }
                                                             setCategorySpecifics(d);
-                                                            // Auto-fill mandatory fields from Gemini-extracted listing data
+                                                            // Auto-fill mandatory fields — pass eBay's allowed values so
+                                                            // title/description scanning kicks in (DDR5, Rust, Backpack, etc.)
                                                             const fills = {};
                                                             const toSave = {};
                                                             (d.mandatory || []).forEach(spec => {
                                                                 const key  = `spec_${spec.name.replace(/\s+/g,'_')}`;
-                                                                const val  = getSpecAutoFill(spec.name, l);
+                                                                const val  = getSpecAutoFill(spec.name, l, spec.values);
                                                                 if (val) {
                                                                     fills[key] = val;
                                                                     if (!l[key]) toSave[key] = val; // only persist if not already set
