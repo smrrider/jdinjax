@@ -1861,19 +1861,39 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             }, [listings]);
 
             // Map an eBay mandatory spec name → best-guess value from Gemini-extracted listing fields
+            // Brand always returns something — "Unbranded" as last resort so eBay never rejects for missing brand
             const getSpecAutoFill = (specName, listing) => {
                 const saved = listing[`spec_${specName.replace(/\s+/g,'_')}`];
                 if (saved) return saved;
                 const n = specName.toLowerCase().replace(/[^a-z]/g,'');
-                if (n === 'brand')                          return listing.brand    || '';
-                if (n === 'type' || n === 'itemtype')       return listing.itemType || '';
-                if (n === 'model')                          return listing.model    || '';
-                if (n === 'mpn' || n === 'manufacturerpartnumber') return listing.mpn || '';
-                if (n === 'color' || n === 'colour')        return listing.color    || '';
-                if (n === 'material')                       return listing.material || '';
-                if (n === 'size')                           return listing.size     || '';
-                if (n === 'storage' || n === 'storagecapacity') return listing.storage || '';
+                if (n === 'brand')                               return listing.brand || 'Unbranded';
+                if (n === 'type' || n === 'itemtype')            return listing.itemType || '';
+                if (n === 'model')                               return listing.model    || '';
+                if (n === 'mpn' || n === 'manufacturerpartnumber') return listing.mpn   || '';
+                if (n === 'color' || n === 'colour')             return listing.color    || '';
+                if (n === 'material')                            return listing.material || '';
+                if (n === 'size')                                return listing.size     || '';
+                if (n === 'storage' || n === 'storagecapacity')  return listing.storage  || '';
                 return '';
+            };
+
+            // Returns count of mandatory specs that still need user attention:
+            //   - no value at all, OR
+            //   - has a value but it isn't in eBay's allowed list for that spec
+            // A field is considered resolved only when the effective value is in eBay's enumerated list
+            // (or the spec accepts free text and has any non-empty value).
+            const getUnresolvedSpecCount = (listing, categoryData) => {
+                if (!categoryData?.mandatory?.length) return 0;
+                return categoryData.mandatory.filter(spec => {
+                    const key = `spec_${spec.name.replace(/\s+/g,'_')}`;
+                    const val = listing[key] || getSpecAutoFill(spec.name, listing);
+                    if (!val) return true; // no value at all → unresolved
+                    if (spec.values?.length > 0) {
+                        // eBay provides an allowed list — value must be in it to be resolved
+                        return !spec.values.some(v => v.toLowerCase() === val.toLowerCase());
+                    }
+                    return false; // free-text spec with any value → resolved
+                }).length;
             };
 
             const showToast = (msg, type = 'default') => { setToast({ msg, type }); setTimeout(() => setToast(null), 4000); };
@@ -3137,11 +3157,18 @@ www.scout-recon.com`
                                                 {l.categorySource === 'AI Predicted' ? 'CSV Match Failed - Using AI Suggestion' : l.categorySource === 'AI Verified' ? 'Gemini Verified' : 'Action Required: Assign Category'}
                                             </span>
                                             {/* ⚠ Required fields badge — visible on card without opening edit mode */}
-                                            {l.categoryId && validatedCategories[l.categoryId]?.mandatory?.length > 0 && (
-                                                <span className="ml-2 flex items-center gap-1 text-[8px] font-black uppercase tracking-widest text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
-                                                    <Icon name="AlertTriangle" size={8}/> {validatedCategories[l.categoryId].mandatory.length} required field{validatedCategories[l.categoryId].mandatory.length > 1 ? 's' : ''} — click ✏ to fill
-                                                </span>
-                                            )}
+                                            {l.categoryId && validatedCategories[l.categoryId]?.mandatory?.length > 0 && (() => {
+                                                const unresolved = getUnresolvedSpecCount(l, validatedCategories[l.categoryId]);
+                                                return unresolved > 0 ? (
+                                                    <span className="ml-2 flex items-center gap-1 text-[8px] font-black uppercase tracking-widest text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                                                        <Icon name="AlertTriangle" size={8}/> {unresolved} field{unresolved > 1 ? 's' : ''} need confirmation — click ✏
+                                                    </span>
+                                                ) : (
+                                                    <span className="ml-2 flex items-center gap-1 text-[8px] font-black uppercase tracking-widest text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                                                        <Icon name="CheckCircle" size={8}/> eBay fields ready
+                                                    </span>
+                                                );
+                                            })()}
                                         </div>
                                     )}
                                     {editingCategoryId !== l.id && (
@@ -3285,15 +3312,27 @@ www.scout-recon.com`
                                                     {categorySpecifics.mandatory.map(spec => {
                                                         const specKey  = `spec_${spec.name.replace(/\s+/g,'_')}`;
                                                         const fillVal  = specAutoFills[specKey] || '';
-                                                        const isGuess  = fillVal && !l[specKey];
+                                                        const isGuess   = fillVal && !l[specKey];
+                                                        // Determine resolution status for this field
+                                                        const inList    = spec.values?.length > 0
+                                                            ? spec.values.some(v => v.toLowerCase() === fillVal.toLowerCase())
+                                                            : !!fillVal; // free-text: any value = resolved
+                                                        const isResolved      = fillVal && inList;
+                                                        const needsConfirm    = fillVal && !inList && spec.values?.length > 0;
+                                                        const rowBg = isResolved ? 'bg-emerald-50/60' : needsConfirm ? 'bg-amber-50' : 'bg-red-50/60';
+                                                        const borderCol = isResolved ? 'border-emerald-200' : needsConfirm ? 'border-amber-200' : 'border-red-200';
                                                         return (
-                                                        <div key={spec.name} className="flex items-center justify-between gap-2">
+                                                        <div key={spec.name} className={`flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg ${rowBg}`}>
                                                             <span className="text-[10px] font-black text-slate-600 min-w-0 truncate flex items-center gap-1">
+                                                                {isResolved
+                                                                    ? <Icon name="CheckCircle" size={9} className="text-emerald-500 shrink-0"/>
+                                                                    : <Icon name="AlertTriangle" size={9} className="text-amber-500 shrink-0"/>}
                                                                 {spec.name}
                                                                 {isGuess && <span className="text-[7px] text-blue-400 font-black uppercase tracking-widest">AI</span>}
+                                                                {needsConfirm && <span className="text-[7px] text-amber-500 font-black uppercase tracking-widest">confirm</span>}
                                                             </span>
                                                             {spec.values?.length > 0 ? (
-                                                                <select className="text-[10px] font-black text-slate-700 bg-white border border-amber-200 rounded-lg px-2 py-1 focus:outline-none focus:border-amber-400 max-w-[160px]"
+                                                                <select className={`text-[10px] font-black text-slate-700 bg-white border rounded-lg px-2 py-1 focus:outline-none max-w-[160px] ${borderCol}`}
                                                                     defaultValue={fillVal}
                                                                     onChange={e => dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({ [specKey]: e.target.value })}>
                                                                     <option value="">— select —</option>
@@ -3303,7 +3342,7 @@ www.scout-recon.com`
                                                                 <input type="text"
                                                                     placeholder="Enter value"
                                                                     defaultValue={fillVal}
-                                                                    className="text-[10px] font-black text-slate-700 bg-white border border-amber-200 rounded-lg px-2 py-1 focus:outline-none focus:border-amber-400 w-32"
+                                                                    className={`text-[10px] font-black text-slate-700 bg-white border rounded-lg px-2 py-1 focus:outline-none w-32 ${borderCol}`}
                                                                     onBlur={e => e.target.value && dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({ [specKey]: e.target.value })}/>
                                                             )}
                                                         </div>
