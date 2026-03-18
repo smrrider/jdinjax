@@ -117,7 +117,7 @@ app.use(cors({
         // Allow requests with no origin (same-origin, curl, Postman)
         if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
         console.warn('[CORS] Blocked origin:', origin);
-        callback(new Error('CORS: origin not allowed'));
+        callback(new Error(`CORS blocked: [${origin}]`));
     },
     methods: ['GET', 'POST'],
     allowedHeaders: ['Content-Type', 'Authorization']
