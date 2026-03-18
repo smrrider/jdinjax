@@ -338,8 +338,8 @@ app.get('/api/ebay/policies', requireUser, async (req, res) => {
 // ─── eBay Marketplace Account Deletion Notifications ─────────────────────────
 // Required for production API access. Handles eBay's ownership challenge (GET)
 // and actual account deletion events (POST).
-const EBAY_NOTIFICATION_ENDPOINT = 'https://scout-recon.up.railway.app/ebay/notifications/account-deletion';
-const EBAY_NOTIFICATION_TOKEN    = process.env.EBAY_NOTIFICATION_TOKEN || '';
+const EBAY_NOTIFICATION_ENDPOINT = process.env.EBAY_NOTIFICATION_ENDPOINT || 'https://scout-recon.up.railway.app/ebay/notifications/account-deletion';
+const EBAY_NOTIFICATION_TOKEN    = process.env.EBAY_NOTIFICATION_TOKEN    || '';
 
 // GET — eBay ownership challenge verification
 app.get('/ebay/notifications/account-deletion', (req, res) => {
@@ -349,7 +349,7 @@ app.get('/ebay/notifications/account-deletion', (req, res) => {
     const hash = crypto.createHash('sha256')
         .update(challengeCode + EBAY_NOTIFICATION_TOKEN + EBAY_NOTIFICATION_ENDPOINT)
         .digest('hex');
-    console.log(`[eBay] Ownership challenge verified`);
+    console.log(`[eBay] Challenge verified — endpoint: ${EBAY_NOTIFICATION_ENDPOINT} | token prefix: ${EBAY_NOTIFICATION_TOKEN.slice(0,4)}`);
     res.json({ challengeResponse: hash });
 });
 
