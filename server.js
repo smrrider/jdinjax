@@ -335,6 +335,54 @@ app.get('/api/ebay/policies', requireUser, async (req, res) => {
     } catch(e) { res.status(e.message.includes('not connected') ? 401 : 502).json({ error: e.message }); }
 });
 
+// ─── eBay Marketplace Account Deletion Notifications ─────────────────────────
+// Required for production API access. Handles eBay's ownership challenge (GET)
+// and actual account deletion events (POST).
+const EBAY_NOTIFICATION_ENDPOINT = 'https://scout-recon.up.railway.app/ebay/notifications/account-deletion';
+const EBAY_NOTIFICATION_TOKEN    = process.env.EBAY_NOTIFICATION_TOKEN || '';
+
+// GET — eBay ownership challenge verification
+app.get('/ebay/notifications/account-deletion', (req, res) => {
+    const challengeCode = req.query.challenge_code;
+    if (!challengeCode) return res.status(400).json({ error: 'Missing challenge_code' });
+    if (!EBAY_NOTIFICATION_TOKEN) return res.status(503).json({ error: 'EBAY_NOTIFICATION_TOKEN not configured' });
+    const hash = crypto.createHash('sha256')
+        .update(challengeCode + EBAY_NOTIFICATION_TOKEN + EBAY_NOTIFICATION_ENDPOINT)
+        .digest('hex');
+    console.log(`[eBay] Ownership challenge verified`);
+    res.json({ challengeResponse: hash });
+});
+
+// POST — actual account deletion event
+app.post('/ebay/notifications/account-deletion', express.json(), async (req, res) => {
+    try {
+        const { notification } = req.body || {};
+        const data = notification?.data || {};
+        const ebayUserId = data.userId || data.username || 'unknown';
+        console.log(`[eBay] Account deletion notification received — userId: ${ebayUserId}`);
+        // Find and delete eBay tokens for any SR user linked to this eBay account
+        if (adminFirestore) {
+            const usersSnap = await adminFirestore.collection('users').get();
+            const deletions = [];
+            for (const doc of usersSnap.docs) {
+                const credSnap = await adminFirestore.doc(`users/${doc.id}/ebay/credentials`).get();
+                if (credSnap.exists && credSnap.data()?.username === ebayUserId) {
+                    deletions.push(
+                        adminFirestore.doc(`users/${doc.id}/ebay/credentials`).delete(),
+                        adminFirestore.doc(`users/${doc.id}/ebay/token`).delete()
+                    );
+                    console.log(`[eBay] Deleted eBay data for SR user ${doc.id}`);
+                }
+            }
+            await Promise.all(deletions);
+        }
+        res.status(200).json({ success: true });
+    } catch(e) {
+        console.error('[eBay] Deletion notification error:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // ─── End eBay API Integration ──────────────────────────────────────────────────
 
 /**
