@@ -1955,7 +1955,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                             loadedCatIdsRef.current.add(listing.categoryId);
                         }
                         setCategorySpecifics(d);
-                        console.log('[SR] Mandatory specs →', d.mandatory?.map(s => ({ name: s.name, values: s.values?.slice(0,8) })));
+                        (d.mandatory || []).forEach(s => console.log(`[SR] SPEC "${s.name}" (${s.values?.length ?? 0} vals): ${JSON.stringify(s.values?.slice(0,30))}`));
                         const fills = {};
                         const toSave = {};
                         (d.mandatory || []).forEach(spec => {
