@@ -683,6 +683,161 @@ app.post('/api/admin/cloudinary-purge', requireOwner, jsonSmall, async (req, res
     res.json({ deleted, freedBytes });
 });
 
+// ─── eBay API Integration ─────────────────────────────────────────────────────
+const EBAY_ENV      = process.env.EBAY_ENV || 'sandbox';
+const EBAY_APP_ID   = EBAY_ENV === 'production' ? process.env.EBAY_APP_ID_PROD  : process.env.EBAY_APP_ID;
+const EBAY_CERT_ID  = EBAY_ENV === 'production' ? process.env.EBAY_CERT_ID_PROD : process.env.EBAY_CERT_ID;
+const EBAY_RUNAME   = EBAY_ENV === 'production' ? process.env.EBAY_RUNAME_PROD  : process.env.EBAY_RUNAME;
+const EBAY_API_BASE = EBAY_ENV === 'production' ? 'https://api.ebay.com'        : 'https://api.sandbox.ebay.com';
+const EBAY_AUTH_URL = EBAY_ENV === 'production'
+    ? 'https://auth.ebay.com/oauth2/authorize'
+    : 'https://auth.sandbox.ebay.com/oauth2/authorize';
+const EBAY_TOKEN_URL = `${EBAY_API_BASE}/identity/v1/oauth2/token`;
+const EBAY_SCOPES = [
+    'https://api.ebay.com/oauth/api_scope',
+    'https://api.ebay.com/oauth/api_scope/sell.account',
+    'https://api.ebay.com/oauth/api_scope/sell.inventory',
+    'https://api.ebay.com/oauth/api_scope/sell.fulfillment',
+    'https://api.ebay.com/oauth/api_scope/commerce.catalog.readonly',
+    'https://api.ebay.com/oauth/api_scope/buy.browse',
+].join(' ');
+
+console.log(`[eBay] Integration active — env: ${EBAY_ENV} | app: ${EBAY_APP_ID ? EBAY_APP_ID.slice(0,8)+'...' : 'NOT SET'}`);
+
+// ── Verify any authenticated Firebase user (not just owner) ──────────────────
+const requireUser = async (req, res, next) => {
+    if (!adminAuth) return res.status(503).json({ error: 'Admin SDK not configured.' });
+    const header  = req.headers['authorization'] || '';
+    const idToken = header.startsWith('Bearer ') ? header.slice(7) : null;
+    if (!idToken) return res.status(401).json({ error: 'Authorization required.' });
+    try {
+        const decoded = await adminAuth.verifyIdToken(idToken);
+        req.uid   = decoded.uid;
+        req.email = decoded.email;
+        next();
+    } catch(e) {
+        return res.status(401).json({ error: 'Invalid or expired token.' });
+    }
+};
+
+// ── Refresh eBay access token using stored refresh token ─────────────────────
+const refreshEbayToken = async (uid, refreshToken) => {
+    const credentials = Buffer.from(`${EBAY_APP_ID}:${EBAY_CERT_ID}`).toString('base64');
+    const r = await fetch(EBAY_TOKEN_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Authorization': `Basic ${credentials}` },
+        body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken, scope: EBAY_SCOPES })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(`eBay token refresh failed: ${data.error_description || data.error}`);
+    const tokens = {
+        accessToken:  data.access_token,
+        refreshToken: data.refresh_token || refreshToken,
+        expiresAt:    Date.now() + (data.expires_in * 1000),
+        updatedAt:    Date.now()
+    };
+    await adminFirestore.doc(`users/${uid}/ebay/tokens`).update(tokens);
+    console.log(`[eBay] Token refreshed for ${uid}`);
+    return tokens.accessToken;
+};
+
+// ── Get valid access token — auto-refresh if within 5 min of expiry ──────────
+const getEbayToken = async (uid) => {
+    if (!adminFirestore) throw new Error('Firestore not available');
+    const doc = await adminFirestore.doc(`users/${uid}/ebay/tokens`).get();
+    if (!doc.exists) throw new Error('eBay account not connected');
+    const data = doc.data();
+    if (Date.now() >= data.expiresAt - 300_000) return await refreshEbayToken(uid, data.refreshToken);
+    return data.accessToken;
+};
+
+// ── OAuth initiation — redirects browser to eBay login ───────────────────────
+app.get('/auth/ebay', (req, res) => {
+    const { uid } = req.query;
+    if (!uid) return res.status(400).send('Missing uid');
+    const state  = Buffer.from(JSON.stringify({ uid, ts: Date.now() })).toString('base64');
+    const params = new URLSearchParams({
+        client_id: EBAY_APP_ID, redirect_uri: EBAY_RUNAME,
+        response_type: 'code', scope: EBAY_SCOPES, state
+    });
+    res.redirect(`${EBAY_AUTH_URL}?${params}`);
+});
+
+// ── OAuth callback — exchange code for tokens, store in Firestore ─────────────
+app.get('/auth/ebay/callback', async (req, res) => {
+    const { code, state, error } = req.query;
+    if (error) return res.redirect(`/?ebay_error=${encodeURIComponent(error)}`);
+    if (!code || !state) return res.status(400).send('Invalid callback parameters');
+    let uid;
+    try {
+        const decoded = JSON.parse(Buffer.from(state, 'base64').toString());
+        uid = decoded.uid;
+        if (Date.now() - decoded.ts > 600_000) throw new Error('State expired');
+    } catch(e) { return res.status(400).send('Invalid or expired state'); }
+    try {
+        const credentials = Buffer.from(`${EBAY_APP_ID}:${EBAY_CERT_ID}`).toString('base64');
+        const tokenRes = await fetch(EBAY_TOKEN_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Authorization': `Basic ${credentials}` },
+            body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: EBAY_RUNAME })
+        });
+        const tokenData = await tokenRes.json();
+        if (!tokenRes.ok) throw new Error(tokenData.error_description || 'Token exchange failed');
+        await adminFirestore.doc(`users/${uid}/ebay/tokens`).set({
+            accessToken:  tokenData.access_token,
+            refreshToken: tokenData.refresh_token,
+            expiresAt:    Date.now() + (tokenData.expires_in * 1000),
+            scope:        tokenData.scope || EBAY_SCOPES,
+            connectedAt:  Date.now(),
+            env:          EBAY_ENV
+        });
+        console.log(`[eBay] User ${uid} connected (${EBAY_ENV})`);
+        res.redirect('/?ebay_connected=1');
+    } catch(e) {
+        console.error('[eBay] Callback error:', e.message);
+        res.redirect(`/?ebay_error=${encodeURIComponent(e.message)}`);
+    }
+});
+
+// ── Connection status ─────────────────────────────────────────────────────────
+app.get('/api/ebay/status', requireUser, async (req, res) => {
+    if (!adminFirestore) return res.status(503).json({ error: 'Firestore not available' });
+    const doc = await adminFirestore.doc(`users/${req.uid}/ebay/tokens`).get();
+    if (!doc.exists) return res.json({ connected: false });
+    const data = doc.data();
+    res.json({ connected: true, env: data.env, connectedAt: data.connectedAt, expired: Date.now() >= data.expiresAt });
+});
+
+// ── Disconnect ────────────────────────────────────────────────────────────────
+app.post('/api/ebay/disconnect', requireUser, jsonSmall, async (req, res) => {
+    if (!adminFirestore) return res.status(503).json({ error: 'Firestore not available' });
+    await adminFirestore.doc(`users/${req.uid}/ebay/tokens`).delete();
+    console.log(`[eBay] User ${req.uid} disconnected`);
+    res.json({ disconnected: true });
+});
+
+// ── Business Policies — fetch all 3 types from eBay Account API ──────────────
+app.get('/api/ebay/policies', requireUser, async (req, res) => {
+    try {
+        const token   = await getEbayToken(req.uid);
+        const headers = { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US', 'Content-Type': 'application/json' };
+        const [shipRes, payRes, retRes] = await Promise.all([
+            fetch(`${EBAY_API_BASE}/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_US`, { headers }),
+            fetch(`${EBAY_API_BASE}/sell/account/v1/payment_policy?marketplace_id=EBAY_US`,     { headers }),
+            fetch(`${EBAY_API_BASE}/sell/account/v1/return_policy?marketplace_id=EBAY_US`,      { headers })
+        ]);
+        const [ship, pay, ret] = await Promise.all([shipRes.json(), payRes.json(), retRes.json()]);
+        res.json({
+            fulfillment: (ship.fulfillmentPolicies || []).map(p => ({ id: p.fulfillmentPolicyId, name: p.name })),
+            payment:     (pay.paymentPolicies      || []).map(p => ({ id: p.paymentPolicyId,     name: p.name })),
+            returns:     (ret.returnPolicies        || []).map(p => ({ id: p.returnPolicyId,      name: p.name }))
+        });
+    } catch(e) {
+        console.error('[eBay] Policies error:', e.message);
+        res.status(e.message.includes('not connected') ? 401 : 502).json({ error: e.message });
+    }
+});
+
 // ── Health check — Railway/uptime monitors ────────────────────────────────
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', version: APP_VERSION, ts: new Date().toISOString() });
