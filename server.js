@@ -346,11 +346,13 @@ app.get('/ebay/notifications/account-deletion', (req, res) => {
     const challengeCode = req.query.challenge_code;
     if (!challengeCode) return res.status(400).json({ error: 'Missing challenge_code' });
     if (!EBAY_NOTIFICATION_TOKEN) return res.status(503).json({ error: 'EBAY_NOTIFICATION_TOKEN not configured' });
-    const hash = crypto.createHash('sha256')
-        .update(challengeCode + EBAY_NOTIFICATION_TOKEN + EBAY_NOTIFICATION_ENDPOINT)
-        .digest('hex');
-    console.log(`[eBay] Challenge verified — endpoint: ${EBAY_NOTIFICATION_ENDPOINT} | token prefix: ${EBAY_NOTIFICATION_TOKEN.slice(0,4)}`);
-    res.json({ challengeResponse: hash });
+    const hasher = crypto.createHash('sha256');
+    hasher.update(challengeCode);
+    hasher.update(EBAY_NOTIFICATION_TOKEN);
+    hasher.update(EBAY_NOTIFICATION_ENDPOINT);
+    const responseHash = hasher.digest('hex');
+    console.log(`[eBay] Challenge — endpoint: ${EBAY_NOTIFICATION_ENDPOINT} | token[0:4]: ${EBAY_NOTIFICATION_TOKEN.slice(0,4)} | hash: ${responseHash.slice(0,8)}...`);
+    res.json({ challengeResponse: responseHash });
 });
 
 // POST — actual account deletion event
