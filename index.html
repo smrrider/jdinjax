@@ -1018,15 +1018,15 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 if (!reconImage && !hasBarcode) { setErrorMsg("Upload an image or scan a barcode first."); return; }
                 setIsRunning(true); setErrorMsg(null); setResult(null);
                 try {
-                    // Skip compression if no image  -  barcode text-only path
+                    // Skip compression if no image or image is URL-only (from barcode scan selection)
                     let reconBlob = null, b64 = null, reconMimeType = null;
-                    if (reconImage) {
+                    if (reconImage && reconImage.file) {
                         setReconStatus("Compressing image...");
                         const compressed = await compressImage(reconImage);
                         reconBlob = compressed.blob;
                         b64 = compressed.b64;
                         reconMimeType = compressed.mimeType;
-                    } // end if(reconImage)
+                    } // end if(reconImage.file)
                     const condLabel = ebayConditions.find(c => c.id === condition)?.label || 'Used';
 
                     // Cloudinary upload  -  skip if no image (barcode text-only mode)
