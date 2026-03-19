@@ -536,77 +536,141 @@ app.get('/api/ebay/price-research-test', async (req, res) => {
 });
 
 // POST /api/ebay/price-research — Phase 4 Live Price Intelligence
-// Queries eBay Browse API for active fixed-price listings matching the item title.
-// Returns low/mid/high price band + listing count.  Falls back gracefully so the
-// client can call Gemini if fewer than MIN_COMPS results are found.
+// Queries eBay Browse API (active listings) + Finding API (sold listings) in parallel.
+// Returns active + sold price bands and three pricing strategy points.
 app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }), async (req, res) => {
     const MIN_COMPS = 4;
+    const pct = (arr, p) => arr[Math.max(0, Math.min(arr.length - 1, Math.floor(arr.length * p)))];
+
     try {
         const { title, conditionId, categoryId } = req.body;
         if (!title) return res.status(400).json({ error: 'title required' });
 
-        // Always query production eBay — sandbox has no real listings so Browse API
-        // returns 0 results and falls through to Gemini every time.
         const token = await getEbayProdAppToken();
-
-        // Use first 6 meaningful words as search query (broad enough to get comps)
         const searchQuery = title.split(/\s+/).slice(0, 6).join(' ');
 
-        // Map SR conditionId → eBay condition filter groups
+        // Map SR conditionId → eBay condition groups
         const cid = parseInt(conditionId || '3000');
         let conditionFilter = '';
-        if (cid === 1000)                          conditionFilter = 'conditionIds:{1000}';
-        else if (cid >= 2000 && cid <= 2750)       conditionFilter = 'conditionIds:{2000|2010|2020|2030|2500|2750}';
-        else                                        conditionFilter = 'conditionIds:{3000|4000|5000|6000|7000}';
+        let findingConditionIds = '';  // Finding API uses different param format
+        if (cid === 1000) {
+            conditionFilter    = 'conditionIds:{1000}';
+            findingConditionIds = '1000';
+        } else if (cid >= 2000 && cid <= 2750) {
+            conditionFilter    = 'conditionIds:{2000|2010|2020|2030|2500|2750}';
+            findingConditionIds = '2000,2010,2020,2030,2500,2750';
+        } else {
+            conditionFilter    = 'conditionIds:{3000|4000|5000|6000|7000}';
+            findingConditionIds = '3000,4000,5000,6000,7000';
+        }
 
-        // Build filter string with literal braces — URLSearchParams would percent-encode
-        // them (%7B/%7D) which eBay Browse API does not accept.
-        const filterStr = `buyingOptions:{FIXED_PRICE},${conditionFilter}`;
-        const safeParams = new URLSearchParams({ q: searchQuery, limit: '100' });
-        if (categoryId) safeParams.set('category_ids', String(categoryId));
-        // Append filter raw so braces remain unencoded
-        const browseUrl = `${EBAY_PROD_API_BASE}/buy/browse/v1/item_summary/search?${safeParams}&filter=${filterStr}`;
+        // ── 1. Browse API — active fixed-price listings ───────────────────────
+        const activeFilterStr = `buyingOptions:{FIXED_PRICE},${conditionFilter}`;
+        const activeParams    = new URLSearchParams({ q: searchQuery, limit: '100' });
+        if (categoryId) activeParams.set('category_ids', String(categoryId));
+        const browseUrl = `${EBAY_PROD_API_BASE}/buy/browse/v1/item_summary/search?${activeParams}&filter=${activeFilterStr}`;
 
-        console.log(`[Price] Browse URL: ${browseUrl}`);
+        // ── 2. Finding API — completed/sold listings (app-key auth, no OAuth) ──
+        // findCompletedItems returns actual transaction prices from the last 90 days.
+        const findingAppId = process.env.EBAY_APP_ID_PROD || EBAY_APP_ID;
+        const condIdParams = findingConditionIds.split(',')
+            .map((id, i) => `itemFilter(1).value(${i})=${id}`).join('&');
+        const findingUrl = `https://svcs.ebay.com/services/search/FindingService/v1` +
+            `?OPERATION-NAME=findCompletedItems` +
+            `&SERVICE-VERSION=1.0.0` +
+            `&SECURITY-APPNAME=${encodeURIComponent(findingAppId)}` +
+            `&RESPONSE-DATA-FORMAT=JSON` +
+            `&keywords=${encodeURIComponent(searchQuery)}` +
+            `&itemFilter(0).name=SoldItemsOnly&itemFilter(0).value=true` +
+            `&itemFilter(1).name=Condition&${condIdParams}` +
+            `&paginationInput.entriesPerPage=100` +
+            `&sortOrder=EndTimeSoonest`;
 
-        const r = await fetch(browseUrl, {
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
-                'Content-Type': 'application/json'
-            }
+        // Run both queries in parallel
+        const [browseRes, findingRes] = await Promise.allSettled([
+            fetch(browseUrl, {
+                headers: { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US', 'Content-Type': 'application/json' }
+            }).then(r => r.json()),
+            fetch(findingUrl).then(r => r.json())
+        ]);
+
+        // ── Active prices ─────────────────────────────────────────────────────
+        let activePrices = [];
+        if (browseRes.status === 'fulfilled' && !browseRes.value.errors) {
+            activePrices = (browseRes.value.itemSummaries || [])
+                .map(i => parseFloat(i.price?.value))
+                .filter(p => p > 0)
+                .sort((a, b) => a - b);
+        }
+
+        // ── Sold prices ───────────────────────────────────────────────────────
+        let soldPrices = [];
+        if (findingRes.status === 'fulfilled') {
+            try {
+                const items = findingRes.value?.findCompletedItemsResponse?.[0]
+                    ?.searchResult?.[0]?.item || [];
+                soldPrices = items
+                    .map(i => parseFloat(i.sellingStatus?.[0]?.currentPrice?.[0]?.__value__))
+                    .filter(p => p > 0)
+                    .sort((a, b) => a - b);
+            } catch(e) { console.warn('[Price] Finding API parse error:', e.message); }
+        }
+
+        console.log(`[Price] "${searchQuery}" — active: ${activePrices.length}, sold: ${soldPrices.length}`);
+
+        // Need at least MIN_COMPS from active to proceed; sold is bonus data
+        if (activePrices.length < MIN_COMPS) {
+            return res.json({ source: 'insufficient', count: activePrices.length, searchQuery });
+        }
+
+        // ── Price bands ───────────────────────────────────────────────────────
+        const active = {
+            low:  parseFloat(pct(activePrices, 0.10).toFixed(2)),
+            mid:  parseFloat(pct(activePrices, 0.50).toFixed(2)),
+            high: parseFloat(pct(activePrices, 0.90).toFixed(2)),
+            count: activePrices.length
+        };
+
+        const sold = soldPrices.length >= MIN_COMPS ? {
+            low:  parseFloat(pct(soldPrices, 0.10).toFixed(2)),
+            mid:  parseFloat(pct(soldPrices, 0.50).toFixed(2)),
+            high: parseFloat(pct(soldPrices, 0.90).toFixed(2)),
+            count: soldPrices.length
+        } : null;
+
+        // ── Pricing strategies ────────────────────────────────────────────────
+        // Move It  — price at/below sold median = fastest turnover
+        // Market   — price at sold mid or active mid if no sold data
+        // Hold     — price at active high = premium positioning, slower sale
+        const strategies = {
+            moveIt: sold ? parseFloat((sold.low  * 0.97).toFixed(2)) : parseFloat((active.low).toFixed(2)),
+            market: sold ? parseFloat((sold.mid).toFixed(2))         : parseFloat((active.mid).toFixed(2)),
+            hold:   parseFloat((active.high).toFixed(2))
+        };
+
+        const confidence = activePrices.length >= 30 ? 'High' : activePrices.length >= 12 ? 'Medium' : 'Low';
+        const condLabel  = conditionFilter.includes('1000') ? 'New' : 'Used/Similar';
+        const basis      = sold
+            ? `${active.count} active listings · ${sold.count} recent sales (${condLabel})`
+            : `${active.count} active listings — no sold data found (${condLabel})`;
+
+        res.json({
+            source:     'ebay_browse',
+            // legacy fields kept for backward compat
+            low:        active.low,
+            mid:        active.mid,
+            high:       active.high,
+            count:      active.count,
+            confidence,
+            basis,
+            searchQuery,
+            // new fields
+            active,
+            sold,
+            strategies
         });
-        const d = await r.json();
-
-        if (!r.ok || d.errors) {
-            console.error(`[Price] Browse API error ${r.status}:`, JSON.stringify(d).slice(0, 500));
-            return res.json({ source: 'insufficient', count: 0, searchQuery, debug: d.errors?.[0]?.message });
-        }
-
-        const prices = (d.itemSummaries || [])
-            .map(i => parseFloat(i.price?.value))
-            .filter(p => p > 0)
-            .sort((a, b) => a - b);
-
-        console.log(`[Price] "${searchQuery}" → ${prices.length} comps, condition: ${conditionFilter}, status: ${r.status}, total: ${d.total}`);
-
-        if (prices.length < MIN_COMPS) {
-            // Not enough live data — tell client to fall back to Gemini
-            return res.json({ source: 'insufficient', count: prices.length, searchQuery });
-        }
-
-        // Statistical price band: 10th / 50th / 90th percentile — trims outliers
-        const p = (pct) => prices[Math.max(0, Math.min(prices.length - 1, Math.floor(prices.length * pct)))];
-        const low  = parseFloat(p(0.10).toFixed(2));
-        const mid  = parseFloat(p(0.50).toFixed(2));
-        const high = parseFloat(p(0.90).toFixed(2));
-
-        const confidence = prices.length >= 30 ? 'High' : prices.length >= 12 ? 'Medium' : 'Low';
-        const basis = `Based on ${prices.length} active eBay listings (${conditionFilter.includes('1000') ? 'New' : 'Used/Similar condition'})`;
-
-        res.json({ source: 'ebay_browse', low, mid, high, count: prices.length, confidence, basis, searchQuery });
     } catch(e) {
-        console.error('[Price] Browse API error:', e.message);
+        console.error('[Price] Research error:', e.message);
         res.status(502).json({ error: e.message, source: 'error' });
     }
 });

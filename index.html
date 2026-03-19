@@ -2753,9 +2753,12 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     });
                     const ebayData = await ebayRes.json();
                     if (ebayData.source === 'ebay_browse' && ebayData.mid) {
-                        prices = { low: ebayData.low, mid: ebayData.mid, high: ebayData.high,
+                        prices = {
+                            low: ebayData.low, mid: ebayData.mid, high: ebayData.high,
                             confidence: ebayData.confidence, basis: ebayData.basis,
-                            count: ebayData.count, source: 'eBay Live', conditionId: listing.conditionId };
+                            count: ebayData.count, source: 'eBay Live', conditionId: listing.conditionId,
+                            active: ebayData.active, sold: ebayData.sold, strategies: ebayData.strategies
+                        };
                     }
                 } catch(e) { console.warn('[Price] Browse API error:', e.message); }
                 // 2. Gemini fallback
@@ -4072,14 +4075,11 @@ www.scout-recon.com`
                                     );
                                     return (
                                     <div className="bg-gradient-to-br from-blue-50 to-slate-50 rounded-2xl p-5 border border-blue-100 mb-6 shadow-sm">
-                                        {/* Source + confidence + Re-Price header */}
-                                        <div className="flex items-center gap-2 mb-3">
+                                        {/* Header row */}
+                                        <div className="flex items-center gap-2 mb-4">
                                             <span className={`text-[8px] font-black px-2 py-1 rounded-lg uppercase tracking-widest ${pr.source === 'eBay Live' ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-500'}`}>
                                                 {pr.source === 'eBay Live' ? '⚡ eBay Live' : '🤖 AI Estimate'}
                                             </span>
-                                            {pr.count && (
-                                                <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">{pr.count} active listings</span>
-                                            )}
                                             <span className="text-[8px] font-black px-2 py-1 rounded-lg uppercase bg-green-100 text-green-700">{pr.confidence || 'N/A'}</span>
                                             <button onClick={() => researchPrice(l)} disabled={isPricing}
                                                 title="Re-run price research"
@@ -4087,28 +4087,68 @@ www.scout-recon.com`
                                                 {isPricing ? <Icon name="Loader2" className="animate-spin" size={11}/> : <Icon name="TrendingUp" size={11}/>} Re-Price
                                             </button>
                                         </div>
-                                        <div className="flex items-end gap-4 mb-3">
-                                            {/* Low — clickable */}
-                                            <button onClick={() => applyPrice(pr.low)}
-                                                className="text-center group/low hover:scale-105 transition-transform active:scale-95"
-                                                title="Set price to Low">
-                                                <span className="text-[8px] text-slate-400 font-black uppercase block mb-1 group-hover/low:text-slate-600">Low</span>
-                                                <span className="text-sm font-black text-slate-500 group-hover/low:text-slate-800 underline decoration-dotted underline-offset-2">${Number(pr.low || 0).toFixed(2)}</span>
-                                            </button>
-                                            {/* Mid — recommended */}
-                                            <div className="flex-1 text-center bg-white rounded-2xl px-4 py-3 border border-blue-200 shadow-sm">
-                                                <span className="text-[8px] text-blue-500 font-black uppercase block mb-1">Recommended</span>
-                                                <span className="text-2xl font-black text-blue-700">${Number(pr.mid || 0).toFixed(2)}</span>
+
+                                        {/* Strategy buttons — primary pricing action */}
+                                        {pr.strategies ? (
+                                            <div className="grid grid-cols-3 gap-2 mb-4">
+                                                {[
+                                                    { key: 'moveIt', label: '🔥 Move It',  sub: 'Fastest sale',      color: 'bg-orange-50 border-orange-200 hover:bg-orange-100 text-orange-700' },
+                                                    { key: 'market', label: '✅ Market',   sub: 'Sell at sold avg',  color: 'bg-emerald-50 border-emerald-200 hover:bg-emerald-100 text-emerald-700' },
+                                                    { key: 'hold',   label: '💰 Hold',     sub: 'Premium ask',       color: 'bg-violet-50 border-violet-200 hover:bg-violet-100 text-violet-700' },
+                                                ].map(s => (
+                                                    <button key={s.key} onClick={() => applyPrice(pr.strategies[s.key])}
+                                                        className={`rounded-2xl p-3 border text-center transition-all active:scale-95 ${s.color}`}>
+                                                        <span className="text-[9px] font-black uppercase tracking-widest block mb-1">{s.label}</span>
+                                                        <span className="text-lg font-black block">${Number(pr.strategies[s.key] || 0).toFixed(2)}</span>
+                                                        <span className="text-[8px] opacity-70 block mt-0.5">{s.sub}</span>
+                                                    </button>
+                                                ))}
                                             </div>
-                                            {/* High — clickable */}
-                                            <button onClick={() => applyPrice(pr.high)}
-                                                className="text-center group/high hover:scale-105 transition-transform active:scale-95"
-                                                title="Set price to High">
-                                                <span className="text-[8px] text-slate-400 font-black uppercase block mb-1 group-hover/high:text-slate-600">High</span>
-                                                <span className="text-sm font-black text-slate-500 group-hover/high:text-slate-800 underline decoration-dotted underline-offset-2">${Number(pr.high || 0).toFixed(2)}</span>
-                                            </button>
-                                        </div>
-                                        <p className="text-[10px] text-slate-600 italic leading-relaxed border-l-2 border-blue-200 pl-3">{pr.basis}</p>
+                                        ) : (
+                                            /* AI Estimate fallback — keep simple low/mid/high */
+                                            <div className="flex items-end gap-4 mb-4">
+                                                <button onClick={() => applyPrice(pr.low)} className="text-center group/low hover:scale-105 transition-transform active:scale-95">
+                                                    <span className="text-[8px] text-slate-400 font-black uppercase block mb-1 group-hover/low:text-slate-600">Low</span>
+                                                    <span className="text-sm font-black text-slate-500 group-hover/low:text-slate-800 underline decoration-dotted underline-offset-2">${Number(pr.low || 0).toFixed(2)}</span>
+                                                </button>
+                                                <div className="flex-1 text-center bg-white rounded-2xl px-4 py-3 border border-blue-200 shadow-sm">
+                                                    <span className="text-[8px] text-blue-500 font-black uppercase block mb-1">Recommended</span>
+                                                    <span className="text-2xl font-black text-blue-700">${Number(pr.mid || 0).toFixed(2)}</span>
+                                                </div>
+                                                <button onClick={() => applyPrice(pr.high)} className="text-center group/high hover:scale-105 transition-transform active:scale-95">
+                                                    <span className="text-[8px] text-slate-400 font-black uppercase block mb-1 group-hover/high:text-slate-600">High</span>
+                                                    <span className="text-sm font-black text-slate-500 group-hover/high:text-slate-800 underline decoration-dotted underline-offset-2">${Number(pr.high || 0).toFixed(2)}</span>
+                                                </button>
+                                            </div>
+                                        )}
+
+                                        {/* Active vs Sold data rows */}
+                                        {pr.active && (
+                                            <div className="grid grid-cols-2 gap-2 mb-3">
+                                                <div className="bg-white/70 rounded-xl p-2.5 border border-slate-100">
+                                                    <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block mb-1.5">📋 Active ({pr.active.count})</span>
+                                                    <div className="flex justify-between text-[9px]">
+                                                        <span className="text-slate-500">Low <span className="font-black text-slate-700">${pr.active.low}</span></span>
+                                                        <span className="text-slate-500">Mid <span className="font-black text-slate-700">${pr.active.mid}</span></span>
+                                                        <span className="text-slate-500">High <span className="font-black text-slate-700">${pr.active.high}</span></span>
+                                                    </div>
+                                                </div>
+                                                <div className={`rounded-xl p-2.5 border ${pr.sold ? 'bg-white/70 border-slate-100' : 'bg-slate-50 border-slate-100 opacity-50'}`}>
+                                                    <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block mb-1.5">✅ Sold {pr.sold ? `(${pr.sold.count})` : '(none)'}</span>
+                                                    {pr.sold ? (
+                                                        <div className="flex justify-between text-[9px]">
+                                                            <span className="text-slate-500">Low <span className="font-black text-slate-700">${pr.sold.low}</span></span>
+                                                            <span className="text-slate-500">Mid <span className="font-black text-slate-700">${pr.sold.mid}</span></span>
+                                                            <span className="text-slate-500">High <span className="font-black text-slate-700">${pr.sold.high}</span></span>
+                                                        </div>
+                                                    ) : (
+                                                        <span className="text-[8px] text-slate-400">No recent sold data</span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        <p className="text-[10px] text-slate-500 italic leading-relaxed border-l-2 border-blue-200 pl-3">{pr.basis}</p>
                                     </div>
                                     );
                                 })()}
