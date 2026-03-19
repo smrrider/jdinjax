@@ -587,7 +587,14 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
         if (!title) return res.status(400).json({ error: 'title required' });
 
         const token = await getEbayProdAppToken();
-        const searchQuery = title.split(/\s+/).slice(0, 6).join(' ');
+        const words = title.split(/\s+/).filter(w => w.length > 1);
+        const searchQuery = words.slice(0, 6).join(' ');
+        // Progressive fallback queries for sold search — broader = more results
+        const soldQueryFallbacks = [
+            words.slice(0, 6).join(' '),  // full 6-word query
+            words.slice(0, 4).join(' '),  // 4 words
+            words.slice(0, 2).join(' '),  // brand + model only
+        ].filter((q, i, arr) => arr.indexOf(q) === i); // dedupe if title is short
 
         // Map SR conditionId → eBay condition groups
         const cid = parseInt(conditionId || '3000');
@@ -631,8 +638,8 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
                     // since eBay doesn't expose a single clean LH value for that group.
                     const lhCondition = cid === 1000 ? '1000' : cid <= 2750 ? null : '3000';
 
-                    const fetchSoldItems = async (includeCondition) => {
-                        const base = { engine: 'ebay', _nkw: searchQuery, LH_Sold: '1', LH_Complete: '1', _ipg: '100', api_key: serpKey };
+                    const fetchSoldItems = async (query, includeCondition) => {
+                        const base = { engine: 'ebay', _nkw: query, LH_Sold: '1', LH_Complete: '1', _ipg: '100', api_key: serpKey };
                         if (includeCondition && lhCondition) base.LH_ItemCondition = lhCondition;
                         const sr = await fetch(`https://serpapi.com/search?${new URLSearchParams(base)}`);
                         const sd = await sr.json();
@@ -643,14 +650,19 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
                             .sort((a, b) => a - b);
                     };
 
-                    // Pass 1: condition-filtered sold listings
-                    soldPrices = await fetchSoldItems(true);
-
-                    // Pass 2: if fewer than MIN_COMPS, retry without condition filter
-                    // (cross-condition sold data is still a useful price anchor)
-                    if (soldPrices.length < MIN_COMPS && lhCondition) {
-                        console.log(`[Price] Sold: ${soldPrices.length} with condition filter — retrying without`);
-                        soldPrices = await fetchSoldItems(false);
+                    // Try progressively broader queries until we have MIN_COMPS sold prices.
+                    // For each query width, try condition-filtered first then without condition.
+                    soldPrices = [];
+                    for (const q of soldQueryFallbacks) {
+                        if (soldPrices.length >= MIN_COMPS) break;
+                        soldPrices = await fetchSoldItems(q, true);
+                        if (soldPrices.length < MIN_COMPS && lhCondition) {
+                            console.log(`[Price] Sold: ${soldPrices.length} for "${q}" with condition — retrying without`);
+                            soldPrices = await fetchSoldItems(q, false);
+                        }
+                        if (soldPrices.length < MIN_COMPS) {
+                            console.log(`[Price] Sold: ${soldPrices.length} for "${q}" — trying broader query`);
+                        }
                     }
 
                     setCachedSoldPrices(soldCacheKey, soldPrices);
