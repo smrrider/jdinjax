@@ -529,17 +529,18 @@ app.get('/api/ebay/finding-test', async (req, res) => {
             `&paginationInput.entriesPerPage=10`;
         const r    = await fetch(findingUrl);
         const text = await r.text();
-        let parsed;
-        try { parsed = JSON.parse(text); } catch(e) { return res.json({ httpStatus: r.status, rawText: text.slice(0, 2000) }); }
-        const resp       = parsed?.findCompletedItemsResponse?.[0];
-        const ack        = resp?.ack?.[0];
-        const total      = resp?.paginationOutput?.[0]?.totalEntries?.[0];
-        const items      = resp?.searchResult?.[0]?.item || [];
-        const errMsg     = resp?.errorMessage?.[0]?.error?.[0]?.message?.[0];
+        let parsed = null;
+        try { parsed = JSON.parse(text); } catch(e) { /* not JSON */ }
+        const resp   = parsed?.findCompletedItemsResponse?.[0];
+        const ack    = resp?.ack?.[0];
+        const total  = resp?.paginationOutput?.[0]?.totalEntries?.[0];
+        const items  = resp?.searchResult?.[0]?.item || [];
+        const errMsg = resp?.errorMessage?.[0]?.error?.[0]?.message?.[0];
         res.json({
             url:        findingUrl.replace(encodeURIComponent(appId), 'APP_ID_REDACTED'),
             httpStatus: r.status, ack, total, itemCount: items.length, errMsg,
-            sampleItem: items[0] || null
+            sampleItem: items[0] || null,
+            raw:        parsed ?? text.slice(0, 3000)
         });
     } catch(e) { res.status(500).json({ error: e.message }); }
 });
