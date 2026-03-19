@@ -632,11 +632,14 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
         const conditionEnum = CONDITION_MAP[String(conditionId)] || 'USED_GOOD';
 
         // ── Step 1: PUT inventory item ────────────────────────────────────────
+        const safeTitle = (title || '').trim().slice(0, 80);
+        if (!safeTitle) return res.status(400).json({ error: 'Listing title is empty' });
+
         const inventoryItem = {
             availability: { shipToLocationAvailability: { quantity: 1 } },
             condition:    conditionEnum,
             product: {
-                title,
+                title:       safeTitle,
                 description,
                 imageUrls: (images || []).slice(0, 12),   // eBay max 12 images per listing
                 aspects:   aspects || {}
