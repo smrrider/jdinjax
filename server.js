@@ -613,6 +613,7 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
 
         // Map SR conditionId → eBay condition groups
         const cid = parseInt(conditionId || '3000');
+        const lhCondition = cid === 1000 ? '1000' : cid <= 2750 ? null : '3000';
         let conditionFilter = '';
         let soldConditionFilter = '';  // Marketplace Insights API uses same filter syntax as Browse
         if (cid === 1000) {
@@ -649,11 +650,6 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
                 soldPrices = [];
             } else {
                 try {
-                    // LH_ItemCondition uses eBay's own condition IDs (1000=New, 3000=Used).
-                    // Pass the broad group value; omit filter entirely for refurb range
-                    // since eBay doesn't expose a single clean LH value for that group.
-                    const lhCondition = cid === 1000 ? '1000' : cid <= 2750 ? null : '3000';
-
                     let quotaExhausted = false;
                     const fetchSoldItems = async (query, includeCondition) => {
                         if (quotaExhausted) return [];
