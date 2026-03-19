@@ -870,6 +870,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const [flatShippingFee, setFlatShippingFee] = useState('6.95');
             const [barcodePreload,  setBarcodePreload]  = useState(null);
             const [errorMsg,      setErrorMsg]       = useState(null);
+            const [arLivePrices,  setArLivePrices]   = useState(null);  // live eBay price research result
+            const [arPriceLoading, setArPriceLoading] = useState(false);
             const [reconScanResults, setReconScanResults] = useState(null);
             const [reconManualTitle, setReconManualTitle] = useState('');
             const [showReconScanner, setShowReconScanner] = useState(false);
@@ -938,6 +940,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 setReconImage(null); setCondition('1000'); setPurchasePrice('');
                 setShippingMode('flat'); setFlatShippingFee('6.95');
                 setResult(null); setErrorMsg(null); setReconStatus(''); setActiveHistory(null);
+                setArLivePrices(null); setArPriceLoading(false);
                 setReconScanResults(null); setReconManualTitle('');
             };
 
@@ -1065,6 +1068,22 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     setResult(reconResult);
                     setActiveHistory(null);
                     setBarcodePreload(null);
+
+                    // Fire live eBay price research in background — non-blocking
+                    setArLivePrices(null);
+                    setArPriceLoading(true);
+                    (async () => {
+                        try {
+                            const token = await user.getIdToken();
+                            const pr = await fetch('/api/ebay/price-research', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                                body: JSON.stringify({ title: ai.itemTitle, conditionId: condition })
+                            }).then(r => r.json());
+                            if (pr.strategies) setArLivePrices(pr);
+                        } catch(e) { console.warn('[AR] Live price research failed:', e.message); }
+                        finally { setArPriceLoading(false); }
+                    })();
 
                     // Persist to Firestore, enforce 20-result cap
                     if (user && dbRef && dbRef.current) {
@@ -1303,21 +1322,40 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                             </div>
                                         </div>
                                         <div className="bg-white border border-slate-200 rounded-2xl p-4">
-                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-3">eBay Market Intel</p>
-                                            <div className="flex items-end gap-2 mb-3">
-                                                <div className="text-center flex-1 bg-slate-50 rounded-xl p-2 border border-slate-200">
-                                                    <p className="text-[8px] font-black text-slate-400 uppercase mb-1">Low</p>
-                                                    <p className="text-sm font-black text-slate-500">${Number(r.priceLow||0).toFixed(2)}</p>
-                                                </div>
-                                                <div className="text-center flex-1 bg-blue-50 rounded-xl p-2 border-2 border-blue-200">
-                                                    <p className="text-[8px] font-black text-blue-500 uppercase mb-1">Mid</p>
-                                                    <p className="text-base font-black text-blue-700">${Number(r.priceMid||0).toFixed(2)}</p>
-                                                </div>
-                                                <div className="text-center flex-1 bg-slate-50 rounded-xl p-2 border border-slate-200">
-                                                    <p className="text-[8px] font-black text-slate-400 uppercase mb-1">High</p>
-                                                    <p className="text-sm font-black text-slate-500">${Number(r.priceHigh||0).toFixed(2)}</p>
-                                                </div>
+                                            <div className="flex items-center gap-2 mb-3">
+                                                <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">eBay Market Intel</p>
+                                                {arPriceLoading && <Icon name="Loader2" size={10} className="animate-spin text-blue-400 ml-1"/>}
+                                                {arLivePrices && <span className="text-[7px] font-black px-1.5 py-0.5 rounded bg-blue-600 text-white uppercase">⚡ Live</span>}
                                             </div>
+                                            {arLivePrices?.strategies ? (
+                                                <div className="grid grid-cols-3 gap-1.5">
+                                                    {[
+                                                        { key:'moveIt', label:'🔥 Move It', color:'bg-orange-50 border-orange-200 text-orange-700' },
+                                                        { key:'market', label:'✅ Market',  color:'bg-emerald-50 border-emerald-200 text-emerald-700' },
+                                                        { key:'hold',   label:'💰 Hold',    color:'bg-violet-50 border-violet-200 text-violet-700' },
+                                                    ].map(s => (
+                                                        <div key={s.key} className={`rounded-xl p-2 border text-center ${s.color}`}>
+                                                            <span className="text-[7px] font-black uppercase block mb-0.5">{s.label}</span>
+                                                            <span className="text-sm font-black block">${Number(arLivePrices.strategies[s.key]||0).toFixed(2)}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <div className="flex items-end gap-2">
+                                                    <div className="text-center flex-1 bg-slate-50 rounded-xl p-2 border border-slate-200">
+                                                        <p className="text-[8px] font-black text-slate-400 uppercase mb-1">Low</p>
+                                                        <p className="text-sm font-black text-slate-500">${Number(r.priceLow||0).toFixed(2)}</p>
+                                                    </div>
+                                                    <div className="text-center flex-1 bg-blue-50 rounded-xl p-2 border-2 border-blue-200">
+                                                        <p className="text-[8px] font-black text-blue-500 uppercase mb-1">Mid</p>
+                                                        <p className="text-base font-black text-blue-700">${Number(r.priceMid||0).toFixed(2)}</p>
+                                                    </div>
+                                                    <div className="text-center flex-1 bg-slate-50 rounded-xl p-2 border border-slate-200">
+                                                        <p className="text-[8px] font-black text-slate-400 uppercase mb-1">High</p>
+                                                        <p className="text-sm font-black text-slate-500">${Number(r.priceHigh||0).toFixed(2)}</p>
+                                                    </div>
+                                                </div>
+                                            )}
                                         </div>
                                         <div className="bg-white border border-slate-200 rounded-2xl p-4">
                                             <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-3">Cost Stack</p>
@@ -1441,22 +1479,48 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
 
                                                 {/* Price Intel */}
                                                 <div className="bg-white border border-slate-200 rounded-2xl p-5">
-                                                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-4">eBay Market Intel  -  {r.priceConfidence} Confidence</p>
-                                                    <div className="flex items-end gap-3 mb-3">
-                                                        <div className="text-center flex-1 bg-slate-50 rounded-xl p-3 border border-slate-200">
-                                                            <p className="text-[8px] font-black text-slate-400 uppercase mb-1">Low</p>
-                                                            <p className="text-base font-black text-slate-500">${Number(r.priceLow || 0).toFixed(2)}</p>
-                                                        </div>
-                                                        <div className="text-center flex-1 bg-blue-50 rounded-xl p-3 border-2 border-blue-200">
-                                                            <p className="text-[8px] font-black text-blue-500 uppercase mb-1">Mid (Used)</p>
-                                                            <p className="text-xl font-black text-blue-700">${Number(r.priceMid || 0).toFixed(2)}</p>
-                                                        </div>
-                                                        <div className="text-center flex-1 bg-slate-50 rounded-xl p-3 border border-slate-200">
-                                                            <p className="text-[8px] font-black text-slate-400 uppercase mb-1">High</p>
-                                                            <p className="text-base font-black text-slate-500">${Number(r.priceHigh || 0).toFixed(2)}</p>
-                                                        </div>
+                                                    <div className="flex items-center gap-2 mb-4">
+                                                        <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">eBay Market Intel</p>
+                                                        {arPriceLoading && <Icon name="Loader2" size={10} className="animate-spin text-blue-400"/>}
+                                                        {arLivePrices && <span className="text-[7px] font-black px-1.5 py-0.5 rounded bg-blue-600 text-white uppercase">⚡ Live</span>}
+                                                        {!arLivePrices && !arPriceLoading && <span className="text-[7px] font-black text-slate-400 uppercase">{r.priceConfidence} Confidence</span>}
                                                     </div>
-                                                    <p className="text-[10px] text-slate-500 italic border-l-2 border-blue-200 pl-3 leading-relaxed">{r.priceBasis}</p>
+                                                    {arLivePrices?.strategies ? (
+                                                        <>
+                                                            <div className="grid grid-cols-3 gap-2 mb-3">
+                                                                {[
+                                                                    { key:'moveIt', label:'🔥 Move It', sub:'Fastest sale',     color:'bg-orange-50 border-orange-200 text-orange-700' },
+                                                                    { key:'market', label:'✅ Market',  sub:'Sold avg',         color:'bg-emerald-50 border-emerald-200 text-emerald-700' },
+                                                                    { key:'hold',   label:'💰 Hold',    sub:'Premium ask',      color:'bg-violet-50 border-violet-200 text-violet-700' },
+                                                                ].map(s => (
+                                                                    <div key={s.key} className={`rounded-2xl p-3 border text-center ${s.color}`}>
+                                                                        <span className="text-[8px] font-black uppercase block mb-1">{s.label}</span>
+                                                                        <span className="text-lg font-black block">${Number(arLivePrices.strategies[s.key]||0).toFixed(2)}</span>
+                                                                        <span className="text-[7px] opacity-70 block">{s.sub}</span>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                            <p className="text-[10px] text-slate-500 italic border-l-2 border-blue-200 pl-3 leading-relaxed">{arLivePrices.basis}</p>
+                                                        </>
+                                                    ) : (
+                                                        <>
+                                                            <div className="flex items-end gap-3 mb-3">
+                                                                <div className="text-center flex-1 bg-slate-50 rounded-xl p-3 border border-slate-200">
+                                                                    <p className="text-[8px] font-black text-slate-400 uppercase mb-1">Low</p>
+                                                                    <p className="text-base font-black text-slate-500">${Number(r.priceLow || 0).toFixed(2)}</p>
+                                                                </div>
+                                                                <div className="text-center flex-1 bg-blue-50 rounded-xl p-3 border-2 border-blue-200">
+                                                                    <p className="text-[8px] font-black text-blue-500 uppercase mb-1">Mid</p>
+                                                                    <p className="text-xl font-black text-blue-700">${Number(r.priceMid || 0).toFixed(2)}</p>
+                                                                </div>
+                                                                <div className="text-center flex-1 bg-slate-50 rounded-xl p-3 border border-slate-200">
+                                                                    <p className="text-[8px] font-black text-slate-400 uppercase mb-1">High</p>
+                                                                    <p className="text-base font-black text-slate-500">${Number(r.priceHigh || 0).toFixed(2)}</p>
+                                                                </div>
+                                                            </div>
+                                                            <p className="text-[10px] text-slate-500 italic border-l-2 border-blue-200 pl-3 leading-relaxed">{r.priceBasis}</p>
+                                                        </>
+                                                    )}
                                                 </div>
 
                                                 {/* Sell-Through */}
