@@ -330,7 +330,7 @@ app.get('/auth/ebay/callback', async (req, res) => {
                 const r = await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/subscription`, {
                     method:  'POST',
                     headers: subHeaders,
-                    body:    JSON.stringify({ topicId: 'ORDER_CONFIRMATION', status: 'ENABLED', destinationId, schemaVersion: '1.0' })
+                    body:    JSON.stringify({ topicId: 'ORDER_CONFIRMATION', status: 'ENABLED', destinationId, payload: { schemaVersion: '1.0', format: 'JSON', deliveryProtocol: 'HTTPS' } })
                 });
                 const d = await r.json();
                 if (r.ok || r.status === 409) {
