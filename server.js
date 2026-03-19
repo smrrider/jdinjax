@@ -591,13 +591,24 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
         const searchQuery = words.slice(0, 6).join(' ');
 
         // Sold query fallback chain — most precise first, broadening until MIN_COMPS found.
-        // Brand + model (from Gemini structured extraction) is the most targeted search,
-        // equivalent to how a human would search eBay for comps.
-        const brandModel = [brand, model].filter(Boolean).join(' ').trim();
+        // "Petzl RIG" (brand+model) may return 0 — sellers often omit model codes.
+        // "Petzl Descender" (brand + product type word) matches how buyers/sellers
+        // actually write eBay titles. Both are tried before falling back to title slices.
+        const brandModel   = [brand, model].filter(Boolean).join(' ').trim();
+        // Product type = last meaningful word in title that isn't the brand or model code
+        const stopWords    = new Set(['and','the','with','for','new','set','kit','lot','in','of','a']);
+        const typeWord     = [...words].reverse().find(w =>
+            w.length > 3 &&
+            !stopWords.has(w.toLowerCase()) &&
+            w.toLowerCase() !== (brand || '').toLowerCase() &&
+            w.toLowerCase() !== (model || '').toLowerCase()
+        );
+        const brandType = brand && typeWord ? `${brand} ${typeWord}` : '';
         const soldQueryFallbacks = [
-            brandModel || words.slice(0, 2).join(' '),  // "Petzl RIG" — best sold comp anchor
-            words.slice(0, 4).join(' '),                // 4-word title slice
-            words.slice(0, 6).join(' '),                // full 6-word title
+            brandModel,                        // "Petzl RIG"
+            brandType,                         // "Petzl Descender"
+            words.slice(0, 3).join(' '),       // 3-word title slice
+            words.slice(0, 5).join(' '),       // 5-word title slice
         ].filter((q, i, arr) => q && arr.indexOf(q) === i); // dedupe + remove empty
 
         // Map SR conditionId → eBay condition groups

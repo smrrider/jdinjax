@@ -2731,7 +2731,9 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                             autoResearchPrice(docRef.id, {
                                 title:       aiData.title,
                                 conditionId: finalConditionId,
-                                categoryId:  resolvedCategoryId
+                                categoryId:  resolvedCategoryId,
+                                brand:       aiData.brand,
+                                model:       aiData.model
                             }).catch(() => {});
                         })();
 
