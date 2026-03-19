@@ -654,16 +654,18 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
                     // since eBay doesn't expose a single clean LH value for that group.
                     const lhCondition = cid === 1000 ? '1000' : cid <= 2750 ? null : '3000';
 
+                    let quotaExhausted = false;
                     const fetchSoldItems = async (query, includeCondition) => {
+                        if (quotaExhausted) return [];
                         const base = { engine: 'ebay', _nkw: query, LH_Sold: '1', LH_Complete: '1', api_key: serpKey };
                         if (includeCondition && lhCondition) base.LH_ItemCondition = lhCondition;
-                        const url = `https://serpapi.com/search?${new URLSearchParams(base)}`;
-                        const sr = await fetch(url);
-                        const sd = await sr.json();
-                        // Log raw response shape to diagnose 0-result issue
-                        const topKeys = Object.keys(sd).filter(k => k !== 'search_metadata' && k !== 'search_parameters');
-                        const itemCount = (sd.organic_results || sd.search_results || []).length;
-                        console.log(`[Price] SerpAPI raw keys: [${topKeys.join(',')}] items=${itemCount} error=${sd.error || 'none'} q="${query}"`);
+                        const sr  = await fetch(`https://serpapi.com/search?${new URLSearchParams(base)}`);
+                        const sd  = await sr.json();
+                        if (sd.error?.includes('run out of searches')) {
+                            quotaExhausted = true;
+                            console.warn('[Price] SerpAPI quota exhausted — sold data unavailable until plan renews');
+                            return [];
+                        }
                         const items = sd.organic_results || sd.search_results || [];
                         return items
                             .map(i => { const p = i.price; return typeof p === 'number' ? p : parseFloat(String(p || '0').replace(/[^0-9.]/g, '')); })
@@ -671,23 +673,22 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
                             .sort((a, b) => a - b);
                     };
 
-                    // Try progressively broader queries until we have MIN_COMPS sold prices.
-                    // For each query width, try condition-filtered first then without condition.
+                    // Try progressively broader queries until MIN_COMPS sold prices found.
+                    // Condition-filtered first, then without — bail entire loop if quota hit.
                     soldPrices = [];
                     for (const q of soldQueryFallbacks) {
-                        if (soldPrices.length >= MIN_COMPS) break;
+                        if (soldPrices.length >= MIN_COMPS || quotaExhausted) break;
                         soldPrices = await fetchSoldItems(q, true);
-                        if (soldPrices.length < MIN_COMPS && lhCondition) {
-                            console.log(`[Price] Sold: ${soldPrices.length} for "${q}" with condition — retrying without`);
+                        if (soldPrices.length < MIN_COMPS && lhCondition && !quotaExhausted) {
                             soldPrices = await fetchSoldItems(q, false);
                         }
-                        if (soldPrices.length < MIN_COMPS) {
+                        if (soldPrices.length < MIN_COMPS && !quotaExhausted) {
                             console.log(`[Price] Sold: ${soldPrices.length} for "${q}" — trying broader query`);
                         }
                     }
 
                     setCachedSoldPrices(soldCacheKey, soldPrices);
-                    console.log(`[Price] SerpAPI sold → ${soldPrices.length} prices for "${searchQuery}"`);
+                    console.log(`[Price] SerpAPI sold → ${soldPrices.length} prices for "${soldQueryFallbacks[0]}"`);
                 } catch(e) {
                     console.warn('[Price] SerpAPI sold fetch error:', e.message);
                     soldPrices = [];
