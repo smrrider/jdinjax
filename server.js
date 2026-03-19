@@ -310,20 +310,43 @@ app.get('/auth/ebay/callback', async (req, res) => {
         console.log(`[eBay] User ${uid} connected (${EBAY_ENV})`);
 
         // Auto-register Platform Notification subscriptions (fire-and-forget — never blocks the redirect)
+        // eBay requires a two-step flow: create/find a Destination, then subscribe topics to its ID.
         if (EBAY_WEBHOOK_TOKEN && EBAY_WEBHOOK_ENDPOINT) {
             (async () => {
                 try {
-                    const appToken = await getEbayAppToken();
+                    const appToken   = await getEbayAppToken();
                     const subHeaders = { 'Authorization': `Bearer ${appToken}`, 'Content-Type': 'application/json' };
+
+                    // ── Step 1: Find or create a Destination for this endpoint ──────────
+                    let destinationId;
+                    const destsRes  = await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/destination`, { method: 'GET', headers: subHeaders });
+                    const destsData = await destsRes.json();
+                    const existing  = (destsData.destinations || []).find(d => d.deliveryConfig?.endpoint === EBAY_WEBHOOK_ENDPOINT);
+                    if (existing) {
+                        destinationId = existing.destinationId;
+                        console.log(`[eBay] Using existing notification destination: ${destinationId}`);
+                    } else {
+                        const createRes  = await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/destination`, {
+                            method:  'POST',
+                            headers: subHeaders,
+                            body:    JSON.stringify({ name: 'Scout Recon Webhook', status: 'ENABLED', deliveryConfig: { endpoint: EBAY_WEBHOOK_ENDPOINT, verificationToken: EBAY_WEBHOOK_TOKEN } })
+                        });
+                        const createData = await createRes.json();
+                        destinationId    = createData.destinationId;
+                        console.log(`[eBay] Created notification destination: ${destinationId}`);
+                    }
+                    if (!destinationId) throw new Error('Could not resolve destinationId');
+
+                    // ── Step 2: Subscribe each topic to the destination ──────────────────
                     const topics = ['marketplace.item_sold', 'marketplace.listing_deleted'];
                     for (const topicId of topics) {
                         const r = await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/subscription`, {
                             method:  'POST',
                             headers: subHeaders,
-                            body:    JSON.stringify({ topicId, status: 'ENABLED', deliveryConfig: { endpoint: EBAY_WEBHOOK_ENDPOINT, verificationToken: EBAY_WEBHOOK_TOKEN } })
+                            body:    JSON.stringify({ topicId, status: 'ENABLED', destinationId })
                         });
                         const d = await r.json();
-                        if (r.ok || r.status === 409) { // 409 = already subscribed, that's fine
+                        if (r.ok || r.status === 409) {
                             console.log(`[eBay] Platform Notification subscribed: ${topicId}`);
                         } else {
                             console.warn(`[eBay] Subscription failed for ${topicId}:`, JSON.stringify(d));
