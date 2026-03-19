@@ -512,6 +512,38 @@ app.get('/api/ebay/category-specifics', async (req, res) => {
 // GET /api/ebay/price-research-test — diagnostic endpoint, no auth required
 // Hit this in the browser to verify Browse API connectivity and token acquisition.
 // e.g. /api/ebay/price-research-test?q=wetsuit
+// GET /api/ebay/finding-test?q=wetsuit — raw Finding API diagnostic
+app.get('/api/ebay/finding-test', async (req, res) => {
+    try {
+        const q          = req.query.q || 'wetsuit';
+        const condId     = req.query.cond || '1000';
+        const appId      = process.env.EBAY_APP_ID_PROD || EBAY_APP_ID;
+        const findingUrl = `https://svcs.ebay.com/services/search/FindingService/v1` +
+            `?OPERATION-NAME=findCompletedItems` +
+            `&SERVICE-VERSION=1.0.0` +
+            `&SECURITY-APPNAME=${encodeURIComponent(appId)}` +
+            `&RESPONSE-DATA-FORMAT=JSON` +
+            `&keywords=${encodeURIComponent(q)}` +
+            `&itemFilter(0).name=SoldItemsOnly&itemFilter(0).value=true` +
+            `&itemFilter(1).name=Condition&itemFilter(1).value(0)=${condId}` +
+            `&paginationInput.entriesPerPage=10`;
+        const r    = await fetch(findingUrl);
+        const text = await r.text();
+        let parsed;
+        try { parsed = JSON.parse(text); } catch(e) { return res.json({ httpStatus: r.status, rawText: text.slice(0, 2000) }); }
+        const resp       = parsed?.findCompletedItemsResponse?.[0];
+        const ack        = resp?.ack?.[0];
+        const total      = resp?.paginationOutput?.[0]?.totalEntries?.[0];
+        const items      = resp?.searchResult?.[0]?.item || [];
+        const errMsg     = resp?.errorMessage?.[0]?.error?.[0]?.message?.[0];
+        res.json({
+            url:        findingUrl.replace(encodeURIComponent(appId), 'APP_ID_REDACTED'),
+            httpStatus: r.status, ack, total, itemCount: items.length, errMsg,
+            sampleItem: items[0] || null
+        });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/ebay/price-research-test', async (req, res) => {
     try {
         const q = req.query.q || 'iPhone 15 Pro Max';
