@@ -723,8 +723,10 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
             if (req.body.reservePrice) {
                 pricingSummary.auctionReservePrice = { currency: 'USD', value: Number(req.body.reservePrice).toFixed(2) };
             }
-            if (req.body.auctionBinPrice) {
-                pricingSummary.buyItNowPrice = { currency: 'USD', value: Number(req.body.auctionBinPrice).toFixed(2) };
+            const binPrice = Number(req.body.auctionBinPrice);
+            console.log(`[eBay/list] auction BIN price received: ${JSON.stringify(req.body.auctionBinPrice)} → parsed: ${binPrice}`);
+            if (binPrice > 0) {
+                pricingSummary.buyItNowPrice = { currency: 'USD', value: binPrice.toFixed(2) };
             }
         } else {
             pricingSummary = { price: { currency: 'USD', value: Number(price).toFixed(2) } };
@@ -745,7 +747,12 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
             categoryId:         String(categoryId),
             listingDescription: safeDesc,
             listingDuration,
-            listingPolicies:    { fulfillmentPolicyId, paymentPolicyId, returnPolicyId },
+            // Auction listings don't use a payment policy (they handle payment at checkout).
+            // Including a paymentPolicyId that has "Immediate Payment Required" causes eBay
+            // to demand a BIN price even when one isn't wanted — so omit it for auctions.
+            listingPolicies: listingFormat === 'AUCTION'
+                ? { fulfillmentPolicyId, returnPolicyId }
+                : { fulfillmentPolicyId, paymentPolicyId, returnPolicyId },
             pricingSummary
         };
         if (quantity !== undefined)   offerPayload.availableQuantity  = quantity;
