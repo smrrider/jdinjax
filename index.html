@@ -2815,6 +2815,21 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     }
                 });
 
+                // Fill mandatory specs not covered by spec_* fields using the same
+                // auto-fill logic the UI uses (reads listing.brand, listing.model, etc.)
+                const categoryData = validatedCategories[listing.categoryId];
+                if (categoryData?.mandatory) {
+                    categoryData.mandatory.forEach(spec => {
+                        const alreadySet = Object.keys(aspects).some(
+                            k => k.toLowerCase().replace(/\s+/g,'') === spec.name.toLowerCase().replace(/\s+/g,'')
+                        );
+                        if (!alreadySet) {
+                            const val = getSpecAutoFill(spec.name, listing, spec.values);
+                            if (val) aspects[spec.name] = [String(val)];
+                        }
+                    });
+                }
+
                 // SKU: unique per listing using doc ID
                 const sku = `SR-${listing.id}`;
 
