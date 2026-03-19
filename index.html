@@ -1104,6 +1104,16 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 finally { setIsRunning(false); setReconStatus(''); }
             };
 
+            // When live eBay prices are available, recalculate cost stack using
+            // the Market strategy price instead of Gemini's estimate.
+            const activeResult = React.useMemo(() => {
+                if (!displayResult) return displayResult;
+                if (!arLivePrices?.strategies?.market) return displayResult;
+                const livePrice = arLivePrices.strategies.market;
+                const liveArb = calcArbitrage(livePrice, displayResult.purchasePrice, displayResult.arb?.uspsEstimate || displayResult.shipping || 0, displayResult.shippingMode || 'flat', displayResult.arb?.flatFeeCollected || 0, userSettings);
+                return { ...displayResult, priceMid: livePrice, arb: liveArb };
+            }, [displayResult, arLivePrices, userSettings]);
+
             // -- Inline mode: desktop right panel -------------------------------------
             if (inline) {
                 const renderCostStack = (r) => {
@@ -1359,11 +1369,11 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                         </div>
                                         <div className="bg-white border border-slate-200 rounded-2xl p-4">
                                             <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-3">Cost Stack</p>
-                                            <div className="space-y-1">{renderCostStack(r)}</div>
+                                            <div className="space-y-1">{renderCostStack(activeResult || r)}</div>
                                             <div className="flex justify-between items-center pt-2 mt-2 border-t-2 border-slate-200">
                                                 <span className="text-[11px] font-black text-slate-800 uppercase">Net Profit</span>
-                                                <span className={'text-base font-black ' + (r.arb.netProfit >= 15 ? 'text-emerald-600' : r.arb.netProfit >= 5 ? 'text-amber-600' : 'text-red-500')}>
-                                                    ${r.arb.netProfit.toFixed(2)}
+                                                <span className={'text-base font-black ' + ((activeResult || r).arb.netProfit >= 15 ? 'text-emerald-600' : (activeResult || r).arb.netProfit >= 5 ? 'text-amber-600' : 'text-red-500')}>
+                                                    ${(activeResult || r).arb.netProfit.toFixed(2)}
                                                 </span>
                                             </div>
                                         </div>
@@ -1562,22 +1572,23 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                     )}
                                                     <div className="space-y-2.5">
                                                         {(() => {
+                                                            const ar = activeResult || r;
                                                             const mode = r.shippingMode || 'flat';
-                                                            const usps = r.arb.uspsEstimate || r.shipping || 0;
+                                                            const usps = ar.arb.uspsEstimate || r.shipping || 0;
                                                             const rows = [
-                                                                { label: 'Sale Price (eBay Mid)', val: r.priceMid, pos: true },
+                                                                { label: 'Sale Price (eBay Mid)', val: ar.priceMid, pos: true },
                                                                 { label: 'Purchase Cost', val: -r.purchasePrice },
                                                             ];
                                                             if (mode !== 'pickup') {
-                                                                rows.push({ label: 'eBay Final Value Fee (13.25%)', val: -r.arb.ebayFVF });
-                                                                rows.push({ label: 'Payment Processing (2.9% + $0.30)', val: -r.arb.paymentFee });
+                                                                rows.push({ label: 'eBay Final Value Fee (13.25%)', val: -ar.arb.ebayFVF });
+                                                                rows.push({ label: 'Payment Processing (2.9% + $0.30)', val: -ar.arb.paymentFee });
                                                             }
-                                                            rows.push({ label: 'Packaging Materials', val: -r.arb.packaging });
+                                                            rows.push({ label: 'Packaging Materials', val: -ar.arb.packaging });
                                                             if (mode === 'free') {
                                                                 rows.push({ label: 'USPS Zone 8  -  Free to Buyer (' + r.weightOz + 'oz)', val: -usps });
                                                             } else if (mode === 'flat') {
                                                                 rows.push({ label: 'USPS Zone 8 (' + r.weightOz + 'oz)', val: -usps });
-                                                                const fc = r.arb.flatFeeCollected || 0;
+                                                                const fc = ar.arb.flatFeeCollected || 0;
                                                                 if (fc > 0) rows.push({ label: 'Flat Shipping Collected', val: fc, pos: true });
                                                             }
                                                             return rows.map((row, i) => (
@@ -1591,8 +1602,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                         })()}
                                                         <div className="flex justify-between items-center pt-2 mt-1 border-t-2 border-slate-200">
                                                             <span className="text-[11px] font-black text-slate-800 uppercase tracking-wide">Net Profit</span>
-                                                            <span className={'text-lg font-black ' + (r.arb.netProfit >= 15 ? 'text-emerald-600' : r.arb.netProfit >= 5 ? 'text-amber-600' : 'text-red-500')}>
-                                                                ${r.arb.netProfit.toFixed(2)}
+                                                            <span className={'text-lg font-black ' + ((activeResult || r).arb.netProfit >= 15 ? 'text-emerald-600' : (activeResult || r).arb.netProfit >= 5 ? 'text-amber-600' : 'text-red-500')}>
+                                                                ${(activeResult || r).arb.netProfit.toFixed(2)}
                                                             </span>
                                                         </div>
                                                     </div>
