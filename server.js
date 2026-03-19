@@ -512,35 +512,30 @@ app.get('/api/ebay/category-specifics', async (req, res) => {
 // GET /api/ebay/price-research-test — diagnostic endpoint, no auth required
 // Hit this in the browser to verify Browse API connectivity and token acquisition.
 // e.g. /api/ebay/price-research-test?q=wetsuit
-// GET /api/ebay/finding-test?q=wetsuit — raw Finding API diagnostic
-app.get('/api/ebay/finding-test', async (req, res) => {
+// GET /api/ebay/insights-test?q=wetsuit&cond=1000 — Marketplace Insights API diagnostic
+// Replaces the legacy Finding API test endpoint
+app.get('/api/ebay/insights-test', async (req, res) => {
     try {
-        const q          = req.query.q || 'wetsuit';
-        const condId     = req.query.cond || '1000';
-        const appId      = process.env.EBAY_APP_ID_PROD || EBAY_APP_ID;
-        const findingUrl = `https://svcs.ebay.com/services/search/FindingService/v1` +
-            `?OPERATION-NAME=findCompletedItems` +
-            `&SERVICE-VERSION=1.0.0` +
-            `&SECURITY-APPNAME=${encodeURIComponent(appId)}` +
-            `&RESPONSE-DATA-FORMAT=JSON` +
-            `&keywords=${encodeURIComponent(q)}` +
-            `&itemFilter(0).name=SoldItemsOnly&itemFilter(0).value=true` +
-            `&itemFilter(1).name=Condition&itemFilter(1).value(0)=${condId}` +
-            `&paginationInput.entriesPerPage=10`;
-        const r    = await fetch(findingUrl);
-        const text = await r.text();
-        let parsed = null;
-        try { parsed = JSON.parse(text); } catch(e) { /* not JSON */ }
-        const resp   = parsed?.findCompletedItemsResponse?.[0];
-        const ack    = resp?.ack?.[0];
-        const total  = resp?.paginationOutput?.[0]?.totalEntries?.[0];
-        const items  = resp?.searchResult?.[0]?.item || [];
-        const errMsg = resp?.errorMessage?.[0]?.error?.[0]?.message?.[0];
+        const q      = req.query.q    || 'wetsuit';
+        const condId = req.query.cond || '1000';
+        const token  = await getEbayProdAppToken();
+        const params = new URLSearchParams({ q, limit: '5' });
+        const url    = `${EBAY_PROD_API_BASE}/buy/marketplace_insights/v1_beta/item_sales/search?${params}&filter=conditionIds:{${condId}}`;
+        const r      = await fetch(url, {
+            headers: { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US', 'Content-Type': 'application/json' }
+        });
+        const d = await r.json();
         res.json({
-            url:        findingUrl.replace(encodeURIComponent(appId), 'APP_ID_REDACTED'),
-            httpStatus: r.status, ack, total, itemCount: items.length, errMsg,
-            sampleItem: items[0] || null,
-            raw:        parsed ?? text.slice(0, 3000)
+            url:       url,
+            httpStatus: r.status,
+            total:     d.total,
+            itemCount: (d.itemSales || []).length,
+            errors:    d.errors || null,
+            samples:   (d.itemSales || []).slice(0, 3).map(i => ({
+                title:         i.title,
+                lastSoldPrice: i.lastSoldPrice?.value,
+                lastSoldDate:  i.lastSoldDate
+            }))
         });
     } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -599,16 +594,16 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
         // Map SR conditionId → eBay condition groups
         const cid = parseInt(conditionId || '3000');
         let conditionFilter = '';
-        let findingConditionIds = '';  // Finding API uses different param format
+        let soldConditionFilter = '';  // Marketplace Insights API uses same filter syntax as Browse
         if (cid === 1000) {
-            conditionFilter    = 'conditionIds:{1000}';
-            findingConditionIds = '1000';
+            conditionFilter     = 'conditionIds:{1000}';
+            soldConditionFilter = 'conditionIds:{1000}';
         } else if (cid >= 2000 && cid <= 2750) {
-            conditionFilter    = 'conditionIds:{2000|2010|2020|2030|2500|2750}';
-            findingConditionIds = '2000,2010,2020,2030,2500,2750';
+            conditionFilter     = 'conditionIds:{2000|2010|2020|2030|2500|2750}';
+            soldConditionFilter = 'conditionIds:{2000|2010|2020|2030|2500|2750}';
         } else {
-            conditionFilter    = 'conditionIds:{3000|4000|5000|6000|7000}';
-            findingConditionIds = '3000,4000,5000,6000,7000';
+            conditionFilter     = 'conditionIds:{3000|4000|5000|6000|7000}';
+            soldConditionFilter = 'conditionIds:{3000|4000|5000|6000|7000}';
         }
 
         // ── 1. Browse API — active fixed-price listings ───────────────────────
@@ -617,49 +612,35 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
         if (categoryId) activeParams.set('category_ids', String(categoryId));
         const browseUrl = `${EBAY_PROD_API_BASE}/buy/browse/v1/item_summary/search?${activeParams}&filter=${activeFilterStr}`;
 
-        // ── 2. Finding API — completed/sold listings ─────────────────────────
-        // Uses in-memory cache (6h TTL) to stay within the low findCompletedItems quota.
-        const soldCacheKey = `${searchQuery}|${findingConditionIds}`;
+        // ── 2. Marketplace Insights API — sold listings (REST replacement for legacy Finding API) ──
+        // /buy/marketplace_insights/v1_beta/item_sales/search uses the same app token as Browse API,
+        // falls under documented REST quotas, and returns clean JSON sold item data.
+        const soldCacheKey = `${searchQuery}|${soldConditionFilter}`;
         let soldPrices = getCachedSoldPrices(soldCacheKey);
-        let soldFromCache = soldPrices !== null;
 
-        if (!soldFromCache) {
-            const findingAppId = process.env.EBAY_APP_ID_PROD || EBAY_APP_ID;
-            const condIdParams = findingConditionIds.split(',')
-                .map((id, i) => `itemFilter(1).value(${i})=${id}`).join('&');
-            const findingUrl = `https://svcs.ebay.com/services/search/FindingService/v1` +
-                `?OPERATION-NAME=findCompletedItems` +
-                `&SERVICE-VERSION=1.0.0` +
-                `&SECURITY-APPNAME=${encodeURIComponent(findingAppId)}` +
-                `&RESPONSE-DATA-FORMAT=JSON` +
-                `&keywords=${encodeURIComponent(searchQuery)}` +
-                `&itemFilter(0).name=SoldItemsOnly&itemFilter(0).value=true` +
-                `&itemFilter(1).name=Condition&${condIdParams}` +
-                `&paginationInput.entriesPerPage=100`;
+        if (soldPrices === null) {
             try {
-                const fr = await fetch(findingUrl);
-                const raw = await fr.json();
-                const errId = raw?.errorMessage?.[0]?.error?.[0]?.errorId?.[0];
-                if (errId === '10001') {
-                    // Rate limited — log and continue with active-only; cache empty array
-                    // so we don't keep hammering the endpoint until TTL expires.
-                    console.warn('[Price] Finding API rate-limited (10001) — using active-only for this query');
-                    soldPrices = [];
-                    setCachedSoldPrices(soldCacheKey, []);
-                } else {
-                    const items = raw?.findCompletedItemsResponse?.[0]?.searchResult?.[0]?.item || [];
-                    soldPrices = items
-                        .map(i => {
-                            const cp = i.sellingStatus?.[0]?.currentPrice?.[0];
-                            return parseFloat(cp?.__value__ ?? cp?._value ?? cp?.value ?? 0);
-                        })
+                const insightsParams = new URLSearchParams({ q: searchQuery, limit: '100' });
+                if (categoryId) insightsParams.set('category_ids', String(categoryId));
+                const insightsUrl = `${EBAY_PROD_API_BASE}/buy/marketplace_insights/v1_beta/item_sales/search?${insightsParams}&filter=${soldConditionFilter}`;
+                const ir = await fetch(insightsUrl, {
+                    headers: { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US', 'Content-Type': 'application/json' }
+                });
+                const id = await ir.json();
+                if (ir.ok && !id.errors) {
+                    soldPrices = (id.itemSales || [])
+                        .map(i => parseFloat(i.lastSoldPrice?.value))
                         .filter(p => p > 0)
                         .sort((a, b) => a - b);
                     setCachedSoldPrices(soldCacheKey, soldPrices);
-                    console.log(`[Price] Finding API → ${soldPrices.length} sold prices cached for "${soldCacheKey}"`);
+                    console.log(`[Price] Insights API → ${soldPrices.length} sold prices for "${searchQuery}"`);
+                } else {
+                    console.warn('[Price] Insights API error:', ir.status, JSON.stringify(id.errors || id).slice(0, 200));
+                    soldPrices = [];
+                    setCachedSoldPrices(soldCacheKey, []);
                 }
             } catch(e) {
-                console.warn('[Price] Finding API fetch error:', e.message);
+                console.warn('[Price] Insights API fetch error:', e.message);
                 soldPrices = [];
             }
         } else {
