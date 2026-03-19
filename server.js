@@ -918,17 +918,18 @@ app.post('/api/ebay/sync-status', requireUser, express.json({ limit: '64kb' }), 
             if (o.status === 'fulfilled') results[o.value.offerId] = o.value;
         }
 
-        // ── Orders API: check for recently sold items ────────────────────────────
-        // Fetch orders completed in the last 90 days and cross-reference with our listings.
-        // This replaces the webhook approach for sold detection.
+        // ── Orders API: detect sold items ────────────────────────────────────────
+        // Fetch FULFILLED orders from the last 90 days and cross-reference listing IDs.
+        // Filter syntax: orderfulfillmentstatus:{FULFILLED} — correct eBay pipe-separated set notation.
         const soldListingIds = new Set();
         const soldDetails    = {};  // listingId → { soldFor, soldTo }
         try {
-            const since   = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
-            const ordersR = await ebayFetch(
-                `${EBAY_API_BASE}/sell/fulfillment/v1/order?filter=orderfulfillmentstatus:%7BNOT_STARTED%7CIN_PROGRESS%7DFULFILLED%7D&limit=50&creationdate=%5B${encodeURIComponent(since)}..%5D`,
-                { method: 'GET', headers: hdrs }
-            );
+            const since    = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+            const orderUrl = `${EBAY_API_BASE}/sell/fulfillment/v1/order`
+                + `?filter=orderfulfillmentstatus%3A%7BFULFILLED%7D`
+                + `&creationDateRange=%5B${encodeURIComponent(since)}..%5D`
+                + `&limit=50`;
+            const ordersR  = await ebayFetch(orderUrl, { method: 'GET', headers: hdrs });
             if (ordersR.ok) {
                 const ordersData = await ordersR.json();
                 for (const order of (ordersData.orders || [])) {
@@ -943,20 +944,57 @@ app.post('/api/ebay/sync-status', requireUser, express.json({ limit: '64kb' }), 
                         }
                     }
                 }
+            } else {
+                console.warn('[sync-status] Orders API HTTP', ordersR.status);
             }
         } catch(ordErr) {
             console.warn('[sync-status] Orders API skipped:', ordErr.message);
         }
 
         // Mark sold items in results
-        for (const [offerId, result] of Object.entries(results)) {
+        for (const result of Object.values(results)) {
             if (result.listingId && soldListingIds.has(String(result.listingId))) {
                 result.ebayStatus = 'SOLD';
                 result.soldDetails = soldDetails[String(result.listingId)] || {};
             }
         }
 
-        // ── Firestore writeback — offer status + sold detection ──────────────────
+        // ── Browse API: direct listing status check ───────────────────────────────
+        // Queries the public Browse API by listingId to catch items deleted from eBay
+        // or ended outside the Sell API (e.g. manually removed by seller).
+        // Uses app token (no user-OAuth required).
+        try {
+            const appToken  = await getEbayAppToken();
+            const browseHdr = { 'Authorization': `Bearer ${appToken}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US' };
+            const toCheck   = Object.values(results).filter(r => r.listingId && r.ebayStatus === 'PUBLISHED');
+            await Promise.allSettled(toCheck.map(async (result) => {
+                try {
+                    const br = await ebayFetch(
+                        `${EBAY_API_BASE}/buy/browse/v1/item/v1%7C${result.listingId}%7C0`,
+                        { method: 'GET', headers: browseHdr }
+                    );
+                    if (br.status === 404) {
+                        // Item is gone from eBay — treat as ended
+                        result.ebayStatus = 'ENDED';
+                    } else if (br.ok) {
+                        const bd = await br.json();
+                        // OUT_OF_STOCK with 0 available = sold out / ended
+                        const avail = bd.estimatedAvailabilities?.[0]?.estimatedAvailabilityStatus;
+                        if (avail === 'TEMPORARILY_UNAVAILABLE' || avail === 'UNAVAILABLE') {
+                            result.ebayStatus = 'ENDED';
+                        }
+                        // If itemEndDate is in the past, listing has ended
+                        if (bd.itemEndDate && new Date(bd.itemEndDate) < new Date()) {
+                            result.ebayStatus = 'ENDED';
+                        }
+                    }
+                } catch { /* individual item failures are non-fatal */ }
+            }));
+        } catch(browseErr) {
+            console.warn('[sync-status] Browse API check skipped:', browseErr.message);
+        }
+
+        // ── Firestore writeback — persist resolved status ─────────────────────────
         if (adminFirestore) {
             try {
                 const chunk = Object.keys(results).slice(0, 30);
@@ -968,8 +1006,11 @@ app.post('/api/ebay/sync-status', requireUser, express.json({ limit: '64kb' }), 
                 snap.docs.forEach(doc => {
                     const r = results[doc.data().ebayOfferId];
                     if (!r) return;
+                    // UNPUBLISHED = offer exists but not yet live — don't overwrite existing status
+                    if (r.ebayStatus === 'UNPUBLISHED') return;
                     const newStatus = r.ebayStatus === 'PUBLISHED' ? 'live'
-                        : r.ebayStatus === 'SOLD' ? 'sold' : 'ended';
+                        : r.ebayStatus === 'SOLD'    ? 'sold'
+                        :                              'ended';
                     if (doc.data().ebayStatus !== newStatus) {
                         const update = { ebayStatus: newStatus, ebaySyncedAt: Date.now() };
                         if (newStatus === 'sold' && r.soldDetails) {

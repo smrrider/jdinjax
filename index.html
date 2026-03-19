@@ -4145,13 +4145,69 @@ www.scout-recon.com`
                                                     </div>
                                                 );
 
-                                                // Error retry
-                                                if (ls?.status === 'error') return (
-                                                    <button onClick={() => listOnEbay(l)} title={ls.message}
-                                                        className="w-full bg-red-600 text-white py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-red-700 transition-all active:scale-95 shadow-md">
-                                                        <Icon name="AlertCircle" size={14}/> Retry List on eBay
-                                                    </button>
-                                                );
+                                                // Error — rich display with plain-English message + contextual action
+                                                if (ls?.status === 'error') {
+                                                    const raw = ls.message || '';
+                                                    const m   = raw.toLowerCase();
+                                                    let friendly, fix;
+                                                    if (m.includes('leaf category') || m.includes('not a leaf') || m.includes('invalid category')) {
+                                                        friendly = 'The selected category is too broad. eBay requires a specific sub-category (e.g. "Men\'s Wetsuits" not just "Wetsuits"). Use Fix Category below to drill down.';
+                                                        fix = 'category';
+                                                    } else if (m.includes('policy') || m.includes('fulfillment') || m.includes('payment') || m.includes('return')) {
+                                                        friendly = 'An eBay business policy (shipping, payment, or returns) is missing or misconfigured.';
+                                                        fix = 'settings';
+                                                    } else if (m.includes('image') || m.includes('photo') || m.includes('picture')) {
+                                                        friendly = 'eBay rejected one or more images. Images must be at least 500×500px and not watermarked.';
+                                                        fix = 'retry';
+                                                    } else if (m.includes('title')) {
+                                                        friendly = 'The listing title has an issue — it may be too long (80 char max) or contain prohibited characters.';
+                                                        fix = 'retry';
+                                                    } else if (m.includes('25025') || m.includes('concurrent') || m.includes('already being modified')) {
+                                                        friendly = 'Submission conflict — the item was already being submitted at the same time. Safe to retry.';
+                                                        fix = 'retry';
+                                                    } else if (m.includes('token') || m.includes('oauth') || m.includes('unauthorized') || m.includes('403')) {
+                                                        friendly = 'eBay authorization expired. Go to Settings and reconnect your eBay account.';
+                                                        fix = 'settings';
+                                                    } else {
+                                                        friendly = raw;
+                                                        fix = 'retry';
+                                                    }
+                                                    return (
+                                                        <div className="flex flex-col gap-2">
+                                                            <div className="bg-red-50 border border-red-200 rounded-2xl p-4">
+                                                                <div className="flex items-start gap-2 mb-3">
+                                                                    <Icon name="AlertCircle" size={14} className="text-red-500 shrink-0 mt-0.5"/>
+                                                                    <div className="min-w-0">
+                                                                        <p className="text-[9px] font-black text-red-700 uppercase tracking-widest mb-1">Listing Failed</p>
+                                                                        <p className="text-[10px] text-red-700 leading-relaxed">{friendly}</p>
+                                                                        {raw !== friendly && (
+                                                                            <details className="mt-1.5">
+                                                                                <summary className="text-[8px] text-red-400 cursor-pointer select-none hover:text-red-600">Technical details</summary>
+                                                                                <p className="text-[8px] text-red-400 mt-1 font-mono break-all">{raw}</p>
+                                                                            </details>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                                {fix === 'category' ? (
+                                                                    <button onClick={() => { setEditingCategoryId(l.id); setTempCategoryData({ id: l.categoryId || '', path: l.categoryPath || '' }); setListingStatus(prev => { const n = {...prev}; delete n[l.id]; return n; }); }}
+                                                                        className="w-full bg-amber-500 text-white py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-amber-600 transition-all active:scale-95 shadow-md">
+                                                                        <Icon name="FolderTree" size={13}/> Fix Category
+                                                                    </button>
+                                                                ) : fix === 'settings' ? (
+                                                                    <button onClick={() => setActiveTab('settings')}
+                                                                        className="w-full bg-slate-700 text-white py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-slate-600 transition-all active:scale-95 shadow-md">
+                                                                        <Icon name="Settings" size={13}/> Open Settings
+                                                                    </button>
+                                                                ) : (
+                                                                    <button onClick={() => listOnEbay(l)}
+                                                                        className="w-full bg-red-600 text-white py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-red-700 transition-all active:scale-95 shadow-md">
+                                                                        <Icon name="RefreshCw" size={13}/> Retry
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                }
 
                                                 // Default: toggle + optional auction fields + action button
                                                 return (
