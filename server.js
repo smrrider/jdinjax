@@ -849,7 +849,7 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
 
         // ── Step 5: Patch Firestore doc (best-effort, non-blocking) ──────────
         if (listingDocId && adminFirestore) {
-            adminFirestore.doc(`users/${req.uid}/listings/${listingDocId}`).update({
+            adminFirestore.doc(`${EBAY_LISTINGS_COL(req.uid)}/${listingDocId}`).update({
                 ebayListingId:  listingId,
                 ebayOfferId:    offerId,
                 ebaySku:        sku,
@@ -864,6 +864,270 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
         console.error('[eBay/list] Error:', e.message);
         res.status(500).json({ error: e.message });
     }
+});
+
+// ─── Phase 6: eBay Inventory Sync ─────────────────────────────────────────────
+// Helpers — the canonical Firestore path for a user's listings
+const EBAY_LISTINGS_COL = (uid) => `artifacts/jdinjax-console/users/${uid}/listings`;
+
+// POST /api/ebay/sync-status
+// Body: { offerIds: string[] }  — up to 50
+// Returns: { results: { [offerId]: { offerId, listingId, ebayStatus, price, quantity } } }
+app.post('/api/ebay/sync-status', requireUser, express.json({ limit: '64kb' }), async (req, res) => {
+    try {
+        const rawIds = req.body.offerIds;
+        if (!Array.isArray(rawIds) || rawIds.length === 0)
+            return res.status(400).json({ error: 'offerIds array required' });
+
+        const offerIds = rawIds.slice(0, 50).map(String).filter(Boolean);
+        const token    = await getEbayToken(req.uid);
+        const hdrs     = {
+            'Authorization':           `Bearer ${token}`,
+            'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
+            'Content-Type':            'application/json'
+        };
+
+        // Fan-out — one GET per offer; Promise.allSettled so a single 404 never aborts the rest
+        const fetches = offerIds.map(async (offerId) => {
+            try {
+                const r = await ebayFetch(
+                    `${EBAY_API_BASE}/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`,
+                    { method: 'GET', headers: hdrs }
+                );
+                if (r.status === 404) return { offerId, listingId: null, ebayStatus: 'ENDED', price: null, quantity: 0 };
+                const d = await r.json();
+                if (!r.ok) return { offerId, listingId: null, ebayStatus: 'ERROR', price: null, quantity: 0, error: d.errors?.[0]?.message };
+                // offerStatus field: PUBLISHED | UNPUBLISHED | ENDED
+                const ebayStatus = d.offerStatus || 'PUBLISHED';
+                const price      = d.pricingSummary?.price?.value || d.pricingSummary?.auctionStartPrice?.value || null;
+                return { offerId, listingId: d.listing?.listingId || null, ebayStatus, price, quantity: d.availableQuantity ?? 0 };
+            } catch(e) {
+                return { offerId, listingId: null, ebayStatus: 'ERROR', price: null, quantity: 0, error: e.message };
+            }
+        });
+
+        const settled = await Promise.allSettled(fetches);
+        const results = {};
+        for (const o of settled) {
+            if (o.status === 'fulfilled') results[o.value.offerId] = o.value;
+        }
+
+        // Best-effort Firestore sync — write back changed statuses (Firestore 'in' limit: 30)
+        if (adminFirestore) {
+            try {
+                const chunk = Object.keys(results).slice(0, 30);
+                const snap  = await adminFirestore.collection(EBAY_LISTINGS_COL(req.uid))
+                    .where('ebayOfferId', 'in', chunk)
+                    .get();
+                const batch = adminFirestore.batch();
+                let dirty   = false;
+                snap.docs.forEach(doc => {
+                    const r = results[doc.data().ebayOfferId];
+                    if (!r) return;
+                    const newStatus = r.ebayStatus === 'PUBLISHED' ? 'live' : 'ended';
+                    if (doc.data().ebayStatus !== newStatus) {
+                        batch.update(doc.ref, { ebayStatus: newStatus, ebaySyncedAt: Date.now() });
+                        dirty = true;
+                    }
+                });
+                if (dirty) await batch.commit();
+            } catch(fsErr) {
+                console.warn('[sync-status] Firestore update skipped:', fsErr.message);
+            }
+        }
+
+        res.json({ results });
+    } catch(e) {
+        console.error('[eBay/sync-status]', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// POST /api/ebay/relist
+// Body: { listingDocId }
+// Loads the Firestore listing doc + settings, resolves policy IDs, then republishes
+// as FIXED_PRICE using the same 3-step Sell Inventory API flow.
+app.post('/api/ebay/relist', requireUser, express.json({ limit: '64kb' }), async (req, res) => {
+    try {
+        const { listingDocId } = req.body;
+        if (!listingDocId)  return res.status(400).json({ error: 'listingDocId required' });
+        if (!adminFirestore) return res.status(503).json({ error: 'Firestore not available' });
+
+        // ── Load listing doc ────────────────────────────────────────────────────
+        const docRef  = adminFirestore.doc(`${EBAY_LISTINGS_COL(req.uid)}/${listingDocId}`);
+        const docSnap = await docRef.get();
+        if (!docSnap.exists) return res.status(404).json({ error: 'Listing not found' });
+        const l = docSnap.data();
+
+        // ── Load user settings for policy names ─────────────────────────────────
+        const settingsSnap = await adminFirestore
+            .doc(`artifacts/jdinjax-console/users/${req.uid}/config/settings`)
+            .get();
+        const cfg = settingsSnap.exists ? settingsSnap.data() : {};
+        if (!cfg.shippingProfile || !cfg.paymentProfile || !cfg.returnProfile)
+            return res.status(400).json({ error: 'eBay policies not configured in Settings' });
+
+        // ── eBay credentials ────────────────────────────────────────────────────
+        const token   = await getEbayToken(req.uid);
+        const headers = {
+            'Authorization':           `Bearer ${token}`,
+            'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
+            'Content-Type':            'application/json'
+        };
+
+        // ── Resolve policy names → IDs ──────────────────────────────────────────
+        const [fpRes, ppRes, rpRes] = await Promise.all([
+            ebayFetch(`${EBAY_API_BASE}/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_US`, { method: 'GET', headers }),
+            ebayFetch(`${EBAY_API_BASE}/sell/account/v1/payment_policy?marketplace_id=EBAY_US`,     { method: 'GET', headers }),
+            ebayFetch(`${EBAY_API_BASE}/sell/account/v1/return_policy?marketplace_id=EBAY_US`,      { method: 'GET', headers })
+        ]);
+        const [fpData, ppData, rpData] = await Promise.all([fpRes.json(), ppRes.json(), rpRes.json()]);
+        const fp = (fpData.fulfillmentPolicies || []).find(p => p.name === cfg.shippingProfile);
+        const pp = (ppData.paymentPolicies     || []).find(p => p.name === cfg.paymentProfile);
+        const rp = (rpData.returnPolicies       || []).find(p => p.name === cfg.returnProfile);
+        if (!fp || !pp || !rp) return res.status(400).json({ error: 'eBay policy not found — check Settings' });
+
+        const effectiveSku = `SR-${listingDocId}-FP`;
+        const safeTitle    = (l.title || '').trim().slice(0, 80);
+        const safeDesc     = (l.description || l.markdownDescription || '').replace(/\0/g, '').slice(0, 500000);
+        const safeImages   = (l.images || []).map(u => String(u||'').trim()).filter(u => u.startsWith('http')).slice(0, 12);
+        const safeAspects  = {};
+        Object.entries(l).forEach(([k, v]) => {
+            if (!k.startsWith('spec_') || !v) return;
+            const name = k.slice(5).replace(/_/g, ' ');
+            const vals = Array.isArray(v) ? v.filter(Boolean) : [String(v)];
+            if (vals.length) safeAspects[name] = vals;
+        });
+
+        // ── Step 1: PUT inventory_item ──────────────────────────────────────────
+        const invRes = await ebayFetch(
+            `${EBAY_API_BASE}/sell/inventory/v1/inventory_item/${encodeURIComponent(effectiveSku)}`,
+            {
+                method: 'PUT', headers,
+                body: JSON.stringify({
+                    product: { title: safeTitle, description: safeDesc, imageUrls: safeImages, aspects: safeAspects },
+                    condition:    l.conditionId ? String(l.conditionId) : 'USED_GOOD',
+                    availability: { shipToLocationAvailability: { quantity: 1 } }
+                })
+            }
+        );
+        if (!invRes.ok && invRes.status !== 204) {
+            const invErr = await invRes.json();
+            throw new Error(invErr.errors?.[0]?.message || `PUT inventory_item failed (${invRes.status})`);
+        }
+
+        // ── Step 2: Resolve merchant location ──────────────────────────────────
+        let merchantLocationKey;
+        try {
+            const locData = await (await ebayFetch(`${EBAY_API_BASE}/sell/inventory/v1/location`, { method: 'GET', headers })).json();
+            const locs    = locData.locations || [];
+            merchantLocationKey = locs.find(x => x.merchantLocationStatus === 'ENABLED')?.merchantLocationKey || locs[0]?.merchantLocationKey;
+            if (!merchantLocationKey) {
+                const cr = await ebayFetch(`${EBAY_API_BASE}/sell/inventory/v1/location/SR_DEFAULT`, {
+                    method: 'POST', headers,
+                    body:   JSON.stringify({ location: { address: { country: 'US' } }, locationType: 'WAREHOUSE', merchantLocationStatus: 'ENABLED', name: 'Scout Recon Default Location' })
+                });
+                if (cr.ok || cr.status === 204) merchantLocationKey = 'SR_DEFAULT';
+            }
+        } catch(locErr) { console.warn('[eBay/relist] Location lookup skipped:', locErr.message); }
+
+        // ── Step 3: Upsert offer ────────────────────────────────────────────────
+        const offerPayload = {
+            sku:                effectiveSku,
+            marketplaceId:      'EBAY_US',
+            format:             'FIXED_PRICE',
+            categoryId:         String(l.categoryId),
+            listingDescription: safeDesc,
+            listingDuration:    'GTC',
+            listingPolicies:    { fulfillmentPolicyId: fp.fulfillmentPolicyId, paymentPolicyId: pp.paymentPolicyId, returnPolicyId: rp.returnPolicyId },
+            pricingSummary:     { price: { currency: 'USD', value: Number(l.buyItNowPrice || 0).toFixed(2) } },
+            availableQuantity:  1
+        };
+        if (merchantLocationKey) offerPayload.merchantLocationKey = merchantLocationKey;
+
+        let offerId;
+        const existingOffers = await (await ebayFetch(
+            `${EBAY_API_BASE}/sell/inventory/v1/offer?sku=${encodeURIComponent(effectiveSku)}`,
+            { method: 'GET', headers }
+        )).json();
+        const existingOffer = (existingOffers.offers || [])[0];
+
+        if (existingOffer) {
+            offerId = existingOffer.offerId;
+            const updRes = await ebayFetch(`${EBAY_API_BASE}/sell/inventory/v1/offer/${offerId}`, { method: 'PUT', headers, body: JSON.stringify(offerPayload) });
+            if (!updRes.ok) {
+                await ebayFetch(`${EBAY_API_BASE}/sell/inventory/v1/offer/${offerId}`, { method: 'DELETE', headers });
+                offerId = null;
+            }
+        }
+        if (!offerId) {
+            const postData = await (await ebayFetch(`${EBAY_API_BASE}/sell/inventory/v1/offer`, { method: 'POST', headers, body: JSON.stringify(offerPayload) })).json();
+            if (!postData.offerId) throw new Error(postData.errors?.[0]?.message || 'POST offer failed');
+            offerId = postData.offerId;
+        }
+
+        // ── Step 4: Publish ─────────────────────────────────────────────────────
+        const pubData = await (await ebayFetch(`${EBAY_API_BASE}/sell/inventory/v1/offer/${offerId}/publish`, { method: 'POST', headers, body: '{}' })).json();
+        if (!pubData.listingId) throw new Error(pubData.errors?.[0]?.message || 'publish failed');
+
+        const listingId  = pubData.listingId;
+        const listingUrl = `https://www.ebay.com/itm/${listingId}`;
+
+        // ── Step 5: Firestore update ────────────────────────────────────────────
+        await docRef.update({ ebayListingId: listingId, ebayOfferId: offerId, ebaySku: effectiveSku, ebayListingUrl: listingUrl, ebayStatus: 'live', ebayListedAt: Date.now() });
+        console.log(`[eBay/relist] ✅ Relisted: listingId=${listingId} offerId=${offerId}`);
+        res.json({ success: true, listingId, offerId, listingUrl });
+    } catch(e) {
+        console.error('[eBay/relist]', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// eBay Platform Notification webhook — item sold / listing ended events
+// GET  — eBay ownership challenge (same pattern as account-deletion)
+// POST — live event payload
+const EBAY_WEBHOOK_TOKEN    = process.env.EBAY_WEBHOOK_TOKEN    || '';
+const EBAY_WEBHOOK_ENDPOINT = process.env.EBAY_WEBHOOK_ENDPOINT || 'https://scout-recon.up.railway.app/api/ebay/sync-webhook';
+
+app.get('/api/ebay/sync-webhook', (req, res) => {
+    const challengeCode = req.query.challenge_code;
+    if (!challengeCode)      return res.status(400).json({ error: 'Missing challenge_code' });
+    if (!EBAY_WEBHOOK_TOKEN) return res.status(503).json({ error: 'EBAY_WEBHOOK_TOKEN not configured' });
+    const h = crypto.createHash('sha256');
+    h.update(challengeCode);
+    h.update(EBAY_WEBHOOK_TOKEN);
+    h.update(EBAY_WEBHOOK_ENDPOINT);
+    res.json({ challengeResponse: h.digest('hex') });
+});
+
+app.post('/api/ebay/sync-webhook', express.json({ limit: '64kb' }), async (req, res) => {
+    res.status(200).json({ success: true }); // Acknowledge immediately — eBay retries if no 200 within 10s
+    try {
+        const notification = req.body?.notification || req.body;
+        const topic        = notification?.metadata?.topic || req.body?.topic || '';
+        const data         = notification?.data || {};
+        console.log(`[eBay/webhook] topic=${topic} itemId=${data.itemId || data.listingId || '—'}`);
+
+        if (!adminFirestore) return;
+
+        const SOLD_TOPICS = new Set(['MARKETPLACE_ITEM_SOLD','ITEM_SOLD','FIXED_PRICE_TRANSACTION','AUCTION_SOLD','CHECKOUT_BUYER_APPROVAL']);
+        const ebayListingId = String(data.itemId || data.listingId || '');
+        if (!ebayListingId) return;
+
+        if (SOLD_TOPICS.has(topic)) {
+            const snap = await adminFirestore.collectionGroup('listings').where('ebayListingId', '==', ebayListingId).limit(1).get();
+            if (!snap.empty) {
+                await snap.docs[0].ref.update({ ebayStatus: 'sold', ebaySoldAt: Date.now(), ebaySoldTo: data.buyerUsername || null, ebaySoldFor: data.price?.value || data.salePriceAmount?.value || null });
+                console.log(`[eBay/webhook] Marked ${snap.docs[0].id} SOLD (${ebayListingId})`);
+            }
+        } else if (topic === 'LISTING_DELETED' || topic === 'OFFER_DELETED') {
+            const snap = await adminFirestore.collectionGroup('listings').where('ebayListingId', '==', ebayListingId).limit(1).get();
+            if (!snap.empty) {
+                await snap.docs[0].ref.update({ ebayStatus: 'ended', ebaySyncedAt: Date.now() });
+                console.log(`[eBay/webhook] Marked ${snap.docs[0].id} ENDED (${ebayListingId})`);
+            }
+        }
+    } catch(e) { console.error('[eBay/webhook] Processing error:', e.message); }
 });
 
 // ─── eBay Marketplace Account Deletion Notifications ─────────────────────────
