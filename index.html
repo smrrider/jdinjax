@@ -1726,6 +1726,10 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const [toast, setToast] = useState(null); // { msg, type }
             const [editingCategoryId, setEditingCategoryId] = useState(null);
             const [tempCategoryData, setTempCategoryData] = useState({ id: '', path: '' });
+            const [catSearchQuery,   setCatSearchQuery]   = useState('');
+            const [catSearchResults, setCatSearchResults] = useState([]);
+            const [catSearchLoading, setCatSearchLoading] = useState(false);
+            const catSearchDebounceRef = useRef(null);
             const [editingListingId, setEditingListingId] = useState(null);
             const [tempListingData, setTempListingData] = useState({ title: '', buyItNowPrice: '', markdownDescription: '' });
             const [categorySpecifics, setCategorySpecifics] = useState(null);   // mandatory fields for editing listing
@@ -3789,17 +3793,78 @@ www.scout-recon.com`
                                 <div className="flex justify-between items-start mb-4">
                                     {editingCategoryId === l.id ? (
                                         <div className="flex flex-col gap-3 w-full mr-4 bg-blue-50/50 p-5 rounded-3xl border border-blue-200 shadow-inner">
-                                            <input className="text-xs font-bold border border-blue-200 rounded-xl px-4 py-3 bg-white" value={tempCategoryData.path} onChange={(e) => setTempCategoryData({...tempCategoryData, path: e.target.value})} placeholder="Path" />
-                                            <div className="flex gap-2">
-                                                <input className="text-sm font-black border border-blue-200 rounded-xl px-4 py-3 bg-white flex-grow" value={tempCategoryData.id} onChange={(e) => setTempCategoryData({...tempCategoryData, id: e.target.value})} placeholder="Leaf ID" />
-                                                <button onClick={async () => { await dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({ categoryId: tempCategoryData.id, categoryPath: tempCategoryData.path, categorySource: 'Manual Overide', conditionId: sanitizeConditionId(l.conditionId, tempCategoryData.id) }); setEditingCategoryId(null); showToast("Saved."); }} className="bg-blue-600 text-white px-5 rounded-xl font-black uppercase text-[10px] shadow-md transition-all active:scale-95">Save</button>
+                                            <p className="text-[9px] font-black text-blue-700 uppercase tracking-widest flex items-center gap-1.5">
+                                                <Icon name="FolderTree" size={10}/> Reassign eBay Category
+                                            </p>
+                                            {/* Search input */}
+                                            <div className="relative">
+                                                <input
+                                                    autoFocus
+                                                    className="text-xs font-bold border border-blue-200 rounded-xl px-4 py-3 bg-white w-full pr-10 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                                                    value={catSearchQuery}
+                                                    onChange={(e) => {
+                                                        const q = e.target.value;
+                                                        setCatSearchQuery(q);
+                                                        clearTimeout(catSearchDebounceRef.current);
+                                                        if (q.trim().length >= 2) {
+                                                            catSearchDebounceRef.current = setTimeout(async () => {
+                                                                setCatSearchLoading(true);
+                                                                try {
+                                                                    const r = await fetch(`/api/ebay/category-suggest?q=${encodeURIComponent(q.trim())}`);
+                                                                    const d = await r.json();
+                                                                    setCatSearchResults(Array.isArray(d) ? d : []);
+                                                                } catch { setCatSearchResults([]); }
+                                                                finally { setCatSearchLoading(false); }
+                                                            }, 380);
+                                                        } else {
+                                                            setCatSearchResults([]);
+                                                        }
+                                                    }}
+                                                    placeholder="Search categories (e.g. 'men wetsuits')"
+                                                />
+                                                {catSearchLoading
+                                                    ? <Icon name="Loader2" size={13} className="animate-spin absolute right-3 top-1/2 -translate-y-1/2 text-blue-400"/>
+                                                    : catSearchQuery.length > 0
+                                                        ? <button onClick={() => { setCatSearchQuery(''); setCatSearchResults([]); }} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"><Icon name="X" size={13}/></button>
+                                                        : <Icon name="Search" size={13} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"/>
+                                                }
                                             </div>
+                                            {/* Results list */}
+                                            {catSearchResults.length > 0 && (
+                                                <div className="flex flex-col gap-1.5 max-h-52 overflow-y-auto pr-0.5">
+                                                    {catSearchResults.map(s => (
+                                                        <button key={s.id} onClick={async () => {
+                                                            await dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({
+                                                                categoryId:     s.id,
+                                                                categoryPath:   s.path,
+                                                                categorySource: 'Manual Override',
+                                                                conditionId:    sanitizeConditionId(l.conditionId, s.id)
+                                                            });
+                                                            setEditingCategoryId(null);
+                                                            setCatSearchQuery('');
+                                                            setCatSearchResults([]);
+                                                            showToast('Category updated.');
+                                                        }} className="text-left px-3 py-2.5 bg-white rounded-xl border border-blue-100 hover:bg-blue-50 hover:border-blue-300 transition-all active:scale-[.98] shadow-sm group/cat">
+                                                            <p className="text-[10px] font-black text-slate-800 group-hover/cat:text-blue-700 leading-snug">{s.name}</p>
+                                                            <p className="text-[8px] text-slate-400 font-bold mt-0.5 leading-snug">{s.path}</p>
+                                                            <p className="text-[8px] text-blue-400 font-black mt-0.5">ID {s.id}</p>
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+                                            {catSearchQuery.trim().length >= 2 && !catSearchLoading && catSearchResults.length === 0 && (
+                                                <p className="text-[9px] text-slate-400 italic">No results — try different keywords</p>
+                                            )}
+                                            <button onClick={() => { setEditingCategoryId(null); setCatSearchQuery(''); setCatSearchResults([]); }}
+                                                className="text-[9px] font-black text-slate-400 uppercase tracking-widest hover:text-slate-600 self-start transition-colors">
+                                                Cancel
+                                            </button>
                                         </div>
                                     ) : (
                                         <div className="flex flex-col gap-1 items-start">
                                             <span className={`text-[10px] font-black px-4 py-1.5 rounded-full uppercase tracking-widest border flex items-center gap-2 group/cat shadow-sm ${l.categorySource === 'AI Verified' ? 'bg-blue-50 text-blue-600 border-blue-100' : l.categorySource === 'AI Predicted' ? 'bg-amber-50 text-amber-600 border-amber-100' : 'bg-red-50 text-red-600 border-red-100'}`}>
                                                 {l.categoryPath || 'UNMAPPED - ACTION REQUIRED'}
-                                                <button onClick={() => { setEditingCategoryId(l.id); setTempCategoryData({ id: l.categoryId || '', path: l.categoryPath || '' }); }} className="opacity-0 group-hover/cat:opacity-100 hover:text-blue-800 transition-opacity"><Icon name="Edit2" size={10}/></button>
+                                                <button onClick={() => { setCatSearchQuery(''); setCatSearchResults([]); setEditingCategoryId(l.id); }} className="opacity-0 group-hover/cat:opacity-100 hover:text-blue-800 transition-opacity"><Icon name="Edit2" size={10}/></button>
                                             </span>
                                             <span className={`text-[8px] font-black uppercase ml-2 ${l.categorySource === 'AI Predicted' ? 'text-amber-400 italic' : l.categorySource === 'AI Verified' ? 'text-blue-400' : 'text-red-400 animate-pulse'}`}>
                                                 {l.categorySource === 'AI Predicted' ? 'CSV Match Failed - Using AI Suggestion' : l.categorySource === 'AI Verified' ? 'Gemini Verified' : 'Action Required: Assign Category'}
@@ -4189,7 +4254,12 @@ www.scout-recon.com`
                                                                     </div>
                                                                 </div>
                                                                 {fix === 'category' ? (
-                                                                    <button onClick={() => { setEditingCategoryId(l.id); setTempCategoryData({ id: l.categoryId || '', path: l.categoryPath || '' }); setListingStatus(prev => { const n = {...prev}; delete n[l.id]; return n; }); }}
+                                                                    <button onClick={() => {
+                                                                        setCatSearchQuery('');
+                                                                        setCatSearchResults([]);
+                                                                        setEditingCategoryId(l.id);
+                                                                        setListingStatus(prev => { const n = {...prev}; delete n[l.id]; return n; });
+                                                                    }}
                                                                         className="w-full bg-amber-500 text-white py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-amber-600 transition-all active:scale-95 shadow-md">
                                                                         <Icon name="FolderTree" size={13}/> Fix Category
                                                                     </button>
