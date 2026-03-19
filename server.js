@@ -31,6 +31,38 @@ const express = require('express');
 const cors    = require('cors');
 const path    = require('path');
 const crypto  = require('crypto');
+const https   = require('https');
+
+// ── ebayFetch — wraps https.request to bypass undici's auto-injected headers ──
+// Node 18's built-in fetch (undici) injects Accept-Language from the process
+// locale and combines it with any explicit value, producing a string eBay
+// rejects. Using https.request directly gives us full header control.
+function ebayFetch(urlStr, { method = 'GET', headers = {}, body } = {}) {
+    return new Promise((resolve, reject) => {
+        const u = new URL(urlStr);
+        const options = {
+            hostname: u.hostname,
+            path:     u.pathname + u.search,
+            method,
+            headers
+        };
+        const req = https.request(options, (res) => {
+            let raw = '';
+            res.on('data', chunk => raw += chunk);
+            res.on('end', () => {
+                resolve({
+                    ok:     res.statusCode >= 200 && res.statusCode < 300,
+                    status: res.statusCode,
+                    json:   () => { try { return Promise.resolve(JSON.parse(raw)); } catch { return Promise.resolve({}); } },
+                    text:   () => Promise.resolve(raw)
+                });
+            });
+        });
+        req.on('error', reject);
+        if (body) req.write(body);
+        req.end();
+    });
+}
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
@@ -571,11 +603,13 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
         }
 
         const token  = await getEbayToken(req.uid);
+        // Use ebayFetch (https.request) — NOT global fetch — so undici cannot
+        // inject or modify any headers (specifically Accept-Language).
         const headers = {
             'Authorization':           `Bearer ${token}`,
             'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
             'Content-Type':            'application/json',
-            'Accept-Language':         'en-US'   // undici auto-injects system locale; override with valid eBay value
+            'Content-Language':        'en-US'
         };
 
         // SR conditionId integers → eBay Sell API condition enums
@@ -609,7 +643,7 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
             }
         };
 
-        const putRes = await fetch(
+        const putRes = await ebayFetch(
             `${EBAY_API_BASE}/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
             { method: 'PUT', headers, body: JSON.stringify(inventoryItem) }
         );
@@ -636,7 +670,7 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
             }
         };
 
-        const offerRes  = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/offer`,
+        const offerRes  = await ebayFetch(`${EBAY_API_BASE}/sell/inventory/v1/offer`,
             { method: 'POST', headers, body: JSON.stringify(offerPayload) }
         );
         const offerData = await offerRes.json();
@@ -649,7 +683,7 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
         console.log(`[eBay/list] ✅ offer: ${offerId}`);
 
         // ── Step 3: Publish offer ─────────────────────────────────────────────
-        const publishRes  = await fetch(
+        const publishRes  = await ebayFetch(
             `${EBAY_API_BASE}/sell/inventory/v1/offer/${offerId}/publish`,
             { method: 'POST', headers }
         );
