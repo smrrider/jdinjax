@@ -611,7 +611,7 @@ SHIPPING LOGISTICS:
 
             return (
                 <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={(e) => { if(e.target===e.currentTarget) onClose(); }}>
-                    <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden">
+                    <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl overflow-hidden">
                         {/* Header */}
                         <div className="bg-slate-900 px-6 py-4 flex items-center justify-between">
                             <div>
@@ -809,7 +809,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
 
         // ── ReconScanResults — shared between inline and modal Recon modes ────────
         // Previously duplicated ~80 lines of JSX. Single source of truth.
-        const ReconScanResultsPanel = ({ reconScanResults, reconManualTitle, setReconManualTitle, reconSearchEngine, setBarcodePreload, setReconScanResults, setResult, setActiveHistory, setShowReconScanner }) => {
+        const ReconScanResultsPanel = ({ reconScanResults, reconManualTitle, setReconManualTitle, reconSearchEngine, setBarcodePreload, setReconScanResults, setResult, setActiveHistory, setShowReconScanner, setReconImage }) => {
             if (!reconScanResults) return null;
             const { loading, items, noResults, engine, upc } = reconScanResults;
             return (
@@ -839,7 +839,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     ) : (
                         <div className="max-h-60 overflow-y-auto no-scrollbar">
                             {(items||[]).map((item, i) => (
-                                <button key={item.url || i} onClick={() => { setBarcodePreload(item); setReconScanResults(null); setResult(null); setActiveHistory(null); }}
+                                <button key={item.url || i} onClick={() => { setBarcodePreload(item); if (item.image && setReconImage) setReconImage({ file: null, url: item.image }); setReconScanResults(null); setResult(null); setActiveHistory(null); }}
                                     className="w-full flex items-center gap-3 px-4 py-3 hover:bg-emerald-50 border-b border-slate-100 last:border-0 transition-colors text-left active:scale-[0.98]">
                                     {item.image && <img src={item.image} className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0" onError={(e) => e.target.style.display='none'}/>}
                                     <div className="flex-1 min-w-0">
@@ -1279,6 +1279,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                         setResult={setResult}
                                         setActiveHistory={setActiveHistory}
                                         setShowReconScanner={setShowReconScanner}
+                                        setReconImage={setReconImage}
                                     />
 
                                     {/* Condition + Price Row */}
@@ -1810,6 +1811,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                 setResult={setResult}
                                                 setActiveHistory={setActiveHistory}
                                                 setShowReconScanner={setShowReconScanner}
+                                                setReconImage={setReconImage}
                                             />}
 
                                             {/* Condition + Price Row */}
@@ -3377,7 +3379,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         sku: 'BKA-' + Date.now(),
                         markdownDescription: buildDescription(aiData, currentCondition, settings.adFooter),
                         upc: barcodeListingData.upc || '',
-                        buyItNowPrice: aiData.buyItNowPrice || (barcodeListingData.price ? parseFloat(barcodeListingData.price.replace(/[^0-9.]/g,'')) || 0 : 0)
+                        buyItNowPrice: barcodeListingData.price ? parseFloat(String(barcodeListingData.price).replace(/[^0-9.]/g,'')) || aiData.buyItNowPrice || 0 : aiData.buyItNowPrice || 0
                     });
 
                     setBarcodeListingData(null);
