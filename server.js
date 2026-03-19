@@ -666,11 +666,15 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
                             console.warn('[Price] SerpAPI quota exhausted — sold data unavailable until plan renews');
                             return [];
                         }
-                        const topKeys = Object.keys(sd).filter(k => !['search_metadata','search_parameters','search_information'].includes(k));
-                        console.log(`[Price] SerpAPI keys for "${query}": [${topKeys.join(',')}] organic=${sd.organic_results?.length ?? 'none'}`);
                         const items = sd.organic_results || sd.search_results || sd.items_results || [];
                         return items
-                            .map(i => { const p = i.price; return typeof p === 'number' ? p : parseFloat(String(p || '0').replace(/[^0-9.]/g, '')); })
+                            .map(i => {
+                                const p = i.price;
+                                if (typeof p === 'number') return p;
+                                // SerpAPI sometimes returns { raw: "$49.95", extracted: 49.95 }
+                                if (p && typeof p === 'object') return parseFloat(p.extracted ?? p.value ?? 0);
+                                return parseFloat(String(p || '0').replace(/[^0-9.]/g, ''));
+                            })
                             .filter(p => p > 0)
                             .sort((a, b) => a - b);
                     };
