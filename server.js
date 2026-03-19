@@ -709,17 +709,41 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
         }
 
         // ── Step 2: POST offer ────────────────────────────────────────────────
+        // format: 'FIXED_PRICE' | 'AUCTION'  (default: FIXED_PRICE)
+        const listingFormat = (req.body.format === 'AUCTION') ? 'AUCTION' : 'FIXED_PRICE';
+
+        // Build pricingSummary based on format
+        let pricingSummary;
+        if (listingFormat === 'AUCTION') {
+            const startPrice = Number(req.body.startPrice || 0.99).toFixed(2);
+            pricingSummary = {
+                auctionStartPrice: { currency: 'USD', value: startPrice }
+            };
+            if (req.body.reservePrice) {
+                pricingSummary.auctionReservePrice = { currency: 'USD', value: Number(req.body.reservePrice).toFixed(2) };
+            }
+            if (req.body.auctionBinPrice) {
+                pricingSummary.buyItNowPrice = { currency: 'USD', value: Number(req.body.auctionBinPrice).toFixed(2) };
+            }
+        } else {
+            pricingSummary = { price: { currency: 'USD', value: Number(price).toFixed(2) } };
+        }
+
+        // Valid auction durations: DAYS_1 DAYS_3 DAYS_5 DAYS_7 DAYS_10
+        const VALID_DURATIONS = new Set(['DAYS_1','DAYS_3','DAYS_5','DAYS_7','DAYS_10','GTC']);
+        const listingDuration = VALID_DURATIONS.has(req.body.listingDuration) ? req.body.listingDuration
+            : listingFormat === 'AUCTION' ? 'DAYS_7' : 'GTC';
+
         const offerPayload = {
             sku,
             marketplaceId:      'EBAY_US',
-            format:             'FIXED_PRICE',
-            availableQuantity:  1,
+            format:             listingFormat,
+            availableQuantity:  listingFormat === 'AUCTION' ? 1 : 1,
             categoryId:         String(categoryId),
             listingDescription: safeDesc,
+            listingDuration,
             listingPolicies:    { fulfillmentPolicyId, paymentPolicyId, returnPolicyId },
-            pricingSummary: {
-                price: { currency: 'USD', value: Number(price).toFixed(2) }
-            }
+            pricingSummary
         };
         if (merchantLocationKey) offerPayload.merchantLocationKey = merchantLocationKey;
 

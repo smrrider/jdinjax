@@ -1737,6 +1737,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const [autoPricingIds,   setAutoPricingIds]   = useState(new Set()); // listings currently being auto-priced
             const [listingStatus,    setListingStatus]    = useState({});       // { [docId]: 'publishing' | { status:'live', url, listingId } | { status:'error', message } }
             const [expandedImageListingId, setExpandedImageListingId] = useState(null); // which listing's image strip is open
+            const [auctionSettings, setAuctionSettings] = useState({});  // { [docId]: { format:'fixed'|'auction', startPrice:'', duration:'DAYS_7', reservePrice:'', binPrice:'' } }
 
             const dbRef = useRef(null);
             const [showScanner,    setShowScanner]    = useState(false);
@@ -2808,33 +2809,45 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 // Convert markdown description to HTML for eBay listing body
                 const description = convertToHtml(listing.markdownDescription || listing.description || '');
 
+                // Auction settings for this listing
+                const auctionCfg  = auctionSettings[listing.id] || {};
+                const isAuction   = auctionCfg.format === 'auction';
+
                 setListingStatus(prev => ({ ...prev, [listing.id]: 'publishing' }));
 
                 try {
                     const tok = await user.getIdToken();
+                    const body = {
+                        sku,
+                        title:               listing.title,
+                        description,
+                        price:               listing.buyItNowPrice,
+                        categoryId:          listing.categoryId,
+                        conditionId:         listing.conditionId,
+                        images:              listing.images || [],
+                        aspects,
+                        fulfillmentPolicyId: fulfillmentPolicy.id,
+                        paymentPolicyId:     paymentPolicy.id,
+                        returnPolicyId:      returnPolicy.id,
+                        listingDocId:        listing.id,
+                        format:              isAuction ? 'AUCTION' : 'FIXED_PRICE',
+                        listingDuration:     isAuction ? (auctionCfg.duration || 'DAYS_7') : 'GTC'
+                    };
+                    if (isAuction) {
+                        body.startPrice      = auctionCfg.startPrice || '0.99';
+                        if (auctionCfg.reservePrice) body.reservePrice    = auctionCfg.reservePrice;
+                        if (auctionCfg.binPrice)     body.auctionBinPrice = auctionCfg.binPrice;
+                    }
                     const res = await fetch('/api/ebay/list', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${tok}` },
-                        body: JSON.stringify({
-                            sku,
-                            title:               listing.title,
-                            description,
-                            price:               listing.buyItNowPrice,
-                            categoryId:          listing.categoryId,
-                            conditionId:         listing.conditionId,
-                            images:              listing.images || [],
-                            aspects,
-                            fulfillmentPolicyId: fulfillmentPolicy.id,
-                            paymentPolicyId:     paymentPolicy.id,
-                            returnPolicyId:      returnPolicy.id,
-                            listingDocId:        listing.id
-                        })
+                        body: JSON.stringify(body)
                     });
                     const data = await res.json();
                     if (!res.ok) throw new Error(data.error || 'Listing failed');
 
-                    setListingStatus(prev => ({ ...prev, [listing.id]: { status: 'live', url: data.listingUrl, listingId: data.listingId } }));
-                    showToast(`🚀 Listed on eBay! #${data.listingId}`);
+                    setListingStatus(prev => ({ ...prev, [listing.id]: { status: 'live', url: data.listingUrl, listingId: data.listingId, format: isAuction ? 'auction' : 'fixed' } }));
+                    showToast(isAuction ? `🔨 Auction live! #${data.listingId}` : `🚀 Listed on eBay! #${data.listingId}`);
                 } catch(e) {
                     setListingStatus(prev => ({ ...prev, [listing.id]: { status: 'error', message: e.message } }));
                     showToast(`eBay error: ${e.message}`, 'error');
@@ -3846,9 +3859,81 @@ www.scout-recon.com`
                                         </div>
                                     ) : (
                                         <>
+                                        {/* Format toggle + auction fields */}
+                                        {(() => {
+                                            const ls = listingStatus[l.id] || (l.ebayStatus === 'live' ? { status: 'live', url: l.ebayListingUrl } : null);
+                                            if (ls?.status === 'live' || ls === 'publishing') return null;
+                                            const cfg     = auctionSettings[l.id] || {};
+                                            const isAuc   = cfg.format === 'auction';
+                                            const setAuc  = (patch) => setAuctionSettings(prev => ({ ...prev, [l.id]: { ...cfg, ...patch } }));
+                                            return (
+                                                <div className="mb-3">
+                                                    {/* Format toggle */}
+                                                    <div className="flex rounded-xl overflow-hidden border border-slate-200 mb-2 text-[10px] font-black uppercase tracking-widest">
+                                                        <button onClick={() => setAuc({ format: 'fixed' })}
+                                                            className={`flex-1 py-2 flex items-center justify-center gap-1.5 transition-colors ${!isAuc ? 'bg-emerald-600 text-white' : 'bg-white text-slate-500 hover:bg-slate-50'}`}>
+                                                            <Icon name="Tag" size={11}/> Fixed Price
+                                                        </button>
+                                                        <button onClick={() => setAuc({ format: 'auction' })}
+                                                            className={`flex-1 py-2 flex items-center justify-center gap-1.5 transition-colors border-l border-slate-200 ${isAuc ? 'bg-amber-500 text-white' : 'bg-white text-slate-500 hover:bg-slate-50'}`}>
+                                                            <Icon name="Gavel" size={11}/> Auction
+                                                        </button>
+                                                    </div>
+                                                    {/* Auction fields */}
+                                                    {isAuc && (
+                                                        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-2">
+                                                            <div className="flex gap-2">
+                                                                <div className="flex-1">
+                                                                    <p className="text-[8px] font-black text-amber-700 uppercase tracking-widest mb-1">Starting Bid *</p>
+                                                                    <div className="relative">
+                                                                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-black text-slate-400">$</span>
+                                                                        <input type="number" min="0.01" step="0.01" placeholder="0.99"
+                                                                            value={cfg.startPrice || ''}
+                                                                            onChange={e => setAuc({ startPrice: e.target.value })}
+                                                                            className="w-full pl-5 pr-2 py-1.5 text-[10px] font-black border border-amber-200 rounded-lg bg-white focus:outline-none focus:border-amber-400"/>
+                                                                    </div>
+                                                                </div>
+                                                                <div className="flex-1">
+                                                                    <p className="text-[8px] font-black text-amber-700 uppercase tracking-widest mb-1">Duration</p>
+                                                                    <select value={cfg.duration || 'DAYS_7'} onChange={e => setAuc({ duration: e.target.value })}
+                                                                        className="w-full px-2 py-1.5 text-[10px] font-black border border-amber-200 rounded-lg bg-white focus:outline-none">
+                                                                        {[['DAYS_1','1 Day'],['DAYS_3','3 Days'],['DAYS_5','5 Days'],['DAYS_7','7 Days'],['DAYS_10','10 Days']].map(([v,l]) =>
+                                                                            <option key={v} value={v}>{l}</option>)}
+                                                                    </select>
+                                                                </div>
+                                                            </div>
+                                                            <div className="flex gap-2">
+                                                                <div className="flex-1">
+                                                                    <p className="text-[8px] font-black text-amber-600 uppercase tracking-widest mb-1">Reserve <span className="text-amber-400">(opt)</span></p>
+                                                                    <div className="relative">
+                                                                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-black text-slate-400">$</span>
+                                                                        <input type="number" min="0" step="0.01" placeholder="—"
+                                                                            value={cfg.reservePrice || ''}
+                                                                            onChange={e => setAuc({ reservePrice: e.target.value })}
+                                                                            className="w-full pl-5 pr-2 py-1.5 text-[10px] font-black border border-amber-200 rounded-lg bg-white focus:outline-none"/>
+                                                                    </div>
+                                                                </div>
+                                                                <div className="flex-1">
+                                                                    <p className="text-[8px] font-black text-amber-600 uppercase tracking-widest mb-1">Buy It Now <span className="text-amber-400">(opt)</span></p>
+                                                                    <div className="relative">
+                                                                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-black text-slate-400">$</span>
+                                                                        <input type="number" min="0" step="0.01" placeholder="—"
+                                                                            value={cfg.binPrice || ''}
+                                                                            onChange={e => setAuc({ binPrice: e.target.value })}
+                                                                            className="w-full pl-5 pr-2 py-1.5 text-[10px] font-black border border-amber-200 rounded-lg bg-white focus:outline-none"/>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })()}
+
                                         {/* List on eBay — primary action, full-width, Phase 5 */}
                                         {(() => {
                                             const ls = listingStatus[l.id] || (l.ebayStatus === 'live' ? { status: 'live', url: l.ebayListingUrl, listingId: l.ebayListingId } : null);
+                                            const isAuc = auctionSettings[l.id]?.format === 'auction';
                                             if (listingStatus[l.id] === 'publishing') return (
                                                 <button disabled className="w-full bg-emerald-600 text-white px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md flex items-center justify-center gap-2 opacity-80 mb-3">
                                                     <Icon name="Loader2" size={14} className="animate-spin"/> Publishing…
@@ -3869,8 +3954,8 @@ www.scout-recon.com`
                                             );
                                             return (
                                                 <button onClick={() => listOnEbay(l)}
-                                                    className="w-full bg-emerald-600 text-white px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md flex items-center justify-center gap-2 transition-all active:scale-95 hover:bg-emerald-700 mb-3">
-                                                    <Icon name="Tag" size={14}/> List on eBay
+                                                    className={`w-full px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md flex items-center justify-center gap-2 transition-all active:scale-95 mb-3 ${isAuc ? 'bg-amber-500 hover:bg-amber-600 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}>
+                                                    <Icon name={isAuc ? 'Gavel' : 'Tag'} size={14}/> {isAuc ? 'List as Auction' : 'List on eBay'}
                                                 </button>
                                             );
                                         })()}
