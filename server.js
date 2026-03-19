@@ -308,6 +308,33 @@ app.get('/auth/ebay/callback', async (req, res) => {
         if (!tr.ok) throw new Error(td.error_description || 'Token exchange failed');
         await adminFirestore.doc(`users/${uid}/ebay/tokens`).set({ accessToken: td.access_token, refreshToken: td.refresh_token, expiresAt: Date.now() + td.expires_in * 1000, scope: td.scope || EBAY_SCOPES, connectedAt: Date.now(), env: EBAY_ENV });
         console.log(`[eBay] User ${uid} connected (${EBAY_ENV})`);
+
+        // Auto-register Platform Notification subscriptions (fire-and-forget — never blocks the redirect)
+        if (EBAY_WEBHOOK_TOKEN && EBAY_WEBHOOK_ENDPOINT) {
+            (async () => {
+                try {
+                    const appToken = await getEbayAppToken();
+                    const subHeaders = { 'Authorization': `Bearer ${appToken}`, 'Content-Type': 'application/json' };
+                    const topics = ['marketplace.item_sold', 'marketplace.listing_deleted'];
+                    for (const topicId of topics) {
+                        const r = await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/subscription`, {
+                            method:  'POST',
+                            headers: subHeaders,
+                            body:    JSON.stringify({ topicId, deliveryConfig: { endpoint: EBAY_WEBHOOK_ENDPOINT, verificationToken: EBAY_WEBHOOK_TOKEN } })
+                        });
+                        const d = await r.json();
+                        if (r.ok || r.status === 409) { // 409 = already subscribed, that's fine
+                            console.log(`[eBay] Platform Notification subscribed: ${topicId}`);
+                        } else {
+                            console.warn(`[eBay] Subscription failed for ${topicId}:`, JSON.stringify(d));
+                        }
+                    }
+                } catch(subErr) {
+                    console.warn('[eBay] Platform Notification auto-subscribe failed (non-fatal):', subErr.message);
+                }
+            })();
+        }
+
         res.redirect('/?ebay_connected=1');
     } catch(e) { console.error('[eBay] Callback error:', e.message); res.redirect(`/?ebay_error=${encodeURIComponent(e.message)}`); }
 });
