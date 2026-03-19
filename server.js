@@ -621,10 +621,11 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
         if (categoryId) activeParams.set('category_ids', String(categoryId));
         const browseUrl = `${EBAY_PROD_API_BASE}/buy/browse/v1/item_summary/search?${activeParams}&filter=${activeFilterStr}`;
 
-        // ── 2. Marketplace Insights API — sold listings (REST replacement for legacy Finding API) ──
-        // /buy/marketplace_insights/v1_beta/item_sales/search uses the same app token as Browse API,
-        // falls under documented REST quotas, and returns clean JSON sold item data.
-        const soldCacheKey = `${searchQuery}|${soldConditionFilter}`;
+        // ── 2. Sold listings via SerpAPI — keyed by primary sold query ──────────
+        // Cache key uses brandModel (most specific) so changing the search strategy
+        // never serves stale empty results from a previous broader/failed attempt.
+        console.log(`[Price] brand="${brand}" model="${model}" soldQueryFallbacks=${JSON.stringify(soldQueryFallbacks)}`);
+        const soldCacheKey = `${soldQueryFallbacks[0]}|${soldConditionFilter}`;
         let soldPrices = getCachedSoldPrices(soldCacheKey);
 
         if (soldPrices === null) {
