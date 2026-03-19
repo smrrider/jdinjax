@@ -3874,7 +3874,7 @@ www.scout-recon.com`
                                                             className={`flex-1 py-2 flex items-center justify-center gap-1.5 transition-colors ${!isAuc ? 'bg-emerald-600 text-white' : 'bg-white text-slate-500 hover:bg-slate-50'}`}>
                                                             <Icon name="Tag" size={11}/> Fixed Price
                                                         </button>
-                                                        <button onClick={() => setAuc({ format: 'auction' })}
+                                                        <button onClick={() => setAuc({ format: 'auction', binPrice: cfg.binPrice || (l.buyItNowPrice ? String(l.buyItNowPrice) : '') })}
                                                             className={`flex-1 py-2 flex items-center justify-center gap-1.5 transition-colors border-l border-slate-200 ${isAuc ? 'bg-amber-500 text-white' : 'bg-white text-slate-500 hover:bg-slate-50'}`}>
                                                             <Icon name="Gavel" size={11}/> Auction
                                                         </button>
@@ -3961,7 +3961,6 @@ www.scout-recon.com`
                                         })()}
                                         <div className="flex gap-4">
                                             <button onClick={() => researchPrice(l)} disabled={pricingListingId === l.id || autoPricingIds.has(l.id)} title="Re-run for condition change or aggressive repricing" className="bg-blue-600 text-white px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md flex items-center gap-2 transition-all active:scale-95 shadow-lg shadow-blue-50/50 disabled:opacity-60">{(pricingListingId === l.id || autoPricingIds.has(l.id)) ? <Icon name="Loader2" className="animate-spin" size={14}/> : <Icon name="TrendingUp" size={14}/>} Re-Price</button>
-                                            <button onClick={async () => { await navigator.clipboard.writeText(convertToHtml(l.markdownDescription || '')); showToast("HTML Copied  -  Ready for eBay."); }} className="px-5 py-2.5 rounded-xl text-[10px] font-black uppercase border border-slate-200 flex items-center gap-2 hover:bg-slate-50 transition-all shadow-sm active:scale-95"><Icon name="Clipboard" size={14}/> Copy HTML</button>
                                         </div>
                                         <div className="flex gap-2">
                                             <button
