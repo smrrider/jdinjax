@@ -327,27 +327,10 @@ app.get('/auth/ebay/callback', async (req, res) => {
                 }
                 console.log(`[eBay] Subscribing topics to destination: ${destinationId}`);
 
-                const topics = ['marketplace.item_sold', 'marketplace.listing_deleted'];
-                for (const topicId of topics) {
-                    // Fetch topic metadata to get the required schemaVersion
-                    const topicRes      = await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/topic/${encodeURIComponent(topicId)}`, { method: 'GET', headers: subHeaders });
-                    const topicRaw      = await topicRes.text();
-                    console.log(`[eBay] Topic ${topicId} metadata status=${topicRes.status} body=${topicRaw}`);
-                    const topicData     = JSON.parse(topicRaw || '{}');
-                    const schemaVersion = topicData.supportedSchemaVersions?.[0] || topicData.schemaVersion || '1.0';
-                    console.log(`[eBay] Using schemaVersion=${schemaVersion} for ${topicId}`);
-                    const r = await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/subscription`, {
-                        method:  'POST',
-                        headers: subHeaders,
-                        body:    JSON.stringify({ topicId, status: 'ENABLED', destinationId, schemaVersion })
-                    });
-                    const d = await r.json();
-                    if (r.ok || r.status === 409) {
-                        console.log(`[eBay] Platform Notification subscribed: ${topicId}`);
-                    } else {
-                        console.warn(`[eBay] Subscription failed for ${topicId}:`, JSON.stringify(d));
-                    }
-                }
+                // Discover available topic IDs + schema versions from eBay directly
+                const topicsRes  = await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/topic`, { method: 'GET', headers: subHeaders });
+                const topicsRaw  = await topicsRes.text();
+                console.log(`[eBay] Available topics (status=${topicsRes.status}): ${topicsRaw}`);
             } catch(subErr) {
                 console.warn('[eBay] Platform Notification auto-subscribe failed (non-fatal):', subErr.message);
             }
