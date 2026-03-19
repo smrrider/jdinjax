@@ -651,8 +651,11 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
         // Filter blank/malformed image URLs
         const safeImages = (images || []).map(u => String(u || '').trim()).filter(u => u.startsWith('http')).slice(0, 12);
 
-        // Description: strip null bytes, cap at 500 000 chars (eBay limit)
-        const safeDesc = (description || '').replace(/\0/g, '').slice(0, 500000);
+        // Description: strip null bytes
+        // inventory item product.description max = 4,000 chars
+        // offer listingDescription max = 500,000 chars (takes precedence over product.description)
+        const safeDesc      = (description || '').replace(/\0/g, '').slice(0, 500000);
+        const safeDescShort = safeDesc.slice(0, 4000);
 
         // ── Step 1: PUT inventory item ────────────────────────────────────────
         const inventoryItem = {
@@ -660,7 +663,7 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
             condition:    conditionEnum,
             product: {
                 title:       safeTitle,
-                description: safeDesc,
+                description: safeDescShort,  // 4,000 char limit on inventory item
                 imageUrls:   safeImages,
                 aspects:     safeAspects
             }
@@ -743,11 +746,12 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
         const quantity = listingFormat === 'FIXED_PRICE' ? Math.max(1, parseInt(req.body.quantity || 1)) : undefined;
 
         const offerPayload = {
-            sku:                effectiveSku,
-            marketplaceId:      'EBAY_US',
-            format:             listingFormat,
-            categoryId:         String(categoryId),
-            listingDescription: safeDesc,
+            sku:                          effectiveSku,
+            marketplaceId:                'EBAY_US',
+            format:                       listingFormat,
+            categoryId:                   String(categoryId),
+            listingDescription:           safeDesc,   // 500K char limit; overrides product.description
+            includeCatalogProductDetails: false,       // prevent eBay from silently overriding our content
             listingDuration,
             // Auction listings don't use a payment policy (they handle payment at checkout).
             // Including a paymentPolicyId that has "Immediate Payment Required" causes eBay
@@ -1034,11 +1038,12 @@ app.post('/api/ebay/relist', requireUser, express.json({ limit: '64kb' }), async
         const rp = (rpData.returnPolicies       || []).find(p => p.name === cfg.returnProfile);
         if (!fp || !pp || !rp) return res.status(400).json({ error: 'eBay policy not found — check Settings' });
 
-        const effectiveSku = `SR-${listingDocId}-FP`;
-        const safeTitle    = (l.title || '').trim().slice(0, 80);
-        const safeDesc     = (l.description || l.markdownDescription || '').replace(/\0/g, '').slice(0, 500000);
-        const safeImages   = (l.images || []).map(u => String(u||'').trim()).filter(u => u.startsWith('http')).slice(0, 12);
-        const safeAspects  = {};
+        const effectiveSku  = `SR-${listingDocId}-FP`;
+        const safeTitle     = (l.title || '').trim().slice(0, 80);
+        const safeDesc      = (l.description || l.markdownDescription || '').replace(/\0/g, '').slice(0, 500000);
+        const safeDescShort = safeDesc.slice(0, 4000);
+        const safeImages    = (l.images || []).map(u => String(u||'').trim()).filter(u => u.startsWith('http')).slice(0, 12);
+        const safeAspects   = {};
         Object.entries(l).forEach(([k, v]) => {
             if (!k.startsWith('spec_') || !v) return;
             const name = k.slice(5).replace(/_/g, ' ');
@@ -1052,7 +1057,7 @@ app.post('/api/ebay/relist', requireUser, express.json({ limit: '64kb' }), async
             {
                 method: 'PUT', headers,
                 body: JSON.stringify({
-                    product: { title: safeTitle, description: safeDesc, imageUrls: safeImages, aspects: safeAspects },
+                    product: { title: safeTitle, description: safeDescShort, imageUrls: safeImages, aspects: safeAspects },
                     condition:    l.conditionId ? String(l.conditionId) : 'USED_GOOD',
                     availability: { shipToLocationAvailability: { quantity: 1 } }
                 })
@@ -1080,15 +1085,16 @@ app.post('/api/ebay/relist', requireUser, express.json({ limit: '64kb' }), async
 
         // ── Step 3: Upsert offer ────────────────────────────────────────────────
         const offerPayload = {
-            sku:                effectiveSku,
-            marketplaceId:      'EBAY_US',
-            format:             'FIXED_PRICE',
-            categoryId:         String(l.categoryId),
-            listingDescription: safeDesc,
-            listingDuration:    'GTC',
-            listingPolicies:    { fulfillmentPolicyId: fp.fulfillmentPolicyId, paymentPolicyId: pp.paymentPolicyId, returnPolicyId: rp.returnPolicyId },
-            pricingSummary:     { price: { currency: 'USD', value: Number(l.buyItNowPrice || 0).toFixed(2) } },
-            availableQuantity:  1
+            sku:                          effectiveSku,
+            marketplaceId:                'EBAY_US',
+            format:                       'FIXED_PRICE',
+            categoryId:                   String(l.categoryId),
+            listingDescription:           safeDesc,
+            includeCatalogProductDetails: false,
+            listingDuration:              'GTC',
+            listingPolicies:              { fulfillmentPolicyId: fp.fulfillmentPolicyId, paymentPolicyId: pp.paymentPolicyId, returnPolicyId: rp.returnPolicyId },
+            pricingSummary:               { price: { currency: 'USD', value: Number(l.buyItNowPrice || 0).toFixed(2) } },
+            availableQuantity:            1
         };
         if (merchantLocationKey) offerPayload.merchantLocationKey = merchantLocationKey;
 
