@@ -320,7 +320,7 @@ app.get('/auth/ebay/callback', async (req, res) => {
                         const r = await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/subscription`, {
                             method:  'POST',
                             headers: subHeaders,
-                            body:    JSON.stringify({ topicId, deliveryConfig: { endpoint: EBAY_WEBHOOK_ENDPOINT, verificationToken: EBAY_WEBHOOK_TOKEN } })
+                            body:    JSON.stringify({ topicId, status: 'ENABLED', deliveryConfig: { endpoint: EBAY_WEBHOOK_ENDPOINT, verificationToken: EBAY_WEBHOOK_TOKEN } })
                         });
                         const d = await r.json();
                         if (r.ok || r.status === 409) { // 409 = already subscribed, that's fine
