@@ -663,7 +663,7 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
         console.log(`[eBay/list] PUT inventory_item payload: ${JSON.stringify(inventoryItem).slice(0, 800)}`);
 
         const putRes = await ebayFetch(
-            `${EBAY_API_BASE}/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
+            `${EBAY_API_BASE}/sell/inventory/v1/inventory_item/${encodeURIComponent(effectiveSku)}`,
             { method: 'PUT', headers, body: JSON.stringify(inventoryItem) }
         );
         // 204 No Content = success; anything else is an error
@@ -712,6 +712,9 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
         // format: 'FIXED_PRICE' | 'AUCTION'  (default: FIXED_PRICE)
         const listingFormat = (req.body.format === 'AUCTION') ? 'AUCTION' : 'FIXED_PRICE';
 
+        // Suffix SKU by format so FP and AUC listings never share an inventory/offer record
+        const effectiveSku = sku.replace(/-(FP|AUC)$/, '') + (listingFormat === 'AUCTION' ? '-AUC' : '-FP');
+
         // Build pricingSummary based on format
         let pricingSummary;
         if (listingFormat === 'AUCTION') {
@@ -738,7 +741,7 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
         const quantity = listingFormat === 'FIXED_PRICE' ? Math.max(1, parseInt(req.body.quantity || 1)) : undefined;
 
         const offerPayload = {
-            sku,
+            sku:                effectiveSku,
             marketplaceId:      'EBAY_US',
             format:             listingFormat,
             categoryId:         String(categoryId),
@@ -747,20 +750,48 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
             listingPolicies:    { fulfillmentPolicyId, paymentPolicyId, returnPolicyId },
             pricingSummary
         };
-        if (quantity !== undefined)   offerPayload.availableQuantity  = quantity;  // omitted for AUCTION
+        if (quantity !== undefined)   offerPayload.availableQuantity  = quantity;
         if (merchantLocationKey)      offerPayload.merchantLocationKey = merchantLocationKey;
 
-        const offerRes  = await ebayFetch(`${EBAY_API_BASE}/sell/inventory/v1/offer`,
-            { method: 'POST', headers, body: JSON.stringify(offerPayload) }
+        // ── Step 2: POST offer — check for existing first to avoid "already exists" error ──
+        // GET existing offers for this SKU; if found, UPDATE (PUT) instead of creating.
+        let offerId;
+        const getOffersRes  = await ebayFetch(
+            `${EBAY_API_BASE}/sell/inventory/v1/offer?sku=${encodeURIComponent(effectiveSku)}`,
+            { method: 'GET', headers }
         );
-        const offerData = await offerRes.json();
-        if (!offerRes.ok) {
-            const msg = offerData.errors?.[0]?.message || `POST offer failed (${offerRes.status})`;
-            console.error('[eBay/list] POST offer failed:', JSON.stringify(offerData));
-            return res.status(502).json({ error: msg, detail: offerData });
+        const getOffersData = await getOffersRes.json();
+        const existingOffer = (getOffersData.offers || [])[0];
+
+        if (existingOffer) {
+            offerId = existingOffer.offerId;
+            const updateRes = await ebayFetch(
+                `${EBAY_API_BASE}/sell/inventory/v1/offer/${offerId}`,
+                { method: 'PUT', headers, body: JSON.stringify(offerPayload) }
+            );
+            if (updateRes.ok) {
+                console.log(`[eBay/list] ✅ Updated existing offer: ${offerId}`);
+            } else {
+                // Incompatible offer (e.g. format mismatch) — delete and recreate
+                console.warn(`[eBay/list] PUT offer failed, deleting and recreating: ${offerId}`);
+                await ebayFetch(`${EBAY_API_BASE}/sell/inventory/v1/offer/${offerId}`, { method: 'DELETE', headers });
+                offerId = null;
+            }
         }
-        const offerId = offerData.offerId;
-        console.log(`[eBay/list] ✅ offer: ${offerId}`);
+
+        if (!offerId) {
+            const offerRes  = await ebayFetch(`${EBAY_API_BASE}/sell/inventory/v1/offer`,
+                { method: 'POST', headers, body: JSON.stringify(offerPayload) }
+            );
+            const offerData = await offerRes.json();
+            if (!offerRes.ok) {
+                const msg = offerData.errors?.[0]?.message || `POST offer failed (${offerRes.status})`;
+                console.error('[eBay/list] POST offer failed:', JSON.stringify(offerData));
+                return res.status(502).json({ error: msg, detail: offerData });
+            }
+            offerId = offerData.offerId;
+            console.log(`[eBay/list] ✅ Created offer: ${offerId}`);
+        }
 
         // ── Step 3: Publish offer ─────────────────────────────────────────────
         const publishRes  = await ebayFetch(
