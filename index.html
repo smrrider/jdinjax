@@ -3651,7 +3651,21 @@ www.scout-recon.com`
                             </div>
                             <div className="flex flex-col items-start gap-2">
                                 <div className="flex gap-2 flex-wrap">
-                                    {/* Bulk push — only on Drafts tab */}
+                                    {/* Select All / Deselect All + Bulk push — Drafts tab only */}
+                                    {inventoryFolder === 'drafts' && draftListings.length > 0 && (
+                                        <button
+                                            onClick={() => {
+                                                if (selectedDrafts.size === draftListings.length) {
+                                                    setSelectedDrafts(new Set());
+                                                } else {
+                                                    setSelectedDrafts(new Set(draftListings.map(l => l.id)));
+                                                }
+                                            }}
+                                            className={`px-5 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 shadow-sm transition-all active:scale-95 border ${selectedDrafts.size === draftListings.length ? 'bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100' : 'bg-white border-slate-200 text-slate-600 hover:border-emerald-300 hover:text-emerald-600'}`}>
+                                            <Icon name={selectedDrafts.size === draftListings.length ? 'CheckSquare' : 'Square'} size={13}/>
+                                            {selectedDrafts.size === draftListings.length ? 'Deselect All' : 'Select All'}
+                                        </button>
+                                    )}
                                     {inventoryFolder === 'drafts' && selectedDrafts.size > 0 && (
                                         <button onClick={bulkListOnEbay} disabled={bulkListing}
                                             className="px-5 py-3 bg-emerald-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 shadow-md hover:bg-emerald-500 transition-all active:scale-95 disabled:opacity-60 shadow-emerald-100">
@@ -3713,9 +3727,10 @@ www.scout-recon.com`
                                                 next.has(l.id) ? next.delete(l.id) : next.add(l.id);
                                                 return next;
                                             })}
-                                            className={`absolute top-3 left-3 w-7 h-7 rounded-lg border-2 flex items-center justify-center transition-all active:scale-90 shadow-md ${selectedDrafts.has(l.id) ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-white/80 border-slate-300 text-transparent hover:border-emerald-400'}`}
+                                            className={`absolute top-3 left-3 flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border-2 font-black text-[9px] uppercase tracking-widest transition-all active:scale-90 shadow-lg ${selectedDrafts.has(l.id) ? 'bg-emerald-500 border-emerald-500 text-white shadow-emerald-200' : 'bg-white border-slate-300 text-slate-500 hover:border-emerald-400 hover:text-emerald-600 hover:bg-emerald-50'}`}
                                             title="Select for bulk listing">
-                                            <Icon name="Check" size={13}/>
+                                            <Icon name={selectedDrafts.has(l.id) ? 'CheckSquare' : 'Square'} size={13}/>
+                                            {selectedDrafts.has(l.id) ? 'Selected' : 'Select'}
                                         </button>
                                     )}
                                     {/* Assets badge — click to toggle strip */}
@@ -3860,7 +3875,7 @@ www.scout-recon.com`
                                         />
                                     </div>
                                 ) : l.markdownDescription ? (
-                                    <details className="mb-6 group">
+                                    <details className="mb-6 group" open>
                                         <summary className="text-[10px] font-black text-slate-400 uppercase tracking-widest cursor-pointer flex items-center gap-2 select-none hover:text-blue-500 transition-colors">
                                             <Icon name="ChevronRight" size={12} className="transition-transform group-open:rotate-90"/>
                                             Description
@@ -3870,9 +3885,9 @@ www.scout-recon.com`
                                         </div>
                                     </details>
                                 ) : null}
-                                <div className="bg-slate-50 p-4 rounded-2xl mb-6 border border-slate-100 shadow-sm">
-                                    <span className="text-[9px] font-black text-slate-400 uppercase mb-2 block tracking-widest text-center">Listing Condition</span>
-                                    <select value={l.conditionId || '1000'} onChange={e => dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({conditionId: e.target.value})} className="w-full bg-transparent text-xs font-black uppercase text-blue-600 cursor-pointer text-center focus:outline-none">{getConditionSet(l.categoryId).map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select>
+                                <div className="flex items-center gap-2 mb-6">
+                                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest shrink-0">Condition</span>
+                                    <select value={l.conditionId || '1000'} onChange={e => dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({conditionId: e.target.value})} className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-[10px] font-black uppercase text-blue-600 cursor-pointer focus:outline-none focus:border-blue-400 shadow-sm">{getConditionSet(l.categoryId).map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select>
                                 </div>
                                 {/* Profit Calculator — collapsed by default */}
                                 <details className="mb-6 group">
@@ -3930,6 +3945,12 @@ www.scout-recon.com`
                                 </details>
                                 {(localPriceResults[l.id] || l.priceResearch) && (() => {
                                     const pr = localPriceResults[l.id] || l.priceResearch;
+                                    const applyPrice = async (val) => {
+                                        const p = Number(val);
+                                        if (!p) return;
+                                        await dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).update({ buyItNowPrice: p });
+                                        showToast(`Price set to $${p.toFixed(2)}`);
+                                    };
                                     return (
                                     <div className="bg-gradient-to-br from-blue-50 to-slate-50 rounded-2xl p-5 border border-blue-100 mb-6 shadow-sm">
                                         {/* Source + confidence header */}
@@ -3943,12 +3964,25 @@ www.scout-recon.com`
                                             <span className="ml-auto text-[8px] font-black px-2 py-1 rounded-lg uppercase bg-green-100 text-green-700">{pr.confidence || 'N/A'}</span>
                                         </div>
                                         <div className="flex items-end gap-4 mb-3">
-                                            <div className="text-center"><span className="text-[8px] text-slate-400 font-black uppercase block mb-1">Low</span><span className="text-sm font-black text-slate-500">${Number(pr.low || 0).toFixed(2)}</span></div>
+                                            {/* Low — clickable */}
+                                            <button onClick={() => applyPrice(pr.low)}
+                                                className="text-center group/low hover:scale-105 transition-transform active:scale-95"
+                                                title="Set price to Low">
+                                                <span className="text-[8px] text-slate-400 font-black uppercase block mb-1 group-hover/low:text-slate-600">Low</span>
+                                                <span className="text-sm font-black text-slate-500 group-hover/low:text-slate-800 underline decoration-dotted underline-offset-2">${Number(pr.low || 0).toFixed(2)}</span>
+                                            </button>
+                                            {/* Mid — recommended (existing behaviour) */}
                                             <div className="flex-1 text-center bg-white rounded-2xl px-4 py-3 border border-blue-200 shadow-sm">
                                                 <span className="text-[8px] text-blue-500 font-black uppercase block mb-1">Recommended</span>
                                                 <span className="text-2xl font-black text-blue-700">${Number(pr.mid || 0).toFixed(2)}</span>
                                             </div>
-                                            <div className="text-center"><span className="text-[8px] text-slate-400 font-black uppercase block mb-1">High</span><span className="text-sm font-black text-slate-500">${Number(pr.high || 0).toFixed(2)}</span></div>
+                                            {/* High — clickable */}
+                                            <button onClick={() => applyPrice(pr.high)}
+                                                className="text-center group/high hover:scale-105 transition-transform active:scale-95"
+                                                title="Set price to High">
+                                                <span className="text-[8px] text-slate-400 font-black uppercase block mb-1 group-hover/high:text-slate-600">High</span>
+                                                <span className="text-sm font-black text-slate-500 group-hover/high:text-slate-800 underline decoration-dotted underline-offset-2">${Number(pr.high || 0).toFixed(2)}</span>
+                                            </button>
                                         </div>
                                         <p className="text-[10px] text-slate-600 italic leading-relaxed border-l-2 border-blue-200 pl-3">{pr.basis}</p>
                                     </div>
