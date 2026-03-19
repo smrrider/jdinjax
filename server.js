@@ -329,10 +329,13 @@ app.get('/auth/ebay/callback', async (req, res) => {
 
                 const topics = ['marketplace.item_sold', 'marketplace.listing_deleted'];
                 for (const topicId of topics) {
+                    // Fetch the topic metadata to get the required schemaVersion
+                    const topicData     = await (await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/topic/${encodeURIComponent(topicId)}`, { method: 'GET', headers: subHeaders })).json();
+                    const schemaVersion = topicData.supportedSchemaVersions?.[0] || '1.0';
                     const r = await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/subscription`, {
                         method:  'POST',
                         headers: subHeaders,
-                        body:    JSON.stringify({ topicId, status: 'ENABLED', destinationId })
+                        body:    JSON.stringify({ topicId, status: 'ENABLED', destinationId, schemaVersion })
                     });
                     const d = await r.json();
                     if (r.ok || r.status === 409) {
