@@ -309,40 +309,6 @@ app.get('/auth/ebay/callback', async (req, res) => {
         await adminFirestore.doc(`users/${uid}/ebay/tokens`).set({ accessToken: td.access_token, refreshToken: td.refresh_token, expiresAt: Date.now() + td.expires_in * 1000, scope: td.scope || EBAY_SCOPES, connectedAt: Date.now(), env: EBAY_ENV });
         console.log(`[eBay] User ${uid} connected (${EBAY_ENV})`);
 
-        // Auto-subscribe ORDER_CONFIRMATION to the existing verified destination (fire-and-forget)
-        // ORDER_CONFIRMATION fires when a buyer completes checkout — scope: USER (requires user token)
-        (async () => {
-            try {
-                const userToken  = td.access_token;
-                const subHeaders = { 'Authorization': `Bearer ${userToken}`, 'Content-Type': 'application/json' };
-
-                // Find existing verified destination (the account-deletion endpoint)
-                const appToken   = await getEbayAppToken();
-                const appHeaders = { 'Authorization': `Bearer ${appToken}`, 'Content-Type': 'application/json' };
-                const destsData  = await (await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/destination`, { method: 'GET', headers: appHeaders })).json();
-                const destinationId = (destsData.destinations || [])[0]?.destinationId;
-                if (!destinationId) {
-                    console.warn('[eBay] No verified destination found — skipping ORDER_CONFIRMATION subscription');
-                    return;
-                }
-
-                // Subscribe ORDER_CONFIRMATION with user token (USER-scoped topic)
-                const r = await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/subscription`, {
-                    method:  'POST',
-                    headers: subHeaders,
-                    body:    JSON.stringify({ topicId: 'ORDER_CONFIRMATION', status: 'ENABLED', destinationId, payload: { schemaVersion: '1.0', format: 'JSON', deliveryProtocol: 'HTTPS' } })
-                });
-                const d = await r.json();
-                if (r.ok || r.status === 409) {
-                    console.log(`[eBay] Subscribed to ORDER_CONFIRMATION (destination: ${destinationId})`);
-                } else {
-                    console.warn('[eBay] ORDER_CONFIRMATION subscription failed:', JSON.stringify(d));
-                }
-            } catch(subErr) {
-                console.warn('[eBay] Platform Notification auto-subscribe failed (non-fatal):', subErr.message);
-            }
-        })();
-
         res.redirect('/?ebay_connected=1');
     } catch(e) { console.error('[eBay] Callback error:', e.message); res.redirect(`/?ebay_error=${encodeURIComponent(e.message)}`); }
 });
@@ -947,7 +913,45 @@ app.post('/api/ebay/sync-status', requireUser, express.json({ limit: '64kb' }), 
             if (o.status === 'fulfilled') results[o.value.offerId] = o.value;
         }
 
-        // Best-effort Firestore sync — write back changed statuses (Firestore 'in' limit: 30)
+        // ── Orders API: check for recently sold items ────────────────────────────
+        // Fetch orders completed in the last 90 days and cross-reference with our listings.
+        // This replaces the webhook approach for sold detection.
+        const soldListingIds = new Set();
+        const soldDetails    = {};  // listingId → { soldFor, soldTo }
+        try {
+            const since   = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+            const ordersR = await ebayFetch(
+                `${EBAY_API_BASE}/sell/fulfillment/v1/order?filter=orderfulfillmentstatus:%7BNOT_STARTED%7CIN_PROGRESS%7DFULFILLED%7D&limit=50&creationdate=%5B${encodeURIComponent(since)}..%5D`,
+                { method: 'GET', headers: hdrs }
+            );
+            if (ordersR.ok) {
+                const ordersData = await ordersR.json();
+                for (const order of (ordersData.orders || [])) {
+                    for (const item of (order.lineItems || [])) {
+                        const lid = item.legacyItemId || item.itemId;
+                        if (lid) {
+                            soldListingIds.add(String(lid));
+                            soldDetails[String(lid)] = {
+                                soldFor: order.pricingSummary?.total?.value || null,
+                                soldTo:  order.buyer?.username || null
+                            };
+                        }
+                    }
+                }
+            }
+        } catch(ordErr) {
+            console.warn('[sync-status] Orders API skipped:', ordErr.message);
+        }
+
+        // Mark sold items in results
+        for (const [offerId, result] of Object.entries(results)) {
+            if (result.listingId && soldListingIds.has(String(result.listingId))) {
+                result.ebayStatus = 'SOLD';
+                result.soldDetails = soldDetails[String(result.listingId)] || {};
+            }
+        }
+
+        // ── Firestore writeback — offer status + sold detection ──────────────────
         if (adminFirestore) {
             try {
                 const chunk = Object.keys(results).slice(0, 30);
@@ -959,9 +963,16 @@ app.post('/api/ebay/sync-status', requireUser, express.json({ limit: '64kb' }), 
                 snap.docs.forEach(doc => {
                     const r = results[doc.data().ebayOfferId];
                     if (!r) return;
-                    const newStatus = r.ebayStatus === 'PUBLISHED' ? 'live' : 'ended';
+                    const newStatus = r.ebayStatus === 'PUBLISHED' ? 'live'
+                        : r.ebayStatus === 'SOLD' ? 'sold' : 'ended';
                     if (doc.data().ebayStatus !== newStatus) {
-                        batch.update(doc.ref, { ebayStatus: newStatus, ebaySyncedAt: Date.now() });
+                        const update = { ebayStatus: newStatus, ebaySyncedAt: Date.now() };
+                        if (newStatus === 'sold' && r.soldDetails) {
+                            update.ebaySoldFor = r.soldDetails.soldFor;
+                            update.ebaySoldTo  = r.soldDetails.soldTo;
+                            update.ebaySoldAt  = Date.now();
+                        }
+                        batch.update(doc.ref, update);
                         dirty = true;
                     }
                 });

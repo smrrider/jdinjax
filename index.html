@@ -2900,7 +2900,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                 } else if (r.ebayStatus === 'ENDED') {
                                     next[l.id] = { status: 'ended', url: l.ebayListingUrl, listingId: l.ebayListingId, offerId: l.ebayOfferId };
                                 } else if (r.ebayStatus === 'SOLD') {
-                                    next[l.id] = { status: 'sold',  url: l.ebayListingUrl, listingId: l.ebayListingId, offerId: l.ebayOfferId };
+                                    next[l.id] = { status: 'sold', url: l.ebayListingUrl, listingId: l.ebayListingId, offerId: l.ebayOfferId, soldFor: r.soldDetails?.soldFor, soldTo: r.soldDetails?.soldTo };
                                 }
                             });
                             return next;
