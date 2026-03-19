@@ -1835,6 +1835,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     unsubscribe = dbRef.current.collection(path).onSnapshot(
                         snap => {
                             retryDelay = 3000; // reset backoff on success
+                            console.log('[Listings] onSnapshot fired — path:', path, '— doc count:', snap.docs.length, '— from cache:', snap.metadata.fromCache);
                             setListings(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
                         },
                         err => {
