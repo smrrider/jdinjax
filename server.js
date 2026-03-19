@@ -675,20 +675,53 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
         }
         console.log(`[eBay/list] ✅ inventory_item: ${sku}`);
 
+        // ── Resolve merchant location key ─────────────────────────────────────
+        // eBay requires a merchantLocationKey on the offer to derive Item.Country.
+        // GET existing locations — use first enabled one, or create SR_DEFAULT if none exist.
+        let merchantLocationKey = 'SR_DEFAULT';
+        try {
+            const locRes  = await ebayFetch(`${EBAY_API_BASE}/sell/inventory/v1/location`, { method: 'GET', headers });
+            const locData = await locRes.json();
+            const locs    = locData.locations || [];
+            const enabled = locs.find(l => l.merchantLocationStatus === 'ENABLED') || locs[0];
+            if (enabled) {
+                merchantLocationKey = enabled.merchantLocationKey;
+                console.log(`[eBay/list] Using existing location: ${merchantLocationKey}`);
+            } else {
+                // No locations — create SR_DEFAULT with seller's country US
+                const createRes = await ebayFetch(
+                    `${EBAY_API_BASE}/sell/inventory/v1/location/SR_DEFAULT`,
+                    {
+                        method: 'POST', headers,
+                        body: JSON.stringify({
+                            location:               { address: { country: 'US' } },
+                            locationType:           'WAREHOUSE',
+                            merchantLocationStatus: 'ENABLED',
+                            name:                   'Scout Recon Default Location'
+                        })
+                    }
+                );
+                console.log(`[eBay/list] Created SR_DEFAULT location (${createRes.status})`);
+            }
+        } catch(locErr) {
+            console.warn('[eBay/list] Location lookup failed, proceeding without key:', locErr.message);
+            merchantLocationKey = undefined;
+        }
+
         // ── Step 2: POST offer ────────────────────────────────────────────────
         const offerPayload = {
             sku,
-            marketplaceId:       'EBAY_US',
-            format:              'FIXED_PRICE',
-            availableQuantity:   1,
-            categoryId:          String(categoryId),
-            listingDescription:  safeDesc,
-            merchantLocationKey: 'DEFAULT',          // resolves Item.Country from seller's default location
-            listingPolicies:     { fulfillmentPolicyId, paymentPolicyId, returnPolicyId },
+            marketplaceId:      'EBAY_US',
+            format:             'FIXED_PRICE',
+            availableQuantity:  1,
+            categoryId:         String(categoryId),
+            listingDescription: safeDesc,
+            listingPolicies:    { fulfillmentPolicyId, paymentPolicyId, returnPolicyId },
             pricingSummary: {
                 price: { currency: 'USD', value: Number(price).toFixed(2) }
             }
         };
+        if (merchantLocationKey) offerPayload.merchantLocationKey = merchantLocationKey;
 
         const offerRes  = await ebayFetch(`${EBAY_API_BASE}/sell/inventory/v1/offer`,
             { method: 'POST', headers, body: JSON.stringify(offerPayload) }
