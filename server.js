@@ -631,20 +631,36 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
         };
         const conditionEnum = CONDITION_MAP[String(conditionId)] || 'USED_GOOD';
 
-        // ── Step 1: PUT inventory item ────────────────────────────────────────
+        // ── Sanitise payload before sending to eBay ──────────────────────────
         const safeTitle = (title || '').trim().slice(0, 80);
         if (!safeTitle) return res.status(400).json({ error: 'Listing title is empty' });
 
+        // Strip aspects with missing/empty values — eBay rejects empty arrays
+        const safeAspects = {};
+        Object.entries(aspects || {}).forEach(([k, v]) => {
+            const vals = (Array.isArray(v) ? v : [v]).map(s => String(s || '').trim()).filter(Boolean);
+            if (k.trim() && vals.length) safeAspects[k.trim()] = vals;
+        });
+
+        // Filter blank/malformed image URLs
+        const safeImages = (images || []).map(u => String(u || '').trim()).filter(u => u.startsWith('http')).slice(0, 12);
+
+        // Description: strip null bytes, cap at 500 000 chars (eBay limit)
+        const safeDesc = (description || '').replace(/\0/g, '').slice(0, 500000);
+
+        // ── Step 1: PUT inventory item ────────────────────────────────────────
         const inventoryItem = {
             availability: { shipToLocationAvailability: { quantity: 1 } },
             condition:    conditionEnum,
             product: {
                 title:       safeTitle,
-                description,
-                imageUrls: (images || []).slice(0, 12),   // eBay max 12 images per listing
-                aspects:   aspects || {}
+                description: safeDesc,
+                imageUrls:   safeImages,
+                aspects:     safeAspects
             }
         };
+
+        console.log(`[eBay/list] PUT inventory_item payload: ${JSON.stringify(inventoryItem).slice(0, 800)}`);
 
         const putRes = await ebayFetch(
             `${EBAY_API_BASE}/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
