@@ -735,13 +735,13 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
         } : null;
 
         // ── Pricing strategies ────────────────────────────────────────────────
-        // Move It  — price at/below sold median = fastest turnover
-        // Market   — price at sold mid or active mid if no sold data
-        // Hold     — price at active high = premium positioning, slower sale
+        // Move It  — 10th pct of sold × 0.97 = fastest turnover price
+        // Market   — 50th pct of sold (median transaction price)
+        // Hold     — 90th pct of sold = premium but achievable; falls back to active high
         const strategies = {
             moveIt: sold ? parseFloat((sold.low  * 0.97).toFixed(2)) : parseFloat((active.low).toFixed(2)),
             market: sold ? parseFloat((sold.mid).toFixed(2))         : parseFloat((active.mid).toFixed(2)),
-            hold:   parseFloat((active.high).toFixed(2))
+            hold:   sold ? parseFloat((sold.high).toFixed(2))        : parseFloat((active.high).toFixed(2))
         };
 
         const confidence   = activePrices.length >= 30 ? 'High' : activePrices.length >= 12 ? 'Medium' : 'Low';
