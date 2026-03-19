@@ -130,6 +130,7 @@ const ALLOWED_IMAGE_HOSTS = new Set([
     'encrypted-tbn2.gstatic.com',
     'encrypted-tbn3.gstatic.com',
     'shopping.googleapis.com',
+    'res.cloudinary.com',       // AR images uploaded during recon → sent to processor
 ]);
 
 // ─── Middleware ────────────────────────────────────────────────────────────
