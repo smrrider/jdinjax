@@ -66,6 +66,11 @@ function ebayFetch(urlStr, { method = 'GET', headers = {}, body } = {}) {
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
+
+// Railway (and most PaaS) sit behind a reverse proxy that sets X-Forwarded-For.
+// Without this, express-rate-limit throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR and
+// crashes the middleware chain before body-parser runs → req.body is undefined.
+app.set('trust proxy', 1);
 const APP_VERSION = "6.1.0";
 
 // Owner email — drives server-side admin gate
@@ -534,7 +539,7 @@ app.get('/api/ebay/price-research-test', async (req, res) => {
 // Queries eBay Browse API for active fixed-price listings matching the item title.
 // Returns low/mid/high price band + listing count.  Falls back gracefully so the
 // client can call Gemini if fewer than MIN_COMPS results are found.
-app.post('/api/ebay/price-research', requireUser, async (req, res) => {
+app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }), async (req, res) => {
     const MIN_COMPS = 4;
     try {
         const { title, conditionId, categoryId } = req.body;
