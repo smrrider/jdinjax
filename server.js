@@ -678,12 +678,13 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
         // ── Step 2: POST offer ────────────────────────────────────────────────
         const offerPayload = {
             sku,
-            marketplaceId:      'EBAY_US',
-            format:             'FIXED_PRICE',
-            availableQuantity:  1,
-            categoryId:         String(categoryId),
-            listingDescription: description,
-            listingPolicies:    { fulfillmentPolicyId, paymentPolicyId, returnPolicyId },
+            marketplaceId:       'EBAY_US',
+            format:              'FIXED_PRICE',
+            availableQuantity:   1,
+            categoryId:          String(categoryId),
+            listingDescription:  safeDesc,
+            merchantLocationKey: 'DEFAULT',          // resolves Item.Country from seller's default location
+            listingPolicies:     { fulfillmentPolicyId, paymentPolicyId, returnPolicyId },
             pricingSummary: {
                 price: { currency: 'USD', value: Number(price).toFixed(2) }
             }
