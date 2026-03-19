@@ -309,28 +309,35 @@ app.get('/auth/ebay/callback', async (req, res) => {
         await adminFirestore.doc(`users/${uid}/ebay/tokens`).set({ accessToken: td.access_token, refreshToken: td.refresh_token, expiresAt: Date.now() + td.expires_in * 1000, scope: td.scope || EBAY_SCOPES, connectedAt: Date.now(), env: EBAY_ENV });
         console.log(`[eBay] User ${uid} connected (${EBAY_ENV})`);
 
-        // Auto-register Platform Notification subscriptions (fire-and-forget — never blocks the redirect)
-        // Auto-subscribe item_sold + listing_deleted to the existing verified destination (fire-and-forget)
+        // Auto-subscribe ORDER_CONFIRMATION to the existing verified destination (fire-and-forget)
+        // ORDER_CONFIRMATION fires when a buyer completes checkout — scope: USER (requires user token)
         (async () => {
             try {
-                const appToken   = await getEbayAppToken();
-                const subHeaders = { 'Authorization': `Bearer ${appToken}`, 'Content-Type': 'application/json' };
+                const userToken  = td.access_token;
+                const subHeaders = { 'Authorization': `Bearer ${userToken}`, 'Content-Type': 'application/json' };
 
-                // Use whatever destination is already registered — the account-deletion endpoint
-                // is already verified by eBay and handles all notification topics.
-                const destsData = await (await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/destination`, { method: 'GET', headers: subHeaders })).json();
-                const destinations = destsData.destinations || [];
-                const destinationId = destinations[0]?.destinationId;
+                // Find existing verified destination (the account-deletion endpoint)
+                const appToken   = await getEbayAppToken();
+                const appHeaders = { 'Authorization': `Bearer ${appToken}`, 'Content-Type': 'application/json' };
+                const destsData  = await (await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/destination`, { method: 'GET', headers: appHeaders })).json();
+                const destinationId = (destsData.destinations || [])[0]?.destinationId;
                 if (!destinationId) {
-                    console.warn('[eBay] No verified destination found — skipping topic subscription');
+                    console.warn('[eBay] No verified destination found — skipping ORDER_CONFIRMATION subscription');
                     return;
                 }
-                console.log(`[eBay] Subscribing topics to destination: ${destinationId}`);
 
-                // Discover available topic IDs + schema versions from eBay directly
-                const topicsRes  = await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/topic`, { method: 'GET', headers: subHeaders });
-                const topicsRaw  = await topicsRes.text();
-                console.log(`[eBay] Available topics (status=${topicsRes.status}): ${topicsRaw}`);
+                // Subscribe ORDER_CONFIRMATION with user token (USER-scoped topic)
+                const r = await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/subscription`, {
+                    method:  'POST',
+                    headers: subHeaders,
+                    body:    JSON.stringify({ topicId: 'ORDER_CONFIRMATION', status: 'ENABLED', destinationId, schemaVersion: '1.0' })
+                });
+                const d = await r.json();
+                if (r.ok || r.status === 409) {
+                    console.log(`[eBay] Subscribed to ORDER_CONFIRMATION (destination: ${destinationId})`);
+                } else {
+                    console.warn('[eBay] ORDER_CONFIRMATION subscription failed:', JSON.stringify(d));
+                }
             } catch(subErr) {
                 console.warn('[eBay] Platform Notification auto-subscribe failed (non-fatal):', subErr.message);
             }
@@ -1186,8 +1193,8 @@ app.post('/ebay/notifications/account-deletion', express.json(), async (req, res
         const topic        = notification?.metadata?.topic || notification?.topic || '';
         const data         = notification?.data || {};
 
-        // ── Item sold ───────────────────────────────────────────────────────────
-        const SOLD_TOPICS = new Set(['marketplace.item_sold','ITEM_SOLD','FIXED_PRICE_TRANSACTION','AUCTION_SOLD']);
+        // ── Item sold (ORDER_CONFIRMATION fires when buyer completes checkout) ───
+        const SOLD_TOPICS = new Set(['ORDER_CONFIRMATION','marketplace.item_sold','ITEM_SOLD','FIXED_PRICE_TRANSACTION','AUCTION_SOLD']);
         if (SOLD_TOPICS.has(topic)) {
             const ebayListingId = String(data.itemId || data.listingId || '');
             console.log(`[eBay] Item sold notification — listingId: ${ebayListingId}`);
