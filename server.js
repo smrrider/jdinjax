@@ -391,6 +391,30 @@ const getEbayAppToken = async () => {
     return _ebayAppToken;
 };
 
+// Production app token — always uses prod credentials regardless of EBAY_ENV.
+// Browse API (price research) must query real eBay data; sandbox has no listings.
+let _ebayProdAppToken    = null;
+let _ebayProdAppTokenExp = 0;
+const EBAY_PROD_API_BASE  = 'https://api.ebay.com';
+const EBAY_PROD_TOKEN_URL = 'https://api.ebay.com/identity/v1/oauth2/token';
+const getEbayProdAppToken = async () => {
+    if (_ebayProdAppToken && Date.now() < _ebayProdAppTokenExp - 60_000) return _ebayProdAppToken;
+    const prodAppId  = process.env.EBAY_APP_ID_PROD;
+    const prodCertId = process.env.EBAY_CERT_ID_PROD;
+    if (!prodAppId || !prodCertId) throw new Error('EBAY_APP_ID_PROD / EBAY_CERT_ID_PROD not set');
+    const creds = Buffer.from(`${prodAppId}:${prodCertId}`).toString('base64');
+    const r = await fetch(EBAY_PROD_TOKEN_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Authorization': `Basic ${creds}` },
+        body: new URLSearchParams({ grant_type: 'client_credentials', scope: 'https://api.ebay.com/oauth/api_scope' })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(`Prod app token failed: ${d.error_description || d.error}`);
+    _ebayProdAppToken    = d.access_token;
+    _ebayProdAppTokenExp = Date.now() + d.expires_in * 1000;
+    return _ebayProdAppToken;
+};
+
 const getEbayCategoryTreeId = async () => {
     if (_ebayTreeId) return _ebayTreeId;
     const token = await getEbayAppToken();
@@ -486,7 +510,9 @@ app.post('/api/ebay/price-research', requireUser, async (req, res) => {
         const { title, conditionId, categoryId } = req.body;
         if (!title) return res.status(400).json({ error: 'title required' });
 
-        const token = await getEbayAppToken();
+        // Always query production eBay — sandbox has no real listings so Browse API
+        // returns 0 results and falls through to Gemini every time.
+        const token = await getEbayProdAppToken();
 
         // Use first 6 meaningful words as search query (broad enough to get comps)
         const searchQuery = title.split(/\s+/).slice(0, 6).join(' ');
@@ -498,11 +524,17 @@ app.post('/api/ebay/price-research', requireUser, async (req, res) => {
         else if (cid >= 2000 && cid <= 2750)       conditionFilter = 'conditionIds:{2000|2010|2020|2030|2500|2750}';
         else                                        conditionFilter = 'conditionIds:{3000|4000|5000|6000|7000}';
 
-        const filters = ['buyingOptions:{FIXED_PRICE}', conditionFilter].join(',');
-        const params  = new URLSearchParams({ q: searchQuery, limit: '100', filter: filters });
-        if (categoryId) params.set('category_ids', categoryId);
+        // Build filter string with literal braces — URLSearchParams would percent-encode
+        // them (%7B/%7D) which eBay Browse API does not accept.
+        const filterStr = `buyingOptions:{FIXED_PRICE},${conditionFilter}`;
+        const safeParams = new URLSearchParams({ q: searchQuery, limit: '100' });
+        if (categoryId) safeParams.set('category_ids', String(categoryId));
+        // Append filter raw so braces remain unencoded
+        const browseUrl = `${EBAY_PROD_API_BASE}/buy/browse/v1/item_summary/search?${safeParams}&filter=${filterStr}`;
 
-        const r = await fetch(`${EBAY_API_BASE}/buy/browse/v1/item_summary/search?${params}`, {
+        console.log(`[Price] Browse URL: ${browseUrl}`);
+
+        const r = await fetch(browseUrl, {
             headers: {
                 'Authorization': `Bearer ${token}`,
                 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
@@ -516,7 +548,7 @@ app.post('/api/ebay/price-research', requireUser, async (req, res) => {
             .filter(p => p > 0)
             .sort((a, b) => a - b);
 
-        console.log(`[Price] "${searchQuery}" → ${prices.length} comps (conditionFilter: ${conditionFilter})`);
+        console.log(`[Price] "${searchQuery}" → ${prices.length} comps, condition: ${conditionFilter}, status: ${r.status}`);
 
         if (prices.length < MIN_COMPS) {
             // Not enough live data — tell client to fall back to Gemini
