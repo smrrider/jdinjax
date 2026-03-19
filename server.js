@@ -655,10 +655,15 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
                     const lhCondition = cid === 1000 ? '1000' : cid <= 2750 ? null : '3000';
 
                     const fetchSoldItems = async (query, includeCondition) => {
-                        const base = { engine: 'ebay', _nkw: query, LH_Sold: '1', LH_Complete: '1', _ipg: '100', api_key: serpKey };
+                        const base = { engine: 'ebay', _nkw: query, LH_Sold: '1', LH_Complete: '1', api_key: serpKey };
                         if (includeCondition && lhCondition) base.LH_ItemCondition = lhCondition;
-                        const sr = await fetch(`https://serpapi.com/search?${new URLSearchParams(base)}`);
+                        const url = `https://serpapi.com/search?${new URLSearchParams(base)}`;
+                        const sr = await fetch(url);
                         const sd = await sr.json();
+                        // Log raw response shape to diagnose 0-result issue
+                        const topKeys = Object.keys(sd).filter(k => k !== 'search_metadata' && k !== 'search_parameters');
+                        const itemCount = (sd.organic_results || sd.search_results || []).length;
+                        console.log(`[Price] SerpAPI raw keys: [${topKeys.join(',')}] items=${itemCount} error=${sd.error || 'none'} q="${query}"`);
                         const items = sd.organic_results || sd.search_results || [];
                         return items
                             .map(i => { const p = i.price; return typeof p === 'number' ? p : parseFloat(String(p || '0').replace(/[^0-9.]/g, '')); })
