@@ -2837,6 +2837,11 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         body.startPrice      = auctionCfg.startPrice || '0.99';
                         if (auctionCfg.reservePrice) body.reservePrice    = auctionCfg.reservePrice;
                         if (auctionCfg.binPrice)     body.auctionBinPrice = auctionCfg.binPrice;
+                    } else {
+                        // Fixed price extras
+                        body.quantity = parseInt(auctionCfg.quantity || 1);
+                        const validTiers = (auctionCfg.volumeDiscounts || []).filter(d => d.minQty >= 2 && d.pctOff > 0);
+                        if (validTiers.length) body.volumeDiscounts = validTiers;
                     }
                     const res = await fetch('/api/ebay/list', {
                         method: 'POST',
@@ -3949,6 +3954,56 @@ www.scout-recon.com`
                                                                         </div>
                                                                     </div>
                                                                 </div>
+                                                            </div>
+                                                        )}
+
+                                                        {/* Fixed Price — quantity + volume discounts */}
+                                                        {!isAuc && (
+                                                            <div className="space-y-2">
+                                                                {/* Quantity */}
+                                                                <div className="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
+                                                                    <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest shrink-0">Qty</span>
+                                                                    <input type="number" min="1" step="1"
+                                                                        value={cfg.quantity || 1}
+                                                                        onChange={e => setAuc({ quantity: Math.max(1, parseInt(e.target.value) || 1) })}
+                                                                        className="w-16 text-[11px] font-black text-center border border-slate-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:border-blue-400"/>
+                                                                    <span className="text-[9px] text-slate-400 font-bold">available</span>
+                                                                </div>
+
+                                                                {/* Volume discounts */}
+                                                                {(cfg.quantity || 1) > 1 && (
+                                                                    <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 space-y-1.5">
+                                                                        <div className="flex items-center justify-between mb-1">
+                                                                            <p className="text-[8px] font-black text-blue-700 uppercase tracking-widest">Multi-buy Discounts</p>
+                                                                            <button onClick={() => setAuc({ volumeDiscounts: [...(cfg.volumeDiscounts || []), { minQty: '', pctOff: '' }] })}
+                                                                                className="text-[8px] font-black text-blue-600 hover:text-blue-800 flex items-center gap-0.5 transition-colors">
+                                                                                <Icon name="Plus" size={9}/> Add Tier
+                                                                            </button>
+                                                                        </div>
+                                                                        {(cfg.volumeDiscounts || []).map((tier, ti) => (
+                                                                            <div key={ti} className="flex items-center gap-2">
+                                                                                <span className="text-[9px] font-black text-slate-500 shrink-0">Buy</span>
+                                                                                <input type="number" min="2" step="1" placeholder="2"
+                                                                                    value={tier.minQty || ''}
+                                                                                    onChange={e => { const d = [...(cfg.volumeDiscounts||[])]; d[ti]={...d[ti],minQty:parseInt(e.target.value)||''}; setAuc({volumeDiscounts:d}); }}
+                                                                                    className="w-12 text-[10px] font-black text-center border border-blue-200 rounded-lg px-1 py-1 bg-white focus:outline-none"/>
+                                                                                <span className="text-[9px] font-black text-slate-500 shrink-0">+ save</span>
+                                                                                <input type="number" min="1" max="99" step="1" placeholder="5"
+                                                                                    value={tier.pctOff || ''}
+                                                                                    onChange={e => { const d = [...(cfg.volumeDiscounts||[])]; d[ti]={...d[ti],pctOff:parseFloat(e.target.value)||''}; setAuc({volumeDiscounts:d}); }}
+                                                                                    className="w-12 text-[10px] font-black text-center border border-blue-200 rounded-lg px-1 py-1 bg-white focus:outline-none"/>
+                                                                                <span className="text-[9px] font-black text-slate-500">%</span>
+                                                                                <button onClick={() => { const d=(cfg.volumeDiscounts||[]).filter((_,i)=>i!==ti); setAuc({volumeDiscounts:d}); }}
+                                                                                    className="ml-auto text-red-400 hover:text-red-600 transition-colors">
+                                                                                    <Icon name="X" size={11}/>
+                                                                                </button>
+                                                                            </div>
+                                                                        ))}
+                                                                        {!(cfg.volumeDiscounts?.length) && (
+                                                                            <p className="text-[8px] text-blue-400 font-bold">Click Add Tier to create a discount rule</p>
+                                                                        )}
+                                                                    </div>
+                                                                )}
                                                             </div>
                                                         )}
 

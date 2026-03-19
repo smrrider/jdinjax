@@ -734,18 +734,21 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
         const listingDuration = VALID_DURATIONS.has(req.body.listingDuration) ? req.body.listingDuration
             : listingFormat === 'AUCTION' ? 'DAYS_7' : 'GTC';
 
+        // Quantity — only applicable to FIXED_PRICE; auctions are always qty 1
+        const quantity = listingFormat === 'FIXED_PRICE' ? Math.max(1, parseInt(req.body.quantity || 1)) : undefined;
+
         const offerPayload = {
             sku,
             marketplaceId:      'EBAY_US',
             format:             listingFormat,
-            availableQuantity:  listingFormat === 'AUCTION' ? 1 : 1,
             categoryId:         String(categoryId),
             listingDescription: safeDesc,
             listingDuration,
             listingPolicies:    { fulfillmentPolicyId, paymentPolicyId, returnPolicyId },
             pricingSummary
         };
-        if (merchantLocationKey) offerPayload.merchantLocationKey = merchantLocationKey;
+        if (quantity !== undefined)   offerPayload.availableQuantity  = quantity;  // omitted for AUCTION
+        if (merchantLocationKey)      offerPayload.merchantLocationKey = merchantLocationKey;
 
         const offerRes  = await ebayFetch(`${EBAY_API_BASE}/sell/inventory/v1/offer`,
             { method: 'POST', headers, body: JSON.stringify(offerPayload) }
@@ -774,7 +777,41 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
         const listingUrl = `https://www.ebay.com/itm/${listingId}`;
         console.log(`[eBay/list] 🚀 LIVE: listingId=${listingId} offerId=${offerId} sku=${sku}`);
 
-        // ── Step 4: Patch Firestore doc (best-effort, non-blocking) ──────────
+        // ── Step 4: Volume discount promotion (FIXED_PRICE only, best-effort) ─
+        const volumeDiscounts = (req.body.volumeDiscounts || [])
+            .filter(d => d.minQty >= 2 && d.pctOff > 0 && d.pctOff < 100);
+        if (listingFormat === 'FIXED_PRICE' && volumeDiscounts.length > 0) {
+            try {
+                const promoPayload = {
+                    promotionType: 'VOLUME_DISCOUNT',
+                    name:          `Multi-buy — ${safeTitle.slice(0, 50)}`,
+                    marketplaceId: 'EBAY_US',
+                    status:        'ACTIVE',
+                    discountRules: volumeDiscounts.map((d, i) => ({
+                        ruleOrder:       i + 1,
+                        minQuantity:     d.minQty,
+                        discountBenefit: { percentageOff: String(Number(d.pctOff).toFixed(1)) }
+                    })),
+                    inventoryCriteria: {
+                        inventoryCriterionType: 'INVENTORY_BY_VALUE',
+                        listingIds: [listingId]
+                    }
+                };
+                const promoRes  = await ebayFetch(`${EBAY_API_BASE}/sell/marketing/v1/item_promotion`,
+                    { method: 'POST', headers, body: JSON.stringify(promoPayload) }
+                );
+                const promoData = await promoRes.json();
+                if (promoRes.ok) {
+                    console.log(`[eBay/list] ✅ Volume discount promotion: ${promoData.promotionId}`);
+                } else {
+                    console.warn('[eBay/list] Volume discount skipped:', JSON.stringify(promoData));
+                }
+            } catch(e) {
+                console.warn('[eBay/list] Volume discount error (non-fatal):', e.message);
+            }
+        }
+
+        // ── Step 5: Patch Firestore doc (best-effort, non-blocking) ──────────
         if (listingDocId && adminFirestore) {
             adminFirestore.doc(`users/${req.uid}/listings/${listingDocId}`).update({
                 ebayListingId:  listingId,
