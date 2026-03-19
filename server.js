@@ -607,13 +607,24 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
         let soldPrices = [];
         if (findingRes.status === 'fulfilled') {
             try {
-                const items = findingRes.value?.findCompletedItemsResponse?.[0]
-                    ?.searchResult?.[0]?.item || [];
+                const raw = findingRes.value;
+                // Log the raw shape so we can diagnose parse issues
+                const ackStatus = raw?.findCompletedItemsResponse?.[0]?.ack?.[0];
+                const totalEntries = raw?.findCompletedItemsResponse?.[0]?.paginationOutput?.[0]?.totalEntries?.[0];
+                const items = raw?.findCompletedItemsResponse?.[0]?.searchResult?.[0]?.item || [];
+                console.log(`[Price] Finding API ack=${ackStatus} totalEntries=${totalEntries} items=${items.length} url=${findingUrl.slice(0,120)}`);
+                if (items.length) console.log('[Price] Sample item keys:', Object.keys(items[0]).join(','));
                 soldPrices = items
-                    .map(i => parseFloat(i.sellingStatus?.[0]?.currentPrice?.[0]?.__value__))
+                    .map(i => {
+                        // currentPrice may use __value__ (JSON v1) or _value (some responses)
+                        const cp = i.sellingStatus?.[0]?.currentPrice?.[0];
+                        return parseFloat(cp?.__value__ ?? cp?._value ?? cp?.value ?? 0);
+                    })
                     .filter(p => p > 0)
                     .sort((a, b) => a - b);
             } catch(e) { console.warn('[Price] Finding API parse error:', e.message); }
+        } else {
+            console.warn('[Price] Finding API rejected:', findingRes.reason?.message);
         }
 
         console.log(`[Price] "${searchQuery}" — active: ${activePrices.length}, sold: ${soldPrices.length}`);

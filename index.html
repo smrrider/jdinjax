@@ -2705,28 +2705,35 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         };
                         const docRef = await dbRef.current.collection(listingsPath).add(listingPayload);
 
-                        // Background: auto price research — fires immediately, no user action needed
-                        autoResearchPrice(docRef.id, {
-                            title: aiData.title,
-                            conditionId: finalConditionId,
-                            categoryId: aiData.categoryId
-                        }).catch(() => {});
-
-                        // Background: refine category — Firestore listener auto-updates UI when done
-                        fetch(CATEGORY_API_URL, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ title: aiData.title, keyFeatures: aiData.keyFeatures || [], description: aiData.markdownDescription || '' })
-                        }).then(async catRes => {
-                            if (!catRes.ok) return;
-                            const catData = await catRes.json();
-                            await docRef.update({
-                                categoryId:     catData.categoryId,
-                                categoryPath:   catData.categoryPath,
-                                categorySource: catData.confidence === 'High' ? 'AI Verified' : 'AI Predicted',
-                                conditionId:    sanitizeConditionId(batchCondition, catData.categoryId)
-                            });
-                        }).catch(e => console.warn('Category resolve failed:', e.message));
+                        // Background: refine category first, then auto price research.
+                        // Sequencing matters — eBay Browse returns far better results when
+                        // it has the correct leaf category rather than the initial Gemini guess.
+                        (async () => {
+                            let resolvedCategoryId = aiData.categoryId;
+                            try {
+                                const catRes = await fetch(CATEGORY_API_URL, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ title: aiData.title, keyFeatures: aiData.keyFeatures || [], description: aiData.markdownDescription || '' })
+                                });
+                                if (catRes.ok) {
+                                    const catData = await catRes.json();
+                                    resolvedCategoryId = catData.categoryId;
+                                    await docRef.update({
+                                        categoryId:     catData.categoryId,
+                                        categoryPath:   catData.categoryPath,
+                                        categorySource: catData.confidence === 'High' ? 'AI Verified' : 'AI Predicted',
+                                        conditionId:    sanitizeConditionId(batchCondition, catData.categoryId)
+                                    });
+                                }
+                            } catch(e) { console.warn('Category resolve failed:', e.message); }
+                            // Auto price research fires after category is resolved
+                            autoResearchPrice(docRef.id, {
+                                title:       aiData.title,
+                                conditionId: finalConditionId,
+                                categoryId:  resolvedCategoryId
+                            }).catch(() => {});
+                        })();
 
                         completed++;
                         setStatus(`Processing ${completed}/${total}...`);
@@ -2774,7 +2781,17 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     });
                     const data = await res.json();
                     const gPrices = JSON.parse(cleanJson(data.candidates[0].content.parts[0].text));
-                    prices = { ...gPrices, source: 'AI Estimate', count: null, conditionId: listing.conditionId };
+                    // Synthesise strategies from Gemini low/mid/high so the card always
+                    // uses the new Move It / Market / Hold layout regardless of data source.
+                    prices = {
+                        ...gPrices,
+                        source: 'AI Estimate', count: null, conditionId: listing.conditionId,
+                        strategies: {
+                            moveIt: parseFloat((gPrices.low  * 0.97).toFixed(2)),
+                            market: parseFloat(Number(gPrices.mid).toFixed(2)),
+                            hold:   parseFloat(Number(gPrices.high).toFixed(2))
+                        }
+                    };
                 }
                 // Only write buyItNowPrice on first-time auto-price (no existing research).
                 // Manual Re-Price refreshes the data but never stomps a price the user set.
