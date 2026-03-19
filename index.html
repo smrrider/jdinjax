@@ -2756,7 +2756,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     const ebayRes = await fetch('/api/ebay/price-research', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${tok}` },
-                        body: JSON.stringify({ title: listing.title, conditionId: listing.conditionId, categoryId: listing.categoryId })
+                        body: JSON.stringify({ title: listing.title, conditionId: listing.conditionId, categoryId: listing.categoryId, brand: listing.brand, model: listing.model })
                     });
                     const ebayData = await ebayRes.json();
                     if (ebayData.source === 'ebay_browse' && ebayData.mid) {

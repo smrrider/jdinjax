@@ -583,18 +583,22 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
     const pct = (arr, p) => arr[Math.max(0, Math.min(arr.length - 1, Math.floor(arr.length * p)))];
 
     try {
-        const { title, conditionId, categoryId } = req.body;
+        const { title, conditionId, categoryId, brand, model } = req.body;
         if (!title) return res.status(400).json({ error: 'title required' });
 
         const token = await getEbayProdAppToken();
         const words = title.split(/\s+/).filter(w => w.length > 1);
         const searchQuery = words.slice(0, 6).join(' ');
-        // Progressive fallback queries for sold search — broader = more results
+
+        // Sold query fallback chain — most precise first, broadening until MIN_COMPS found.
+        // Brand + model (from Gemini structured extraction) is the most targeted search,
+        // equivalent to how a human would search eBay for comps.
+        const brandModel = [brand, model].filter(Boolean).join(' ').trim();
         const soldQueryFallbacks = [
-            words.slice(0, 6).join(' '),  // full 6-word query
-            words.slice(0, 4).join(' '),  // 4 words
-            words.slice(0, 2).join(' '),  // brand + model only
-        ].filter((q, i, arr) => arr.indexOf(q) === i); // dedupe if title is short
+            brandModel || words.slice(0, 2).join(' '),  // "Petzl RIG" — best sold comp anchor
+            words.slice(0, 4).join(' '),                // 4-word title slice
+            words.slice(0, 6).join(' '),                // full 6-word title
+        ].filter((q, i, arr) => q && arr.indexOf(q) === i); // dedupe + remove empty
 
         // Map SR conditionId → eBay condition groups
         const cid = parseInt(conditionId || '3000');
