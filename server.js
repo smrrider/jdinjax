@@ -645,8 +645,9 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
                     const items   = sd.organic_results || sd.search_results || [];
                     soldPrices = items
                         .map(i => {
-                            const raw = i.price?.extracted ?? i.extracted_price ?? i.price?.raw;
-                            return typeof raw === 'number' ? raw : parseFloat(String(raw || '0').replace(/[^0-9.]/g, ''));
+                            // SerpAPI eBay engine returns price as a top-level number
+                            const p = i.price;
+                            return typeof p === 'number' ? p : parseFloat(String(p || '0').replace(/[^0-9.]/g, ''));
                         })
                         .filter(p => p > 0)
                         .sort((a, b) => a - b);
