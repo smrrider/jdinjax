@@ -33,6 +33,11 @@ service cloud.firestore {
       allow read, write: if isOwner(userId) && isWhitelisted();
     }
 
+    // Sourcing targets: artifacts/jdinjax-console/users/{uid}/targets/{doc}
+    match /artifacts/jdinjax-console/users/{userId}/targets/{document=**} {
+      allow read, write: if isOwner(userId) && isWhitelisted();
+    }
+
     // ── Catch-all — deny everything else ─────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;
