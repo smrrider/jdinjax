@@ -1314,16 +1314,18 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                 const r = displayResult;
                                 return (
                                     <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-400">
-                                        <div className={`rounded-2xl border-2 px-5 py-4 flex items-center justify-between ${r.verdict.css}`}>
+                                        {(() => { const ar = activeResult || r; const liveVerdict = getVerdict(ar.arb.netProfit); return (
+                                        <div className={`rounded-2xl border-2 px-5 py-4 flex items-center justify-between ${liveVerdict.css}`}>
                                             <div>
-                                                <p className="text-xl font-black leading-none">{r.verdict.label}</p>
+                                                <p className="text-xl font-black leading-none">{liveVerdict.label}</p>
                                                 <p className="text-[10px] font-black uppercase tracking-widest mt-1 opacity-70">Arbitrage Verdict</p>
                                             </div>
                                             <div className="text-right">
-                                                <p className="text-2xl font-black leading-none">${r.arb.netProfit.toFixed(2)}</p>
-                                                <p className="text-[9px] font-black uppercase tracking-widest mt-1 opacity-70">Net Profit · {r.arb.roi.toFixed(0)}% ROI</p>
+                                                <p className="text-2xl font-black leading-none">${ar.arb.netProfit.toFixed(2)}</p>
+                                                <p className="text-[9px] font-black uppercase tracking-widest mt-1 opacity-70">Net Profit · {ar.arb.roi.toFixed(0)}% ROI</p>
                                             </div>
                                         </div>
+                                        ); })()}
                                         <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex gap-3">
                                             {r.imageUrl && <img src={r.imageUrl} className="w-16 h-16 rounded-xl object-cover border border-slate-200 shrink-0" onError={(e) => e.target.style.display='none'} />}
                                             <div className="min-w-0">
@@ -1466,16 +1468,18 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                             <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-400">
 
                                                 {/* Verdict Banner */}
-                                                <div className={`rounded-2xl border-2 px-6 py-5 flex items-center justify-between ${r.verdict.css}`}>
+                                                {(() => { const ar = activeResult || r; const liveVerdict = getVerdict(ar.arb.netProfit); return (
+                                                <div className={`rounded-2xl border-2 px-6 py-5 flex items-center justify-between ${liveVerdict.css}`}>
                                                     <div>
-                                                        <p className="text-2xl font-black leading-none">{r.verdict.label}</p>
+                                                        <p className="text-2xl font-black leading-none">{liveVerdict.label}</p>
                                                         <p className="text-[10px] font-black uppercase tracking-widest mt-1 opacity-70">Arbitrage Verdict</p>
                                                     </div>
                                                     <div className="text-right">
-                                                        <p className="text-3xl font-black leading-none">${r.arb.netProfit.toFixed(2)}</p>
-                                                        <p className="text-[9px] font-black uppercase tracking-widest mt-1 opacity-70">Net Profit · {r.arb.roi.toFixed(0)}% ROI</p>
+                                                        <p className="text-3xl font-black leading-none">${ar.arb.netProfit.toFixed(2)}</p>
+                                                        <p className="text-[9px] font-black uppercase tracking-widest mt-1 opacity-70">Net Profit · {ar.arb.roi.toFixed(0)}% ROI</p>
                                                     </div>
                                                 </div>
+                                                ); })()}
 
                                                 {/* Item ID */}
                                                 <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 flex gap-4">
@@ -1502,7 +1506,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                                 {[
                                                                     { key:'moveIt', label:'🔥 Move It', sub:'Fastest sale',     color:'bg-orange-50 border-orange-200 text-orange-700' },
                                                                     { key:'market', label:'✅ Market',  sub:'Sold avg',         color:'bg-emerald-50 border-emerald-200 text-emerald-700' },
-                                                                    { key:'hold',   label:'💰 Hold',    sub:'Premium ask',      color:'bg-violet-50 border-violet-200 text-violet-700' },
+                                                                    { key:'hold',   label:'💰 Hold',    sub:'Sold high',        color:'bg-violet-50 border-violet-200 text-violet-700' },
                                                                 ].map(s => (
                                                                     <div key={s.key} className={`rounded-2xl p-3 border text-center ${s.color}`}>
                                                                         <span className="text-[8px] font-black uppercase block mb-1">{s.label}</span>
