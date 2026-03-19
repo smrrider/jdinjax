@@ -630,27 +630,29 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
                     // Pass the broad group value; omit filter entirely for refurb range
                     // since eBay doesn't expose a single clean LH value for that group.
                     const lhCondition = cid === 1000 ? '1000' : cid <= 2750 ? null : '3000';
-                    const serpBase    = {
-                        engine:      'ebay',
-                        _nkw:        searchQuery,
-                        LH_Sold:     '1',
-                        LH_Complete: '1',
-                        _ipg:        '100',
-                        api_key:     serpKey
+
+                    const fetchSoldItems = async (includeCondition) => {
+                        const base = { engine: 'ebay', _nkw: searchQuery, LH_Sold: '1', LH_Complete: '1', _ipg: '100', api_key: serpKey };
+                        if (includeCondition && lhCondition) base.LH_ItemCondition = lhCondition;
+                        const sr = await fetch(`https://serpapi.com/search?${new URLSearchParams(base)}`);
+                        const sd = await sr.json();
+                        const items = sd.organic_results || sd.search_results || [];
+                        return items
+                            .map(i => { const p = i.price; return typeof p === 'number' ? p : parseFloat(String(p || '0').replace(/[^0-9.]/g, '')); })
+                            .filter(p => p > 0)
+                            .sort((a, b) => a - b);
                     };
-                    if (lhCondition) serpBase.LH_ItemCondition = lhCondition;
-                    const serpParams  = new URLSearchParams(serpBase);
-                    const sr      = await fetch(`https://serpapi.com/search?${serpParams}`);
-                    const sd      = await sr.json();
-                    const items   = sd.organic_results || sd.search_results || [];
-                    soldPrices = items
-                        .map(i => {
-                            // SerpAPI eBay engine returns price as a top-level number
-                            const p = i.price;
-                            return typeof p === 'number' ? p : parseFloat(String(p || '0').replace(/[^0-9.]/g, ''));
-                        })
-                        .filter(p => p > 0)
-                        .sort((a, b) => a - b);
+
+                    // Pass 1: condition-filtered sold listings
+                    soldPrices = await fetchSoldItems(true);
+
+                    // Pass 2: if fewer than MIN_COMPS, retry without condition filter
+                    // (cross-condition sold data is still a useful price anchor)
+                    if (soldPrices.length < MIN_COMPS && lhCondition) {
+                        console.log(`[Price] Sold: ${soldPrices.length} with condition filter — retrying without`);
+                        soldPrices = await fetchSoldItems(false);
+                    }
+
                     setCachedSoldPrices(soldCacheKey, soldPrices);
                     console.log(`[Price] SerpAPI sold → ${soldPrices.length} prices for "${searchQuery}"`);
                 } catch(e) {
@@ -706,10 +708,11 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
             hold:   parseFloat((active.high).toFixed(2))
         };
 
-        const confidence = activePrices.length >= 30 ? 'High' : activePrices.length >= 12 ? 'Medium' : 'Low';
-        const condLabel  = conditionFilter.includes('1000') ? 'New' : 'Used/Similar';
-        const basis      = sold
-            ? `${active.count} active listings · ${sold.count} recent sales (${condLabel})`
+        const confidence   = activePrices.length >= 30 ? 'High' : activePrices.length >= 12 ? 'Medium' : 'Low';
+        const condLabel    = conditionFilter.includes('1000') ? 'New' : 'Used/Similar';
+        const soldCondNote = sold && soldPrices.length >= MIN_COMPS && !lhCondition ? ' · all conditions' : '';
+        const basis        = sold
+            ? `${active.count} active listings · ${sold.count} recent sales (${condLabel}${soldCondNote})`
             : `${active.count} active listings — no sold data found (${condLabel})`;
 
         res.json({
