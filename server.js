@@ -568,6 +568,20 @@ app.get('/api/ebay/price-research-test', async (req, res) => {
     }
 });
 
+// In-memory cache for Finding API sold results — 6-hour TTL per search key.
+// Prevents burning the low findCompletedItems quota on repeated Re-Price calls
+// for the same item. Key = "searchQuery|conditionGroup".
+const _soldCache = new Map(); // key → { prices: [], ts: Date.now() }
+const SOLD_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+
+const getCachedSoldPrices = (key) => {
+    const entry = _soldCache.get(key);
+    if (!entry) return null;
+    if (Date.now() - entry.ts > SOLD_CACHE_TTL_MS) { _soldCache.delete(key); return null; }
+    return entry.prices;
+};
+const setCachedSoldPrices = (key, prices) => _soldCache.set(key, { prices, ts: Date.now() });
+
 // POST /api/ebay/price-research — Phase 4 Live Price Intelligence
 // Queries eBay Browse API (active listings) + Finding API (sold listings) in parallel.
 // Returns active + sold price bands and three pricing strategy points.
@@ -603,61 +617,65 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
         if (categoryId) activeParams.set('category_ids', String(categoryId));
         const browseUrl = `${EBAY_PROD_API_BASE}/buy/browse/v1/item_summary/search?${activeParams}&filter=${activeFilterStr}`;
 
-        // ── 2. Finding API — completed/sold listings (app-key auth, no OAuth) ──
-        // findCompletedItems returns actual transaction prices from the last 90 days.
-        const findingAppId = process.env.EBAY_APP_ID_PROD || EBAY_APP_ID;
-        const condIdParams = findingConditionIds.split(',')
-            .map((id, i) => `itemFilter(1).value(${i})=${id}`).join('&');
-        const findingUrl = `https://svcs.ebay.com/services/search/FindingService/v1` +
-            `?OPERATION-NAME=findCompletedItems` +
-            `&SERVICE-VERSION=1.0.0` +
-            `&SECURITY-APPNAME=${encodeURIComponent(findingAppId)}` +
-            `&RESPONSE-DATA-FORMAT=JSON` +
-            `&keywords=${encodeURIComponent(searchQuery)}` +
-            `&itemFilter(0).name=SoldItemsOnly&itemFilter(0).value=true` +
-            `&itemFilter(1).name=Condition&${condIdParams}` +
-            `&paginationInput.entriesPerPage=100` +
-            `&sortOrder=EndTimeSoonest`;
+        // ── 2. Finding API — completed/sold listings ─────────────────────────
+        // Uses in-memory cache (6h TTL) to stay within the low findCompletedItems quota.
+        const soldCacheKey = `${searchQuery}|${findingConditionIds}`;
+        let soldPrices = getCachedSoldPrices(soldCacheKey);
+        let soldFromCache = soldPrices !== null;
 
-        // Run both queries in parallel
-        const [browseRes, findingRes] = await Promise.allSettled([
-            fetch(browseUrl, {
-                headers: { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US', 'Content-Type': 'application/json' }
-            }).then(r => r.json()),
-            fetch(findingUrl).then(r => r.json())
-        ]);
+        if (!soldFromCache) {
+            const findingAppId = process.env.EBAY_APP_ID_PROD || EBAY_APP_ID;
+            const condIdParams = findingConditionIds.split(',')
+                .map((id, i) => `itemFilter(1).value(${i})=${id}`).join('&');
+            const findingUrl = `https://svcs.ebay.com/services/search/FindingService/v1` +
+                `?OPERATION-NAME=findCompletedItems` +
+                `&SERVICE-VERSION=1.0.0` +
+                `&SECURITY-APPNAME=${encodeURIComponent(findingAppId)}` +
+                `&RESPONSE-DATA-FORMAT=JSON` +
+                `&keywords=${encodeURIComponent(searchQuery)}` +
+                `&itemFilter(0).name=SoldItemsOnly&itemFilter(0).value=true` +
+                `&itemFilter(1).name=Condition&${condIdParams}` +
+                `&paginationInput.entriesPerPage=100`;
+            try {
+                const fr = await fetch(findingUrl);
+                const raw = await fr.json();
+                const errId = raw?.errorMessage?.[0]?.error?.[0]?.errorId?.[0];
+                if (errId === '10001') {
+                    // Rate limited — log and continue with active-only; cache empty array
+                    // so we don't keep hammering the endpoint until TTL expires.
+                    console.warn('[Price] Finding API rate-limited (10001) — using active-only for this query');
+                    soldPrices = [];
+                    setCachedSoldPrices(soldCacheKey, []);
+                } else {
+                    const items = raw?.findCompletedItemsResponse?.[0]?.searchResult?.[0]?.item || [];
+                    soldPrices = items
+                        .map(i => {
+                            const cp = i.sellingStatus?.[0]?.currentPrice?.[0];
+                            return parseFloat(cp?.__value__ ?? cp?._value ?? cp?.value ?? 0);
+                        })
+                        .filter(p => p > 0)
+                        .sort((a, b) => a - b);
+                    setCachedSoldPrices(soldCacheKey, soldPrices);
+                    console.log(`[Price] Finding API → ${soldPrices.length} sold prices cached for "${soldCacheKey}"`);
+                }
+            } catch(e) {
+                console.warn('[Price] Finding API fetch error:', e.message);
+                soldPrices = [];
+            }
+        } else {
+            console.log(`[Price] Sold prices from cache (${soldPrices.length}) for "${soldCacheKey}"`);
+        }
 
-        // ── Active prices ─────────────────────────────────────────────────────
+        // ── Browse API — active fixed-price listings ──────────────────────────
         let activePrices = [];
-        if (browseRes.status === 'fulfilled' && !browseRes.value.errors) {
-            activePrices = (browseRes.value.itemSummaries || [])
+        const browseRes = await fetch(browseUrl, {
+            headers: { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US', 'Content-Type': 'application/json' }
+        }).then(r => r.json()).catch(() => null);
+        if (browseRes && !browseRes.errors) {
+            activePrices = (browseRes.itemSummaries || [])
                 .map(i => parseFloat(i.price?.value))
                 .filter(p => p > 0)
                 .sort((a, b) => a - b);
-        }
-
-        // ── Sold prices ───────────────────────────────────────────────────────
-        let soldPrices = [];
-        if (findingRes.status === 'fulfilled') {
-            try {
-                const raw = findingRes.value;
-                // Log the raw shape so we can diagnose parse issues
-                const ackStatus = raw?.findCompletedItemsResponse?.[0]?.ack?.[0];
-                const totalEntries = raw?.findCompletedItemsResponse?.[0]?.paginationOutput?.[0]?.totalEntries?.[0];
-                const items = raw?.findCompletedItemsResponse?.[0]?.searchResult?.[0]?.item || [];
-                console.log(`[Price] Finding API ack=${ackStatus} totalEntries=${totalEntries} items=${items.length} url=${findingUrl.slice(0,120)}`);
-                if (items.length) console.log('[Price] Sample item keys:', Object.keys(items[0]).join(','));
-                soldPrices = items
-                    .map(i => {
-                        // currentPrice may use __value__ (JSON v1) or _value (some responses)
-                        const cp = i.sellingStatus?.[0]?.currentPrice?.[0];
-                        return parseFloat(cp?.__value__ ?? cp?._value ?? cp?.value ?? 0);
-                    })
-                    .filter(p => p > 0)
-                    .sort((a, b) => a - b);
-            } catch(e) { console.warn('[Price] Finding API parse error:', e.message); }
-        } else {
-            console.warn('[Price] Finding API rejected:', findingRes.reason?.message);
         }
 
         console.log(`[Price] "${searchQuery}" — active: ${activePrices.length}, sold: ${soldPrices.length}`);
