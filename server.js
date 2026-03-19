@@ -516,15 +516,13 @@ app.get('/api/ebay/category-specifics', async (req, res) => {
 app.get('/api/ebay/sold-test', async (req, res) => {
     try {
         const q          = req.query.q    || 'wetsuit';
-        const condId     = parseInt(req.query.cond || '1000');
-        const lhCondition = condId === 1000 ? '3' : (condId >= 2000 && condId <= 2750) ? '2500' : '4';
+        const condId      = parseInt(req.query.cond || '1000');
+        const lhCondition = condId === 1000 ? '1000' : condId <= 2750 ? null : '3000';
         const serpKey    = process.env.SERPAPI_KEY;
         if (!serpKey) return res.status(500).json({ error: 'SERPAPI_KEY not set' });
-        const serpParams = new URLSearchParams({
-            engine: 'ebay', _nkw: q,
-            LH_Sold: '1', LH_Complete: '1', LH_ItemCondition: lhCondition,
-            _ipg: '10', api_key: serpKey
-        });
+        const serpBase   = { engine: 'ebay', _nkw: q, LH_Sold: '1', LH_Complete: '1', _ipg: '10', api_key: serpKey };
+        if (lhCondition) serpBase.LH_ItemCondition = lhCondition;
+        const serpParams = new URLSearchParams(serpBase);
         const sr    = await fetch(`https://serpapi.com/search?${serpParams}`);
         const sd    = await sr.json();
         const items = sd.organic_results || sd.search_results || [];
@@ -628,17 +626,20 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
                 soldPrices = [];
             } else {
                 try {
-                    // Map SR conditionId → eBay LH_ItemCondition param
-                    const lhCondition = cid === 1000 ? '3' : (cid >= 2000 && cid <= 2750) ? '2500' : '4';
-                    const serpParams  = new URLSearchParams({
-                        engine:           'ebay',
-                        _nkw:             searchQuery,
-                        LH_Sold:          '1',
-                        LH_Complete:      '1',
-                        LH_ItemCondition: lhCondition,
-                        _ipg:             '100',
-                        api_key:          serpKey
-                    });
+                    // LH_ItemCondition uses eBay's own condition IDs (1000=New, 3000=Used).
+                    // Pass the broad group value; omit filter entirely for refurb range
+                    // since eBay doesn't expose a single clean LH value for that group.
+                    const lhCondition = cid === 1000 ? '1000' : cid <= 2750 ? null : '3000';
+                    const serpBase    = {
+                        engine:      'ebay',
+                        _nkw:        searchQuery,
+                        LH_Sold:     '1',
+                        LH_Complete: '1',
+                        _ipg:        '100',
+                        api_key:     serpKey
+                    };
+                    if (lhCondition) serpBase.LH_ItemCondition = lhCondition;
+                    const serpParams  = new URLSearchParams(serpBase);
                     const sr      = await fetch(`https://serpapi.com/search?${serpParams}`);
                     const sd      = await sr.json();
                     const items   = sd.organic_results || sd.search_results || [];
