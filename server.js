@@ -512,30 +512,30 @@ app.get('/api/ebay/category-specifics', async (req, res) => {
 // GET /api/ebay/price-research-test — diagnostic endpoint, no auth required
 // Hit this in the browser to verify Browse API connectivity and token acquisition.
 // e.g. /api/ebay/price-research-test?q=wetsuit
-// GET /api/ebay/insights-test?q=wetsuit&cond=1000 — Marketplace Insights API diagnostic
-// Replaces the legacy Finding API test endpoint
-app.get('/api/ebay/insights-test', async (req, res) => {
+// GET /api/ebay/sold-test?q=wetsuit&cond=1000 — SerpAPI sold listings diagnostic
+app.get('/api/ebay/sold-test', async (req, res) => {
     try {
-        const q      = req.query.q    || 'wetsuit';
-        const condId = req.query.cond || '1000';
-        const token  = await getEbayProdAppToken();
-        const params = new URLSearchParams({ q, limit: '5' });
-        const url    = `${EBAY_PROD_API_BASE}/buy/marketplace_insights/v1_beta/item_sales/search?${params}&filter=conditionIds:{${condId}}`;
-        const r      = await fetch(url, {
-            headers: { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US', 'Content-Type': 'application/json' }
+        const q          = req.query.q    || 'wetsuit';
+        const condId     = parseInt(req.query.cond || '1000');
+        const lhCondition = condId === 1000 ? '3' : (condId >= 2000 && condId <= 2750) ? '2500' : '4';
+        const serpKey    = process.env.SERPAPI_KEY;
+        if (!serpKey) return res.status(500).json({ error: 'SERPAPI_KEY not set' });
+        const serpParams = new URLSearchParams({
+            engine: 'ebay', _nkw: q,
+            LH_Sold: '1', LH_Complete: '1', LH_ItemCondition: lhCondition,
+            _ipg: '10', api_key: serpKey
         });
-        const d = await r.json();
+        const sr    = await fetch(`https://serpapi.com/search?${serpParams}`);
+        const sd    = await sr.json();
+        const items = sd.organic_results || sd.search_results || [];
         res.json({
-            url:       url,
-            httpStatus: r.status,
-            total:     d.total,
-            itemCount: (d.itemSales || []).length,
-            errors:    d.errors || null,
-            samples:   (d.itemSales || []).slice(0, 3).map(i => ({
-                title:         i.title,
-                lastSoldPrice: i.lastSoldPrice?.value,
-                lastSoldDate:  i.lastSoldDate
-            }))
+            httpStatus: sr.status, itemCount: items.length,
+            serpError:  sd.error || null,
+            samples:    items.slice(0, 5).map(i => ({
+                title: i.title,
+                price: i.price?.extracted ?? i.extracted_price ?? i.price?.raw
+            })),
+            rawKeys: items[0] ? Object.keys(items[0]) : []
         });
     } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -619,29 +619,42 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
         let soldPrices = getCachedSoldPrices(soldCacheKey);
 
         if (soldPrices === null) {
-            try {
-                const insightsParams = new URLSearchParams({ q: searchQuery, limit: '100' });
-                if (categoryId) insightsParams.set('category_ids', String(categoryId));
-                const insightsUrl = `${EBAY_PROD_API_BASE}/buy/marketplace_insights/v1_beta/item_sales/search?${insightsParams}&filter=${soldConditionFilter}`;
-                const ir = await fetch(insightsUrl, {
-                    headers: { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US', 'Content-Type': 'application/json' }
-                });
-                const id = await ir.json();
-                if (ir.ok && !id.errors) {
-                    soldPrices = (id.itemSales || [])
-                        .map(i => parseFloat(i.lastSoldPrice?.value))
+            // Use SerpAPI eBay engine with LH_Sold=1&LH_Complete=1 — same parameters
+            // eBay uses internally for sold/completed view. No eBay quota consumed.
+            // Marketplace Insights API (the native option) requires closed-beta allowlist.
+            const serpKey = process.env.SERPAPI_KEY;
+            if (!serpKey) {
+                console.warn('[Price] SERPAPI_KEY not set — sold data unavailable');
+                soldPrices = [];
+            } else {
+                try {
+                    // Map SR conditionId → eBay LH_ItemCondition param
+                    const lhCondition = cid === 1000 ? '3' : (cid >= 2000 && cid <= 2750) ? '2500' : '4';
+                    const serpParams  = new URLSearchParams({
+                        engine:           'ebay',
+                        _nkw:             searchQuery,
+                        LH_Sold:          '1',
+                        LH_Complete:      '1',
+                        LH_ItemCondition: lhCondition,
+                        _ipg:             '100',
+                        api_key:          serpKey
+                    });
+                    const sr      = await fetch(`https://serpapi.com/search?${serpParams}`);
+                    const sd      = await sr.json();
+                    const items   = sd.organic_results || sd.search_results || [];
+                    soldPrices = items
+                        .map(i => {
+                            const raw = i.price?.extracted ?? i.extracted_price ?? i.price?.raw;
+                            return typeof raw === 'number' ? raw : parseFloat(String(raw || '0').replace(/[^0-9.]/g, ''));
+                        })
                         .filter(p => p > 0)
                         .sort((a, b) => a - b);
                     setCachedSoldPrices(soldCacheKey, soldPrices);
-                    console.log(`[Price] Insights API → ${soldPrices.length} sold prices for "${searchQuery}"`);
-                } else {
-                    console.warn('[Price] Insights API error:', ir.status, JSON.stringify(id.errors || id).slice(0, 200));
+                    console.log(`[Price] SerpAPI sold → ${soldPrices.length} prices for "${searchQuery}"`);
+                } catch(e) {
+                    console.warn('[Price] SerpAPI sold fetch error:', e.message);
                     soldPrices = [];
-                    setCachedSoldPrices(soldCacheKey, []);
                 }
-            } catch(e) {
-                console.warn('[Price] Insights API fetch error:', e.message);
-                soldPrices = [];
             }
         } else {
             console.log(`[Price] Sold prices from cache (${soldPrices.length}) for "${soldCacheKey}"`);
