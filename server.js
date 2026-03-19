@@ -326,13 +326,16 @@ app.get('/auth/ebay/callback', async (req, res) => {
                         destinationId = existing.destinationId;
                         console.log(`[eBay] Using existing notification destination: ${destinationId}`);
                     } else {
-                        const createRes  = await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/destination`, {
+                        await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/destination`, {
                             method:  'POST',
                             headers: subHeaders,
                             body:    JSON.stringify({ name: 'Scout Recon Webhook', status: 'ENABLED', deliveryConfig: { endpoint: EBAY_WEBHOOK_ENDPOINT, verificationToken: EBAY_WEBHOOK_TOKEN } })
                         });
-                        const createData = await createRes.json();
-                        destinationId    = createData.destinationId;
+                        // eBay returns the ID in the Location header which ebayFetch doesn't expose,
+                        // so re-fetch the destinations list to find the one we just created.
+                        const refetchData = await (await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/destination`, { method: 'GET', headers: subHeaders })).json();
+                        const created     = (refetchData.destinations || []).find(d => d.deliveryConfig?.endpoint === EBAY_WEBHOOK_ENDPOINT);
+                        destinationId     = created?.destinationId;
                         console.log(`[eBay] Created notification destination: ${destinationId}`);
                     }
                     if (!destinationId) throw new Error('Could not resolve destinationId');
