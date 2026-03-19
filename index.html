@@ -876,6 +876,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const [reconManualTitle, setReconManualTitle] = useState('');
             const [showReconScanner, setShowReconScanner] = useState(false);
             const [reconDefaultEngine, setReconDefaultEngine] = useState('ebay');
+            const [arMode, setArMode] = useState(() => localStorage.getItem('ar_mode') || 'fo');
 
             // Load Recon history from Firestore on mount
             useEffect(() => {
@@ -889,11 +890,12 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 return () => unsubscribe();
             }, [user, dbRef]);
 
-            // Persist purchase price across sessions
+            // Persist purchase price and AR mode across sessions
             useEffect(() => {
                 if (purchasePrice) localStorage.setItem('ar_purchase_price', purchasePrice);
                 else localStorage.removeItem('ar_purchase_price');
             }, [purchasePrice]);
+            useEffect(() => { localStorage.setItem('ar_mode', arMode); }, [arMode]);
 
             // Handle barcode preload from scan
             useEffect(() => {
@@ -943,7 +945,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 if (reconImage && reconImage.url && reconImage.url.startsWith('blob:')) {
                     URL.revokeObjectURL(reconImage.url);
                 }
-                setReconImage(null); setCondition('1000'); setPurchasePrice('');
+                setReconImage(null); setCondition('1000'); setPurchasePrice(localStorage.getItem('ar_purchase_price') || '');
                 setShippingMode('flat'); setFlatShippingFee('6.95');
                 setResult(null); setErrorMsg(null); setReconStatus(''); setActiveHistory(null);
                 setArLivePrices(null); setArPriceLoading(false);
@@ -1450,19 +1452,32 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                             <div className="recon-modal bg-white w-full md:max-w-2xl md:rounded-[2.5rem] rounded-t-[2.5rem] max-h-[92vh] overflow-y-auto no-scrollbar shadow-2xl">
 
                                 {/* Header */}
-                                <div className="sticky top-0 bg-white/95 backdrop-blur-sm border-b border-slate-100 px-8 py-5 flex items-center justify-between rounded-t-[2.5rem] z-10">
-                                    <div className="flex items-center gap-4">
-                                        <div className="w-10 h-10 bg-emerald-500 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-100">
-                                            <Icon name="Crosshair" size={20} className="text-white" />
+                                <div className="sticky top-0 bg-white/95 backdrop-blur-sm border-b border-slate-100 px-6 py-4 rounded-t-[2.5rem] z-10">
+                                    <div className="flex items-center justify-between mb-3">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-9 h-9 bg-emerald-500 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-100">
+                                                <Icon name="Crosshair" size={18} className="text-white" />
+                                            </div>
+                                            <div>
+                                                <h2 className="text-sm font-black uppercase tracking-tight leading-none">Arbitrage Recon</h2>
+                                                <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mt-0.5">eBay Flip Intel Engine</p>
+                                            </div>
                                         </div>
-                                        <div>
-                                            <h2 className="text-base font-black uppercase tracking-tight leading-none">Arbitrage Recon</h2>
-                                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-0.5">eBay Flip Intel Engine</p>
-                                        </div>
+                                        <button onClick={() => setIsOpen(false)} className="p-2 hover:bg-slate-100 rounded-xl transition-colors">
+                                            <Icon name="X" size={20} className="text-slate-400" />
+                                        </button>
                                     </div>
-                                    <button onClick={() => setIsOpen(false)} className="p-2 hover:bg-slate-100 rounded-xl transition-colors">
-                                        <Icon name="X" size={20} className="text-slate-400" />
-                                    </button>
+                                    {/* Mode Toggle */}
+                                    <div className="flex bg-slate-100 rounded-xl p-0.5">
+                                        <button onClick={() => setArMode('fo')}
+                                            className={`flex-1 py-1.5 rounded-[10px] text-[9px] font-black uppercase tracking-widest transition-all ${arMode === 'fo' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
+                                            <Icon name="Zap" size={9} className="inline mr-1"/>Forward Observer
+                                        </button>
+                                        <button onClick={() => setArMode('full')}
+                                            className={`flex-1 py-1.5 rounded-[10px] text-[9px] font-black uppercase tracking-widest transition-all ${arMode === 'full' ? 'bg-white text-slate-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
+                                            <Icon name="Crosshair" size={9} className="inline mr-1"/>Full Recon
+                                        </button>
+                                    </div>
                                 </div>
 
                                 <div className="p-8 space-y-6">
@@ -1576,8 +1591,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                     </div>
                                                 </div>
 
-                                                {/* Fee Breakdown */}
-                                                <div className="bg-white border border-slate-200 rounded-2xl p-5">
+                                                {/* Fee Breakdown — Full Recon only */}
+                                                {arMode === 'full' && <div className="bg-white border border-slate-200 rounded-2xl p-5">
                                                     <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-4">Cost Stack Breakdown</p>
                                                     {r.shippingMode === 'pickup' && (
                                                         <div className="mb-3 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-[9px] font-black text-amber-700 uppercase tracking-widest flex items-center gap-2">
@@ -1626,10 +1641,10 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                             </span>
                                                         </div>
                                                     </div>
-                                                </div>
+                                                </div>}
 
-                                                {/* Shipping Spec  -  hidden for local pickup */}
-                                                {r.shippingMode !== 'pickup' && (
+                                                {/* Shipping Spec  -  Full Recon + not pickup */}
+                                                {arMode === 'full' && r.shippingMode !== 'pickup' && (
                                                 <div className="bg-slate-50 border border-slate-100 rounded-2xl p-5">
                                                     <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-3">
                                                         {r.shippingMode === 'free' ? 'Shipping Cost (Absorbed)  -  USPS Zone 8 (VA to CA)' : 'Shipping Estimate  -  USPS Zone 8 (VA to CA)'}
@@ -1668,8 +1683,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                         );
                                     })()}
 
-                                    {/* Session History */}
-                                    {history.length > 0 && (
+                                    {/* Session History — Full Recon only */}
+                                    {arMode === 'full' && history.length > 0 && (
                                         <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200">
                                             <div className="flex items-center justify-between mb-3"><p className="text-[8px] font-black uppercase text-slate-400 tracking-widest">Scout History ({history.length}/20)</p>{confirmPurge ? (<span className="flex items-center gap-1"><button onClick={() => setConfirmPurge(false)} className="text-[8px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-600 px-2 py-1 rounded-lg hover:bg-slate-100 transition-colors">Cancel</button><button onClick={purgeHistory} className="text-[8px] font-black uppercase tracking-widest text-white bg-red-500 hover:bg-red-600 px-2 py-1 rounded-lg transition-colors">Confirm</button></span>) : (<button onClick={() => setConfirmPurge(true)} className="flex items-center gap-1 text-[8px] font-black uppercase tracking-widest text-red-400 hover:text-red-600 transition-colors px-2 py-1 rounded-lg hover:bg-red-50"><Icon name="Trash2" size={10}/> Clear</button>)}</div>
                                             <div className="space-y-1">
@@ -1765,7 +1780,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                             </div>
 
 
-                                            {/* Shipping Mode */}
+                                            {/* Shipping Mode — Full Recon only */}
+                                            {arMode === 'full' && (
                                             <div className="grid grid-cols-2 gap-4">
                                                 <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
                                                     <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-2">Buyer Shipping</p>
@@ -1787,6 +1803,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                     </div>
                                                 </div>
                                             </div>
+                                            )}
                                             {errorMsg && (
                                                 <div className="bg-red-50 border border-red-200 rounded-2xl px-5 py-3 text-xs font-bold text-red-600">{errorMsg}</div>
                                             )}
