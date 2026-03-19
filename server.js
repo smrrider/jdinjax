@@ -631,6 +631,10 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
         };
         const conditionEnum = CONDITION_MAP[String(conditionId)] || 'USED_GOOD';
 
+        // format + SKU must be derived before inventory_item PUT uses effectiveSku
+        const listingFormat = (req.body.format === 'AUCTION') ? 'AUCTION' : 'FIXED_PRICE';
+        const effectiveSku  = sku.replace(/-(FP|AUC)$/, '') + (listingFormat === 'AUCTION' ? '-AUC' : '-FP');
+
         // ── Sanitise payload before sending to eBay ──────────────────────────
         const safeTitle = (title || '').trim().slice(0, 80);
         if (!safeTitle) return res.status(400).json({ error: 'Listing title is empty' });
@@ -709,12 +713,6 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
         }
 
         // ── Step 2: POST offer ────────────────────────────────────────────────
-        // format: 'FIXED_PRICE' | 'AUCTION'  (default: FIXED_PRICE)
-        const listingFormat = (req.body.format === 'AUCTION') ? 'AUCTION' : 'FIXED_PRICE';
-
-        // Suffix SKU by format so FP and AUC listings never share an inventory/offer record
-        const effectiveSku = sku.replace(/-(FP|AUC)$/, '') + (listingFormat === 'AUCTION' ? '-AUC' : '-FP');
-
         // Build pricingSummary based on format
         let pricingSummary;
         if (listingFormat === 'AUCTION') {
