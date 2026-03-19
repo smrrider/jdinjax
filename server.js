@@ -326,17 +326,21 @@ app.get('/auth/ebay/callback', async (req, res) => {
                         destinationId = existing.destinationId;
                         console.log(`[eBay] Using existing notification destination: ${destinationId}`);
                     } else {
-                        await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/destination`, {
+                        const createRes  = await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/destination`, {
                             method:  'POST',
                             headers: subHeaders,
                             body:    JSON.stringify({ name: 'Scout Recon Webhook', status: 'ENABLED', deliveryConfig: { endpoint: EBAY_WEBHOOK_ENDPOINT, verificationToken: EBAY_WEBHOOK_TOKEN } })
                         });
-                        // eBay returns the ID in the Location header which ebayFetch doesn't expose,
-                        // so re-fetch the destinations list to find the one we just created.
-                        const refetchData = await (await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/destination`, { method: 'GET', headers: subHeaders })).json();
+                        const createRaw  = await createRes.text();
+                        console.log(`[eBay] Destination POST status=${createRes.status} body=${createRaw}`);
+                        // Re-fetch list to find the newly created destination (ID is in Location header which ebayFetch doesn't expose)
+                        const refetchRes  = await ebayFetch(`${EBAY_API_BASE}/commerce/notification/v1/destination`, { method: 'GET', headers: subHeaders });
+                        const refetchRaw  = await refetchRes.text();
+                        console.log(`[eBay] Destination GET status=${refetchRes.status} body=${refetchRaw}`);
+                        const refetchData = JSON.parse(refetchRaw || '{}');
                         const created     = (refetchData.destinations || []).find(d => d.deliveryConfig?.endpoint === EBAY_WEBHOOK_ENDPOINT);
                         destinationId     = created?.destinationId;
-                        console.log(`[eBay] Created notification destination: ${destinationId}`);
+                        console.log(`[eBay] Resolved destinationId: ${destinationId}`);
                     }
                     if (!destinationId) throw new Error('Could not resolve destinationId');
 
