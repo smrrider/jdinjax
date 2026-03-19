@@ -2776,8 +2776,13 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     const gPrices = JSON.parse(cleanJson(data.candidates[0].content.parts[0].text));
                     prices = { ...gPrices, source: 'AI Estimate', count: null, conditionId: listing.conditionId };
                 }
-                await dbRef.current.doc(`${getListingsPath(user.uid)}/${listing.id}`)
-                    .update({ priceResearch: prices, buyItNowPrice: prices.mid });
+                // Only write buyItNowPrice on first-time auto-price (no existing research).
+                // Manual Re-Price refreshes the data but never stomps a price the user set.
+                const isFirstRun = !listing.priceResearch && !(localPriceResults[listing.id]);
+                const dbUpdate = isFirstRun
+                    ? { priceResearch: prices, buyItNowPrice: prices.mid }
+                    : { priceResearch: prices };
+                await dbRef.current.doc(`${getListingsPath(user.uid)}/${listing.id}`).update(dbUpdate);
                 setLocalPriceResults(prev => ({ ...prev, [listing.id]: prices }));
                 return prices;
             };
