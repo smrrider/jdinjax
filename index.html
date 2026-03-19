@@ -851,7 +851,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
         const ArbitrageRecon = ({ proxyUrl, ebayConditions, showToast, dbRef, user, inline = false, scanPreload = null, onScanRequest, onSendToProcessing, userSettings = {} }) => {
             const [isOpen,        setIsOpen]        = useState(false);
             const [reconImage,    setReconImage]     = useState(null);
-            const [condition,     setCondition]      = useState('3000');
+            const [condition,     setCondition]      = useState('1000');
             const [purchasePrice, setPurchasePrice]  = useState('');
             const [isRunning,     setIsRunning]      = useState(false);
             const [reconStatus,   setReconStatus]    = useState('');
