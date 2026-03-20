@@ -1908,18 +1908,45 @@ app.post('/api/gemini', heavyLimiter, jsonImages, async (req, res) => {
 app.get('/api/admin/list-users', requireOwner, async (req, res) => {
     if (!adminAuth || !adminFirestore) return res.status(503).json({ error: 'Firebase Admin SDK not configured.' });
     try {
-        // Get all Firebase Auth users
-        const listResult = await adminAuth.listUsers(1000);
-        // Get Firestore whitelist
-        const wlSnap = await adminFirestore.collection('system/access/approved').get();
-        const whitelist = new Set(wlSnap.docs.map(d => d.id));
-        const users = listResult.users.map(u => ({
-            email:       u.email,
-            provider:    u.providerData[0]?.providerId === 'google.com' ? 'google' : 'email',
-            disabled:    u.disabled,
-            whitelisted: whitelist.has(u.email),
-            createdAt:   u.metadata.creationTime
-        }));
+        // Get all Firebase Auth users and whitelist entries in parallel
+        const [listResult, wlSnap] = await Promise.all([
+            adminAuth.listUsers(1000),
+            adminFirestore.collection('system/access/approved').get()
+        ]);
+
+        // Build whitelist map: email (lowercase) → doc data
+        const whitelistMap = {};
+        wlSnap.docs.forEach(d => { whitelistMap[d.id] = d.data(); });
+
+        // Firebase Auth users (registered — may or may not be whitelisted)
+        const authEmails = new Set();
+        const users = listResult.users.map(u => {
+            const emailLower = (u.email || '').toLowerCase();
+            authEmails.add(emailLower);
+            return {
+                email:       u.email,
+                provider:    u.providerData[0]?.providerId === 'google.com' ? 'google' : 'email',
+                disabled:    u.disabled,
+                whitelisted: !!whitelistMap[emailLower],
+                pending:     false,
+                createdAt:   u.metadata.creationTime
+            };
+        });
+
+        // Whitelist-only entries — approved but never signed in yet (no Auth account)
+        Object.entries(whitelistMap).forEach(([email, data]) => {
+            if (!authEmails.has(email)) {
+                users.push({
+                    email,
+                    provider:    data.authMethod || 'google',
+                    disabled:    false,
+                    whitelisted: true,
+                    pending:     true,   // approved, awaiting first sign-in
+                    createdAt:   null
+                });
+            }
+        });
+
         res.json({ users });
     } catch(e) {
         console.error('[Admin] List users failed:', e.message);

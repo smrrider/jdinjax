@@ -3794,8 +3794,8 @@ www.scout-recon.com`
                                                     <span className="text-xs font-bold text-slate-700 truncate">{u.email}</span>
                                                 </div>
                                                 <div className="flex items-center gap-2 shrink-0">
-                                                    <span className={`text-[8px] font-black px-2 py-1 rounded-lg uppercase ${u.disabled ? 'bg-red-100 text-red-600' : u.whitelisted ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
-                                                        {u.disabled ? 'Disabled' : u.whitelisted ? 'Active' : 'No Access'}
+                                                    <span className={`text-[8px] font-black px-2 py-1 rounded-lg uppercase ${u.disabled ? 'bg-red-100 text-red-600' : u.pending ? 'bg-sky-100 text-sky-600' : u.whitelisted ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                                                        {u.disabled ? 'Disabled' : u.pending ? 'Pending' : u.whitelisted ? 'Active' : 'No Access'}
                                                     </span>
                                                     <button onClick={() => userAction(u.email, 'enable')} title="Enable" className="p-1.5 rounded-lg text-emerald-500 hover:bg-emerald-50 hover:text-emerald-700 transition-colors"><Icon name="UserCheck" size={13}/></button>
                                                     <button onClick={() => userAction(u.email, 'disable')} title="Disable" className="p-1.5 rounded-lg text-amber-500 hover:bg-amber-50 hover:text-amber-700 transition-colors"><Icon name="UserX" size={13}/></button>
