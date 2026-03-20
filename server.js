@@ -74,7 +74,7 @@ app.set('trust proxy', 1);
 const APP_VERSION = "6.1.0";
 
 // Owner email — drives server-side admin gate
-const OWNER_EMAIL = process.env.OWNER_EMAIL || 'thedeboks@gmail.com';
+const OWNER_EMAIL = process.env.OWNER_EMAIL || 'admin@scout-recon.com';
 
 // ─── CATEGORY RESOLUTION ENGINE ─────────────────────────────────────────
 
