@@ -2064,7 +2064,79 @@ app.post('/api/admin/cloudinary-purge', requireOwner, jsonSmall, async (req, res
 
 // ── Health check — Railway/uptime monitors ────────────────────────────────
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok', version: APP_VERSION, ts: new Date().toISOString() });
+    res.json({ status: 'ok', ts: new Date().toISOString() });
+});
+
+// ── Privacy Policy — required for eBay production API access ─────────────────
+app.get('/privacy', (req, res) => {
+    res.setHeader('Content-Type', 'text/html');
+    res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Privacy Policy — Scout Recon</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 720px; margin: 60px auto; padding: 0 24px; color: #1e293b; line-height: 1.7; }
+  h1 { font-size: 1.75rem; font-weight: 900; text-transform: uppercase; letter-spacing: -0.02em; margin-bottom: 4px; }
+  h2 { font-size: 1rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 2rem; color: #475569; }
+  p, li { font-size: 0.95rem; color: #334155; }
+  ul { padding-left: 1.5rem; }
+  .meta { font-size: 0.8rem; color: #94a3b8; margin-bottom: 2.5rem; }
+  footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid #e2e8f0; font-size: 0.8rem; color: #94a3b8; }
+</style>
+</head>
+<body>
+<h1>Privacy Policy</h1>
+<p class="meta">Scout Recon &mdash; Black Knight Armament &mdash; Effective: January 1, 2025 &mdash; Last updated: March 2026</p>
+
+<h2>Overview</h2>
+<p>Scout Recon is a private, invitation-only eBay resale management tool operated by Black Knight Armament. This policy describes what data we collect, how it is used, and how it is protected.</p>
+
+<h2>Data We Collect</h2>
+<ul>
+  <li><strong>Account information</strong> — email address and authentication credentials used to access the application (managed via Firebase Authentication).</li>
+  <li><strong>eBay account data</strong> — OAuth access and refresh tokens required to connect your eBay seller account and submit listings on your behalf. Tokens are stored encrypted in Firestore and are never shared.</li>
+  <li><strong>Listing data</strong> — item titles, descriptions, prices, images, and related metadata that you create or upload within the application.</li>
+  <li><strong>Item images</strong> — uploaded photos stored via Cloudinary for use in eBay listings.</li>
+  <li><strong>Usage data</strong> — basic server logs (request timestamps, endpoints accessed) for debugging and security purposes. No analytics or tracking pixels are used.</li>
+</ul>
+
+<h2>How We Use Your Data</h2>
+<ul>
+  <li>To authenticate you and maintain your session.</li>
+  <li>To submit, manage, and sync listings to your eBay seller account via the eBay Sell APIs.</li>
+  <li>To retrieve market pricing data from eBay on your behalf.</li>
+  <li>To store your listing drafts and history securely in Firestore, scoped to your user account.</li>
+</ul>
+
+<h2>eBay Data</h2>
+<p>Scout Recon connects to eBay's APIs using OAuth 2.0. We request only the scopes necessary to create, manage, and monitor listings on your behalf. Your eBay credentials are never stored in plaintext. You may disconnect your eBay account at any time from the Settings tab, which immediately revokes stored tokens.</p>
+
+<h2>Data Sharing</h2>
+<p>We do not sell, rent, or share your personal data with third parties. Data is shared only with the following service providers strictly to operate the application:</p>
+<ul>
+  <li><strong>Google Firebase</strong> — authentication and Firestore database</li>
+  <li><strong>Cloudinary</strong> — image storage and delivery</li>
+  <li><strong>eBay Inc.</strong> — listing submission and market data via eBay APIs</li>
+  <li><strong>Google Gemini</strong> — AI-assisted item identification and listing generation (item images and titles only; no personal data)</li>
+</ul>
+
+<h2>eBay Marketplace Account Deletion</h2>
+<p>In compliance with eBay's API requirements, we process eBay Marketplace Account Deletion notifications. Upon receiving a verified deletion request, all eBay-related data associated with the specified account is purged from our systems within 30 days.</p>
+
+<h2>Data Retention</h2>
+<p>Your data is retained for as long as your account is active. You may request deletion of your account and all associated data at any time by contacting us at the address below. eBay OAuth tokens are automatically invalidated upon disconnection.</p>
+
+<h2>Security</h2>
+<p>All data is transmitted over HTTPS. Firestore access is restricted by security rules that enforce per-user data isolation — no user can access another user's data. The application is access-controlled by an invitation-only whitelist.</p>
+
+<h2>Contact</h2>
+<p>For privacy questions or data deletion requests, contact: <strong>blackknightarmament@proton.me</strong></p>
+
+<footer>Scout Recon &mdash; Black Knight Armament &mdash; &copy; 2026</footer>
+</body>
+</html>`);
 });
 
 // ── Global JSON error handler — catches any next(err) and returns JSON ───────
