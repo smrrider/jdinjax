@@ -2562,7 +2562,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     const signRes = await fetch('/api/sign-upload', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ timestamp })
+                        body: JSON.stringify({ userId: user.uid, timestamp })
                     });
                     const { signature, folder } = await signRes.json();
                     const results = await Promise.allSettled(
