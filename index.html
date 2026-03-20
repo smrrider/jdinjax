@@ -2395,6 +2395,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 setAuthLoading(true); setLoginError(null);
                 try {
                     const provider = new firebase.auth.GoogleAuthProvider();
+                    provider.setCustomParameters({ prompt: 'select_account' });
                     await firebase.auth().signInWithPopup(provider);
                 } catch (err) { setLoginError(friendlyAuthError(err)); }
                 finally { setAuthLoading(false); }
