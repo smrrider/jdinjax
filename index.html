@@ -2526,6 +2526,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const [usageLoading,   setUsageLoading]   = useState({});        // { gemini: bool, ... }
             const [bgRemoving,      setBgRemoving]      = useState(new Set()); // listing IDs currently processing bg removal
             const [deleteConfirmId, setDeleteConfirmId] = useState(null);      // listing ID pending delete confirmation
+            const [showMobileMenu,  setShowMobileMenu]  = useState(false);     // hamburger menu open state
 
             const cloudinaryPreview = async () => {
                 setPurgeLoading(true); setPurgePreview(null); setPurgeResult(null);
@@ -4261,7 +4262,6 @@ www.scout-recon.com`
                                 )}
                             </div>
                         </div>
-                        <button onClick={nuclearReset} className="px-6 py-3 bg-red-50 text-red-600 rounded-xl text-[10px] font-black uppercase flex items-center gap-2 border border-red-100 shadow-sm transition-all hover:bg-red-100 active:scale-95"><Icon name="Zap" size={14}/> Emergency Reset</button>
                     </div>
                     {/* ── Search / Sort / View toolbar ─────────────────────── */}
                     {activeListings.length > 0 && (
@@ -5349,10 +5349,36 @@ www.scout-recon.com`
                             <button onClick={() => setActiveTab('process')} className={`px-3 py-2 rounded-xl text-[10px] font-black transition-all whitespace-nowrap ${activeTab === 'process' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500'}`}>PROCESSOR</button>
                             <button onClick={() => setActiveTab('listings')} className={`px-3 py-2 rounded-xl text-[10px] font-black transition-all whitespace-nowrap ${activeTab === 'listings' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500'}`}>INVENTORY ({listings.length})</button>
                             <button onClick={() => setActiveTab('targets')} className={`px-3 py-2 rounded-xl text-[10px] font-black transition-all whitespace-nowrap ${activeTab === 'targets' ? 'bg-emerald-600 text-white shadow-lg' : 'text-slate-500'}`}>TARGETS{targets.length > 0 ? ` (${targets.length})` : ''}</button>
-                            <button onClick={() => setActiveTab('settings')} className={`px-3 py-2 rounded-xl text-[10px] font-black transition-all whitespace-nowrap ${activeTab === 'settings' ? 'bg-slate-800 text-white shadow-lg' : 'text-slate-500'}`}>SETTINGS</button>
                             <button onClick={() => setShowScanner(true)} className="p-2 text-emerald-500 hover:bg-emerald-50 rounded-xl transition-all shrink-0" title="Scan Barcode"><Icon name="ScanLine" size={18}/></button>
                             <div className="w-[1px] h-5 bg-slate-200 mx-1 shrink-0"></div>
-                            <button onClick={logout} className="p-2 text-slate-400 hover:text-red-500 transition-colors shrink-0" title="Secure Logout"><Icon name="LogOut" size={18}/></button>
+                            {/* Hamburger — Settings + Admin */}
+                            <div className="relative shrink-0">
+                                <button onClick={() => setShowMobileMenu(v => !v)}
+                                    className={`p-2 rounded-xl transition-all ${showMobileMenu ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'}`}
+                                    title="More">
+                                    <Icon name="Menu" size={18}/>
+                                </button>
+                                {showMobileMenu && (
+                                    <div className="absolute right-0 top-full mt-2 w-44 bg-white rounded-2xl shadow-xl border border-slate-200 py-2 z-50">
+                                        <button onClick={() => { setActiveTab('settings'); setShowMobileMenu(false); }}
+                                            className={`w-full flex items-center gap-3 px-4 py-3 text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'settings' ? 'bg-slate-800 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>
+                                            <Icon name="Settings" size={14}/> Settings
+                                        </button>
+                                        {user?.email === OWNER_EMAIL && (
+                                            <button onClick={() => { setActiveTab('admin'); setShowMobileMenu(false); }}
+                                                className={`w-full flex items-center gap-3 px-4 py-3 text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'admin' ? 'bg-violet-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>
+                                                <Icon name="ShieldCheck" size={14}/> Admin
+                                            </button>
+                                        )}
+                                        <div className="border-t border-slate-100 mt-1 pt-1">
+                                            <button onClick={() => { logout(); setShowMobileMenu(false); }}
+                                                className="w-full flex items-center gap-3 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-red-400 hover:bg-red-50 transition-all">
+                                                <Icon name="LogOut" size={14}/> Sign Out
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
                         </nav>
                     </header>
                     <main>
