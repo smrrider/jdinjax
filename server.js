@@ -1434,6 +1434,15 @@ app.get('/api/ebay/sync-webhook', (req, res) => {
 app.post('/api/ebay/sync-webhook', express.json({ limit: '64kb' }), async (req, res) => {
     res.status(200).json({ success: true }); // Acknowledge immediately — eBay retries if no 200 within 10s
     try {
+        // Verify shared token appended to webhook URL (?token=EBAY_WEBHOOK_TOKEN).
+        // Prevents arbitrary POST requests from mutating listing state.
+        if (EBAY_WEBHOOK_TOKEN) {
+            const provided = req.query.token || '';
+            if (provided !== EBAY_WEBHOOK_TOKEN) {
+                console.warn('[eBay/webhook] Rejected — invalid or missing token');
+                return;
+            }
+        }
         const notification = req.body?.notification || req.body;
         const topic        = notification?.metadata?.topic || req.body?.topic || '';
         const data         = notification?.data || {};
@@ -1485,6 +1494,14 @@ app.get('/ebay/notifications/account-deletion', (req, res) => {
 app.post('/ebay/notifications/account-deletion', express.json(), async (req, res) => {
     res.status(200).json({ success: true }); // Always acknowledge immediately
     try {
+        // Verify shared token appended to notification URL (?token=EBAY_NOTIFICATION_TOKEN).
+        if (EBAY_NOTIFICATION_TOKEN) {
+            const provided = req.query.token || '';
+            if (provided !== EBAY_NOTIFICATION_TOKEN) {
+                console.warn('[eBay/notifications] Rejected — invalid or missing token');
+                return;
+            }
+        }
         const notification = req.body?.notification || req.body || {};
         const topic        = notification?.metadata?.topic || notification?.topic || '';
         const data         = notification?.data || {};
@@ -1548,14 +1565,14 @@ app.post('/ebay/notifications/account-deletion', express.json(), async (req, res
  * Generates a HMAC-SHA1 signature for secure uploads.
  * Isolates files to: jdinjax/users/{userId}
  */
-app.post('/api/sign-upload', jsonSmall, (req, res) => {
-    const { userId, timestamp } = req.body;
-    if (!userId || !timestamp) return res.status(400).json({ error: "Auth context required." });
+app.post('/api/sign-upload', requireUser, jsonSmall, (req, res) => {
+    const { timestamp } = req.body;
+    if (!timestamp) return res.status(400).json({ error: "Timestamp required." });
 
-    const folder = `jdinjax/users/${userId}`;
+    // Always scope to the authenticated user — never trust a userId from the request body.
+    const folder    = `jdinjax/users/${req.uid}`;
     const apiSecret = process.env.CLOUDINARY_API_SECRET;
 
-    // Cloudinary signing requirements
     const strToSign = `folder=${folder}&timestamp=${timestamp}${apiSecret}`;
     const signature = crypto.createHash('sha1').update(strToSign).digest('hex');
 

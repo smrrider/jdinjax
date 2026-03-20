@@ -138,7 +138,6 @@
         const BARCODE_API_URL  = _isLocal ? 'http://127.0.0.1:3001/api/barcode-search' : '/api/barcode-search';
 
         // ── Debug auth bypass — LOCAL ONLY, never active in production ────────────
-        const DEV_BYPASS_AUTH = false; // flip to _isLocal to bypass auth during local debugging
         const OWNER_EMAIL = 'admin@scout-recon.com'; // always has access — update if your email differs
 
         let firebaseConfig    = null;
@@ -1566,6 +1565,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                                 ))}
                                                             </div>
                                                             {arMode !== 'fo' && <p className="text-[10px] text-slate-500 italic border-l-2 border-blue-200 pl-3 leading-relaxed">{arLivePrices.basis}</p>}
+                                                            <p className="text-[8px] text-slate-300 font-bold mt-1.5">Pricing data sourced from eBay Marketplace</p>
                                                         </>
                                                     ) : (
                                                         <>
@@ -1584,6 +1584,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                                 </div>
                                                             </div>
                                                             {arMode !== 'fo' && <p className="text-[10px] text-slate-500 italic border-l-2 border-blue-200 pl-3 leading-relaxed">{r.priceBasis}</p>}
+                                                            <p className="text-[8px] text-slate-300 font-bold mt-1.5">Pricing data sourced from eBay Marketplace</p>
                                                         </>
                                                     )}
                                                 </div>
@@ -2000,36 +2001,31 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         }
                         if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
                         dbRef.current = firebase.firestore();
-                        if (DEV_BYPASS_AUTH) {
-                            setUser({ uid: 'debug-user-local', email: 'debug@local.dev' });
-                            setAuthLoading(false);
-                        } else {
-                            firebase.auth().onAuthStateChanged(async u => {
-                                if (!u) { setUser(null); setAuthLoading(false); return; }
-                                // Owner always has access
-                                if (u.email === OWNER_EMAIL) {
-                                    setUser(u); setAuthLoading(false); return;
-                                }
-                                // Check whitelist: system/access/approved/{email}
-                                try {
-                                    const snap = await dbRef.current
-                                        .collection('system/access/approved')
-                                        .doc(u.email.toLowerCase())
-                                        .get();
-                                    if (snap.exists) {
-                                        setUser(u); setAuthLoading(false);
-                                    } else {
-                                        firebase.auth().signOut();
-                                        setAccessDenied(true);
-                                        setAuthLoading(false);
-                                    }
-                                } catch(e) {
+                        firebase.auth().onAuthStateChanged(async u => {
+                            if (!u) { setUser(null); setAuthLoading(false); return; }
+                            // Owner always has access
+                            if (u.email === OWNER_EMAIL) {
+                                setUser(u); setAuthLoading(false); return;
+                            }
+                            // Check whitelist: system/access/approved/{email}
+                            try {
+                                const snap = await dbRef.current
+                                    .collection('system/access/approved')
+                                    .doc(u.email.toLowerCase())
+                                    .get();
+                                if (snap.exists) {
+                                    setUser(u); setAuthLoading(false);
+                                } else {
                                     firebase.auth().signOut();
                                     setAccessDenied(true);
                                     setAuthLoading(false);
                                 }
-                            });
-                        }
+                            } catch(e) {
+                                firebase.auth().signOut();
+                                setAccessDenied(true);
+                                setAuthLoading(false);
+                            }
+                        });
                     } catch (e) {
                         console.error('[Init] Fatal:', e.message);
                         setErrorMsg("Access Bridge Link Failure: " + e.message);
@@ -2567,8 +2563,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     const timestamp = Math.round(Date.now() / 1000);
                     const signRes = await fetch('/api/sign-upload', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ userId: user.uid, timestamp })
+                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await user.getIdToken()}` },
+                        body: JSON.stringify({ timestamp })
                     });
                     const { signature, folder } = await signRes.json();
                     const results = await Promise.allSettled(
@@ -4751,6 +4747,7 @@ www.scout-recon.com`
                                         )}
 
                                         <p className="text-[10px] text-slate-500 italic leading-relaxed border-l-2 border-blue-200 pl-3">{pr.basis}</p>
+                                        {pr.source === 'ebay_browse' && <p className="text-[8px] text-slate-300 font-bold mt-1.5">Pricing data sourced from eBay Marketplace</p>}
                                     </div>
                                     );
                                 })()}
