@@ -1939,6 +1939,10 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const [ebaySync,        setEbaySync]        = useState(false);  // true while batch eBay status sync is running
             const [lastSynced,      setLastSynced]      = useState(null);   // Date | null — shown in the Refresh button label
             const [inventoryFolder, setInventoryFolder] = useState('drafts'); // 'drafts' | 'submitted'
+            const [inventorySearch, setInventorySearch] = useState('');
+            const [inventorySort,   setInventorySort]   = useState('newest');
+            const [inventoryView,   setInventoryView]   = useState('card');
+            const [inventoryPage,   setInventoryPage]   = useState(1);
             const [selectedDrafts,  setSelectedDrafts]  = useState(new Set()); // Set of listing doc IDs checked for bulk push
             const [bulkListing,     setBulkListing]     = useState(false);  // true while bulk push is running
             const listingInFlight = useRef(new Set());  // IDs currently being submitted — double-click guard
@@ -1983,6 +1987,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             useEffect(() => {
                 try { localStorage.setItem('scoutTab', activeTab); } catch {}
             }, [activeTab]);
+
+            useEffect(() => { setInventoryPage(1); }, [inventorySearch, inventorySort, inventoryFolder]);
 
             useEffect(() => {
                 const init = async () => {
@@ -4137,6 +4143,37 @@ www.scout-recon.com`
                 const submittedListings = sortedListings.filter(l =>  isSubmitted(l));
                 const activeListings    = inventoryFolder === 'drafts' ? draftListings : submittedListings;
 
+                // ── Search filter ──────────────────────────────────────────────
+                const searchedListings = inventorySearch.trim()
+                    ? activeListings.filter(l => {
+                        const q = inventorySearch.toLowerCase();
+                        return (l.title || '').toLowerCase().includes(q)
+                            || (l.sku || '').toLowerCase().includes(q)
+                            || (l.brand || '').toLowerCase().includes(q)
+                            || (l.categoryPath || '').toLowerCase().includes(q);
+                      })
+                    : activeListings;
+
+                // ── Sort ───────────────────────────────────────────────────────
+                const sortedFiltered = [...searchedListings].sort((a, b) => {
+                    const aPrice = Number(a.buyItNowPrice || a.priceResearch?.mid || 0);
+                    const bPrice = Number(b.buyItNowPrice || b.priceResearch?.mid || 0);
+                    switch (inventorySort) {
+                        case 'oldest':     return (a.timestamp || 0) - (b.timestamp || 0);
+                        case 'price_asc':  return aPrice - bPrice;
+                        case 'price_desc': return bPrice - aPrice;
+                        case 'title_az':   return (a.title || '').localeCompare(b.title || '');
+                        case 'category':   return (a.categoryPath || '').localeCompare(b.categoryPath || '');
+                        default:           return (b.timestamp || 0) - (a.timestamp || 0);
+                    }
+                });
+
+                // ── Paginate ───────────────────────────────────────────────────
+                const INV_PAGE_SIZE = 20;
+                const totalPages    = Math.max(1, Math.ceil(sortedFiltered.length / INV_PAGE_SIZE));
+                const safePage      = Math.min(inventoryPage, totalPages);
+                const pagedListings = sortedFiltered.slice((safePage - 1) * INV_PAGE_SIZE, safePage * INV_PAGE_SIZE);
+
                 return (
                 <div className="space-y-6">
                     {/* ── Header bar ── */}
@@ -4229,6 +4266,50 @@ www.scout-recon.com`
                         </div>
                         <button onClick={nuclearReset} className="px-6 py-3 bg-red-50 text-red-600 rounded-xl text-[10px] font-black uppercase flex items-center gap-2 border border-red-100 shadow-sm transition-all hover:bg-red-100 active:scale-95"><Icon name="Zap" size={14}/> Emergency Reset</button>
                     </div>
+                    {/* ── Search / Sort / View toolbar ─────────────────────── */}
+                    {activeListings.length > 0 && (
+                        <div className="flex items-center gap-3 flex-wrap">
+                            <div className="flex-1 min-w-[180px] flex items-center gap-2 bg-white border border-slate-200 rounded-2xl px-4 py-2.5 shadow-sm">
+                                <Icon name="Search" size={13} className="text-slate-400 shrink-0"/>
+                                <input type="text" placeholder="Search title, SKU, brand, category…" value={inventorySearch}
+                                    onChange={e => setInventorySearch(e.target.value)}
+                                    className="flex-1 text-xs font-bold text-slate-700 placeholder:text-slate-300 bg-transparent focus:outline-none min-w-0"/>
+                                {inventorySearch && <button onClick={() => setInventorySearch('')} className="text-slate-300 hover:text-red-400 transition-colors shrink-0"><Icon name="X" size={12}/></button>}
+                            </div>
+                            <select value={inventorySort} onChange={e => setInventorySort(e.target.value)}
+                                className="bg-white border border-slate-200 rounded-2xl px-4 py-2.5 text-[10px] font-black text-slate-600 uppercase focus:outline-none shadow-sm cursor-pointer">
+                                <option value="newest">Newest First</option>
+                                <option value="oldest">Oldest First</option>
+                                <option value="price_desc">Price: High → Low</option>
+                                <option value="price_asc">Price: Low → High</option>
+                                <option value="title_az">Title A → Z</option>
+                                <option value="category">Category</option>
+                            </select>
+                            <div className="flex bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                                <button onClick={() => setInventoryView('card')} title="Card view"
+                                    className={`px-3 py-2.5 transition-colors ${inventoryView === 'card' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:bg-slate-50'}`}>
+                                    <Icon name="LayoutGrid" size={13}/>
+                                </button>
+                                <button onClick={() => setInventoryView('list')} title="List view"
+                                    className={`px-3 py-2.5 border-l border-slate-200 transition-colors ${inventoryView === 'list' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:bg-slate-50'}`}>
+                                    <Icon name="List" size={13}/>
+                                </button>
+                            </div>
+                            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">
+                                {sortedFiltered.length}{inventorySearch ? ` of ${activeListings.length}` : ''} item{sortedFiltered.length !== 1 ? 's' : ''}
+                            </span>
+                        </div>
+                    )}
+
+                    {/* ── No search results ─────────────────────────────────── */}
+                    {activeListings.length > 0 && sortedFiltered.length === 0 && (
+                        <div className="flex flex-col items-center justify-center py-16 text-center">
+                            <Icon name="SearchX" size={36} className="text-slate-200 mb-4"/>
+                            <p className="text-sm font-black text-slate-500 uppercase tracking-tight">No results for "{inventorySearch}"</p>
+                            <button onClick={() => setInventorySearch('')} className="mt-3 text-[10px] font-black text-blue-500 hover:underline uppercase tracking-widest">Clear Search</button>
+                        </div>
+                    )}
+
                     {activeListings.length === 0 && (
                         <div className="flex flex-col items-center justify-center py-24 text-center animate-in fade-in duration-500">
                             {inventoryFolder === 'drafts' ? (
@@ -4250,8 +4331,41 @@ www.scout-recon.com`
                             )}
                         </div>
                     )}
-                    {activeListings.map(l => (
+                    {pagedListings.map(l => (
                         <ErrorBoundary key={l.id}>
+                        {inventoryView === 'list' ? (
+                            /* ── Compact list row ─────────────────────────────── */
+                            <div className={`bg-white border rounded-2xl px-4 py-3 flex items-center gap-3 transition-all ${inventoryFolder === 'drafts' && selectedDrafts.has(l.id) ? 'border-emerald-400 ring-2 ring-emerald-200' : 'border-slate-200 hover:border-blue-300'}`}>
+                                {inventoryFolder === 'drafts' && (
+                                    <button onClick={() => setSelectedDrafts(prev => { const n = new Set(prev); n.has(l.id) ? n.delete(l.id) : n.add(l.id); return n; })}
+                                        className={`shrink-0 transition-colors ${selectedDrafts.has(l.id) ? 'text-emerald-500' : 'text-slate-300 hover:text-emerald-400'}`}>
+                                        <Icon name={selectedDrafts.has(l.id) ? 'CheckSquare' : 'Square'} size={15}/>
+                                    </button>
+                                )}
+                                <img src={l.images?.[0]} className="w-12 h-12 rounded-xl object-cover shrink-0 border border-slate-100 bg-slate-100"/>
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-xs font-black text-slate-900 truncate leading-tight">{l.title || 'Untitled'}</p>
+                                    <p className="text-[9px] font-bold text-slate-400 truncate mt-0.5">{l.categoryPath || l.categoryId || '—'}</p>
+                                </div>
+                                <span className="text-[8px] font-black px-2 py-1 rounded-lg bg-slate-100 text-slate-500 uppercase shrink-0 hidden sm:block">{EBAY_CONDITIONS.find(c => c.id === l.conditionId)?.label || 'Used'}</span>
+                                <span className="text-sm font-black text-slate-800 shrink-0 w-16 text-right">${Number(l.buyItNowPrice || l.priceResearch?.mid || 0).toFixed(2)}</span>
+                                <span className={`text-[8px] font-black px-2 py-1 rounded-lg uppercase shrink-0 hidden md:block ${isSubmitted(l) ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{isSubmitted(l) ? 'Listed' : 'Draft'}</span>
+                                <div className="flex items-center gap-1 shrink-0">
+                                    <button onClick={() => researchPrice(l)} title="Re-price"
+                                        className="p-2 rounded-xl hover:bg-blue-50 hover:text-blue-600 text-slate-300 transition-colors">
+                                        <Icon name="TrendingUp" size={13}/>
+                                    </button>
+                                    {inventoryFolder === 'drafts'
+                                        ? <button onClick={() => listOnEbay(l)} title="List on eBay" className="p-2 rounded-xl hover:bg-emerald-50 hover:text-emerald-600 text-slate-300 transition-colors"><Icon name="Tag" size={13}/></button>
+                                        : l.ebayListingId && <a href={`https://www.ebay.com/itm/${l.ebayListingId}`} target="_blank" rel="noreferrer" title="View on eBay" className="p-2 rounded-xl hover:bg-emerald-50 hover:text-emerald-600 text-slate-300 transition-colors"><Icon name="ExternalLink" size={13}/></a>
+                                    }
+                                    <button onClick={() => dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).delete()} title="Delete"
+                                        className="p-2 rounded-xl hover:bg-red-50 hover:text-red-500 text-slate-300 transition-colors">
+                                        <Icon name="Trash2" size={13}/>
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
                         <div className={`bg-white rounded-[2rem] border flex flex-col md:flex-row overflow-hidden shadow-sm transition-all animate-in fade-in duration-500 listing-card ${inventoryFolder === 'drafts' && selectedDrafts.has(l.id) ? 'border-emerald-400 ring-2 ring-emerald-200' : 'border-slate-200 hover:border-blue-300'}`}>
                             {/* Image column — flex-col so the expandable strip sits below the main photo */}
                             <div className="md:w-72 shrink-0 bg-slate-50 border-r border-slate-100 flex flex-col">
@@ -5027,8 +5141,26 @@ www.scout-recon.com`
                                 </div>
                             </div>
                         </div>
+                        )}
                         </ErrorBoundary>
                     ))}
+
+                    {/* ── Pagination controls ───────────────────────────────── */}
+                    {totalPages > 1 && (
+                        <div className="flex items-center justify-center gap-3 pt-2">
+                            <button onClick={() => setInventoryPage(p => Math.max(1, p - 1))} disabled={safePage <= 1}
+                                className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-black uppercase text-slate-500 hover:border-blue-300 hover:text-blue-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all active:scale-95 shadow-sm flex items-center gap-1.5">
+                                <Icon name="ChevronLeft" size={12}/> Prev
+                            </button>
+                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                                {safePage} / {totalPages} · {sortedFiltered.length} items
+                            </span>
+                            <button onClick={() => setInventoryPage(p => Math.min(totalPages, p + 1))} disabled={safePage >= totalPages}
+                                className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-black uppercase text-slate-500 hover:border-blue-300 hover:text-blue-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all active:scale-95 shadow-sm flex items-center gap-1.5">
+                                Next <Icon name="ChevronRight" size={12}/>
+                            </button>
+                        </div>
+                    )}
                 </div>
                 );
             };
