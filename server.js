@@ -1859,6 +1859,26 @@ app.post('/api/gemini', heavyLimiter, jsonImages, async (req, res) => {
         } finally {
             clearTimeout(gemTO);
         }
+        // ── Fire-and-forget usage tracking ────────────────────────────────
+        if (adminFirestore && data && data.usageMetadata) {
+            const meta     = data.usageMetadata;
+            const now      = new Date();
+            const dayKey   = now.toISOString().slice(0, 10);  // YYYY-MM-DD
+            const monthKey = now.toISOString().slice(0, 7);   // YYYY-MM
+            const base     = adminFirestore.collection('system/usage/gemini');
+            Promise.all([
+                base.doc(dayKey).set({
+                    requests:     admin.firestore.FieldValue.increment(1),
+                    inputTokens:  admin.firestore.FieldValue.increment(meta.promptTokenCount     || 0),
+                    outputTokens: admin.firestore.FieldValue.increment(meta.candidatesTokenCount || 0),
+                }, { merge: true }),
+                base.doc(monthKey).set({
+                    requests:     admin.firestore.FieldValue.increment(1),
+                    inputTokens:  admin.firestore.FieldValue.increment(meta.promptTokenCount     || 0),
+                    outputTokens: admin.firestore.FieldValue.increment(meta.candidatesTokenCount || 0),
+                }, { merge: true }),
+            ]).catch(e => console.error('[Gemini] Usage tracking error:', e.message));
+        }
         res.json(data);
     } catch (err) { res.status(502).json({ error: { message: err.message } }); }
 });
@@ -2060,6 +2080,98 @@ app.post('/api/admin/cloudinary-purge', requireOwner, jsonSmall, async (req, res
     }
     console.log(`[Admin] Cloudinary purge: deleted ${deleted} images (${(freedBytes/1024/1024).toFixed(1)} MB), threshold ${olderThanDays}d`);
     res.json({ deleted, freedBytes });
+});
+
+// ── Admin: API usage — SerpAPI ────────────────────────────────────────────
+app.get('/api/admin/usage/serpapi', requireOwner, async (req, res) => {
+    const apiKey = process.env.SERPAPI_KEY;
+    if (!apiKey) return res.json({ ok: false, error: 'SERPAPI_KEY not configured', fetchedAt: new Date().toISOString() });
+    try {
+        const r = await fetch(`https://serpapi.com/account?api_key=${apiKey}`);
+        const d = await r.json();
+        if (!r.ok) return res.json({ ok: false, error: d.error || 'SerpAPI error', fetchedAt: new Date().toISOString() });
+        res.json({
+            ok:               true,
+            fetchedAt:        new Date().toISOString(),
+            plan:             d.plan_name,
+            accountEmail:     d.account_email,
+            searchesPerMonth: d.searches_per_month,
+            thisMonthUsage:   d.this_month_usage,
+            searchesLeft:     d.plan_searches_left,
+        });
+    } catch (e) {
+        res.json({ ok: false, error: e.message, fetchedAt: new Date().toISOString() });
+    }
+});
+
+// ── Admin: API usage — Cloudinary ─────────────────────────────────────────
+app.get('/api/admin/usage/cloudinary', requireOwner, async (req, res) => {
+    const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+    const apiKey    = process.env.CLOUDINARY_API_KEY;
+    const apiSecret = process.env.CLOUDINARY_API_SECRET;
+    if (!cloudName || !apiKey || !apiSecret)
+        return res.json({ ok: false, error: 'Cloudinary credentials not configured', fetchedAt: new Date().toISOString() });
+    try {
+        const auth = Buffer.from(`${apiKey}:${apiSecret}`).toString('base64');
+        const r    = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/usage`, {
+            headers: { Authorization: `Basic ${auth}` }
+        });
+        const d = await r.json();
+        if (!r.ok) return res.json({ ok: false, error: d.error?.message || 'Cloudinary error', fetchedAt: new Date().toISOString() });
+        res.json({
+            ok:             true,
+            fetchedAt:      new Date().toISOString(),
+            plan:           d.plan,
+            storageUsed:    d.storage?.usage    || 0,
+            storageLimit:   d.storage?.limit    || 0,
+            bandwidthUsed:  d.bandwidth?.usage  || 0,
+            bandwidthLimit: d.bandwidth?.limit  || 0,
+            resources:      d.resources         || 0,
+            requests:       d.requests          || 0,
+        });
+    } catch (e) {
+        res.json({ ok: false, error: e.message, fetchedAt: new Date().toISOString() });
+    }
+});
+
+// ── Admin: API usage — Gemini (from Firestore accumulators) ───────────────
+app.get('/api/admin/usage/gemini', requireOwner, async (req, res) => {
+    if (!adminFirestore) return res.json({ ok: false, error: 'Firebase not configured', fetchedAt: new Date().toISOString() });
+    try {
+        const now      = new Date();
+        const dayKey   = now.toISOString().slice(0, 10);  // YYYY-MM-DD
+        const monthKey = now.toISOString().slice(0, 7);   // YYYY-MM
+        const base = adminFirestore.collection('system/usage/gemini');
+        const [daySnap, monthSnap] = await Promise.all([base.doc(dayKey).get(), base.doc(monthKey).get()]);
+        const day   = daySnap.exists   ? daySnap.data()   : {};
+        const month = monthSnap.exists ? monthSnap.data() : {};
+        res.json({
+            ok:                true,
+            fetchedAt:         now.toISOString(),
+            todayRequests:     day.requests     || 0,
+            todayInputTokens:  day.inputTokens  || 0,
+            todayOutputTokens: day.outputTokens || 0,
+            monthRequests:     month.requests     || 0,
+            monthInputTokens:  month.inputTokens  || 0,
+            monthOutputTokens: month.outputTokens || 0,
+        });
+    } catch (e) {
+        res.json({ ok: false, error: e.message, fetchedAt: new Date().toISOString() });
+    }
+});
+
+// ── Admin: API usage — Server / Railway process metrics ───────────────────
+app.get('/api/admin/usage/server', requireOwner, (req, res) => {
+    const mem = process.memoryUsage();
+    res.json({
+        ok:            true,
+        fetchedAt:     new Date().toISOString(),
+        uptimeSeconds: Math.floor(process.uptime()),
+        heapUsedMB:    (mem.heapUsed  / 1024 / 1024).toFixed(1),
+        heapTotalMB:   (mem.heapTotal / 1024 / 1024).toFixed(1),
+        rssMB:         (mem.rss       / 1024 / 1024).toFixed(1),
+        nodeVersion:   process.version,
+    });
 });
 
 // ── Health check — Railway/uptime monitors ────────────────────────────────

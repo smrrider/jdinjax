@@ -2091,6 +2091,13 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 // eslint-disable-next-line react-hooks/exhaustive-deps
             }, [activeTab, user]); // Only fire on tab switch — not on every listing update
 
+            // ── Auto-load usage data on first visit to API Usage sub-tab ─────────────
+            useEffect(() => {
+                if (activeTab === 'admin' && adminSubTab === 'usage' && user?.email === OWNER_EMAIL && Object.keys(usageData).length === 0) {
+                    loadUsage();
+                }
+            }, [activeTab, adminSubTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
             // ── eBay: load connection status on login + handle OAuth callback ────────
             useEffect(() => {
                 if (!user) return;
@@ -2442,6 +2449,23 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 return fetch(url, { ...opts, headers: { ...(opts.headers || {}), 'Authorization': `Bearer ${idToken}` } });
             };
 
+            // ── API Usage loader ──────────────────────────────────────────────
+            const loadUsage = async (providers = ['gemini', 'serpapi', 'cloudinary', 'server']) => {
+                setUsageLoading(prev => ({ ...prev, ...Object.fromEntries(providers.map(p => [p, true])) }));
+                const results = await Promise.allSettled(
+                    providers.map(async p => {
+                        const r = await adminFetch(`/api/admin/usage/${p}`);
+                        return [p, await r.json()];
+                    })
+                );
+                const updates = {};
+                for (const r of results) {
+                    if (r.status === 'fulfilled') { const [p, d] = r.value; updates[p] = d; }
+                }
+                setUsageData(prev => ({ ...prev, ...updates }));
+                setUsageLoading(prev => ({ ...prev, ...Object.fromEntries(providers.map(p => [p, false])) }));
+            };
+
             // ── Access Management (owner only) ────────────────────────────────
             const loadApprovedUsers = async () => {
                 try {
@@ -2489,6 +2513,9 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const [purgePreview,    setPurgePreview]    = useState(null); // { previewCount, previewBytes }
             const [purgeResult,     setPurgeResult]     = useState(null); // { deleted, freedBytes }
             const [purgeLoading,    setPurgeLoading]    = useState(false);
+            const [adminSubTab,    setAdminSubTab]    = useState('users');   // 'users' | 'storage' | 'usage'
+            const [usageData,      setUsageData]      = useState({});        // { gemini, serpapi, cloudinary, server }
+            const [usageLoading,   setUsageLoading]   = useState({});        // { gemini: bool, ... }
             const [bgRemoving,      setBgRemoving]      = useState(new Set()); // listing IDs currently processing bg removal
 
             const cloudinaryPreview = async () => {
@@ -3597,9 +3624,74 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                             : <><Icon name="Save" size={14}/> Save Settings</>}
                     </button>
 
-                    {/* ── Owner-only: Access Management ───────────────────── */}
-                    {user && user.email === OWNER_EMAIL && (
-                        <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden">
+                </section>
+            );
+
+            // ── Admin Tab ─────────────────────────────────────────────────────────
+            const renderAdminTab = () => {
+                const adminCard = (header, body) => (
+                    <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden">
+                        {header}
+                        <div className="p-8 space-y-4">{body}</div>
+                    </div>
+                );
+                const statBox = (label, value, sub) => (
+                    <div className="bg-slate-50 rounded-2xl p-4">
+                        <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">{label}</p>
+                        <p className="text-xl font-black text-slate-800 mt-1">{value}</p>
+                        {sub && <p className="text-[9px] text-slate-400 mt-0.5">{sub}</p>}
+                    </div>
+                );
+                const progressBar = (used, total, label) => {
+                    const pct = total > 0 ? Math.min(100, (used / total) * 100) : 0;
+                    const color = pct > 80 ? 'bg-red-500' : pct > 50 ? 'bg-amber-400' : 'bg-blue-500';
+                    return (
+                        <div>
+                            <div className="flex justify-between text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1.5">
+                                <span>{label}</span>
+                                <span>{used.toLocaleString()} / {total.toLocaleString()}</span>
+                            </div>
+                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                                <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${pct}%` }}/>
+                            </div>
+                        </div>
+                    );
+                };
+                const usageCardShell = (title, subtitle, iconName, iconBg, isLoading, onRefresh, content) => adminCard(
+                    <div className="px-8 py-5 border-b border-slate-100 flex items-center gap-3">
+                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${iconBg}`}>
+                            <Icon name={iconName} size={16} className="text-white"/>
+                        </div>
+                        <div>
+                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">{subtitle}</p>
+                            <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight">{title}</h3>
+                        </div>
+                        <button onClick={onRefresh} disabled={isLoading}
+                            className="ml-auto text-[9px] font-black text-slate-400 hover:text-slate-600 uppercase tracking-widest flex items-center gap-1 disabled:opacity-40">
+                            {isLoading ? <Icon name="Loader2" size={10} className="animate-spin"/> : <Icon name="RefreshCw" size={10}/>} Refresh
+                        </button>
+                    </div>,
+                    content
+                );
+
+                return (
+                    <section className="space-y-6">
+                        {/* Sub-tab nav */}
+                        <div className="flex gap-1 p-1 bg-slate-100 rounded-2xl w-fit">
+                            {[
+                                { key: 'users',   label: 'Users',     icon: 'Users' },
+                                { key: 'storage', label: 'Storage',   icon: 'HardDrive' },
+                                { key: 'usage',   label: 'API Usage', icon: 'Activity' },
+                            ].map(({ key, label, icon }) => (
+                                <button key={key} onClick={() => setAdminSubTab(key)}
+                                    className={`px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${adminSubTab === key ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
+                                    <Icon name={icon} size={12}/> {label}
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* ── Users ─────────────────────────────────────────── */}
+                        {adminSubTab === 'users' && adminCard(
                             <div className="px-8 py-5 border-b border-slate-100 flex items-center gap-3">
                                 <Icon name="Users" size={16} className="text-violet-600"/>
                                 <div>
@@ -3609,9 +3701,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                 <button onClick={loadApprovedUsers} className="ml-auto text-[9px] font-black text-slate-400 hover:text-slate-600 uppercase tracking-widest flex items-center gap-1">
                                     <Icon name="RefreshCw" size={10}/> Refresh
                                 </button>
-                            </div>
-                            <div className="p-8 space-y-4">
-                                {/* Method toggle */}
+                            </div>,
+                            <>
                                 <div className="flex gap-1 p-1 bg-slate-100 rounded-xl w-fit mb-2">
                                     <button onClick={() => setNewUserMethod('google')}
                                         className={`px-4 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${newUserMethod === 'google' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
@@ -3623,23 +3714,14 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                     </button>
                                 </div>
                                 <div className="flex gap-2">
-                                    <input
-                                        type="email"
-                                        value={newUserEmail}
-                                        onChange={e => setNewUserEmail(e.target.value)}
+                                    <input type="email" value={newUserEmail} onChange={e => setNewUserEmail(e.target.value)}
                                         onKeyDown={e => e.key === 'Enter' && (newUserMethod === 'google' ? addApprovedUser() : createEmailUser())}
                                         placeholder={newUserMethod === 'google' ? 'user@gmail.com' : 'user@email.com'}
-                                        className="flex-1 px-4 py-3 rounded-2xl border border-slate-200 text-sm font-bold text-slate-700 focus:outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-50 bg-slate-50 placeholder-slate-300"
-                                    />
-                                    {newUserMethod === 'google' ? (
-                                        <button onClick={() => addApprovedUser()} className="px-5 py-3 bg-violet-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-violet-500 active:scale-95 transition-all flex items-center gap-2 whitespace-nowrap">
-                                            <Icon name="UserPlus" size={13}/> Grant Access
-                                        </button>
-                                    ) : (
-                                        <button onClick={() => createEmailUser()} className="px-5 py-3 bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-blue-500 active:scale-95 transition-all flex items-center gap-2 whitespace-nowrap">
-                                            <Icon name="Mail" size={13}/> Create & Invite
-                                        </button>
-                                    )}
+                                        className="flex-1 px-4 py-3 rounded-2xl border border-slate-200 text-sm font-bold text-slate-700 focus:outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-50 bg-slate-50 placeholder-slate-300"/>
+                                    {newUserMethod === 'google'
+                                        ? <button onClick={() => addApprovedUser()} className="px-5 py-3 bg-violet-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-violet-500 active:scale-95 transition-all flex items-center gap-2 whitespace-nowrap"><Icon name="UserPlus" size={13}/> Grant Access</button>
+                                        : <button onClick={() => createEmailUser()} className="px-5 py-3 bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-blue-500 active:scale-95 transition-all flex items-center gap-2 whitespace-nowrap"><Icon name="Mail" size={13}/> Create & Invite</button>
+                                    }
                                 </div>
                                 <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-1">
                                     {newUserMethod === 'google' ? 'Whitelists the email — user signs in with their Google account.' : 'Creates an account and sends a password setup link.'}
@@ -3706,41 +3788,27 @@ www.scout-recon.com`
                                                     <span className={`text-[8px] font-black px-2 py-1 rounded-lg uppercase ${u.disabled ? 'bg-red-100 text-red-600' : u.whitelisted ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
                                                         {u.disabled ? 'Disabled' : u.whitelisted ? 'Active' : 'No Access'}
                                                     </span>
-                                                    {/* Enable */}
-                                                    <button onClick={() => userAction(u.email, 'enable')} title="Enable"
-                                                        className="p-1.5 rounded-lg text-emerald-500 hover:bg-emerald-50 hover:text-emerald-700 transition-colors">
-                                                        <Icon name="UserCheck" size={13}/>
-                                                    </button>
-                                                    {/* Disable */}
-                                                    <button onClick={() => userAction(u.email, 'disable')} title="Disable"
-                                                        className="p-1.5 rounded-lg text-amber-500 hover:bg-amber-50 hover:text-amber-700 transition-colors">
-                                                        <Icon name="UserX" size={13}/>
-                                                    </button>
-                                                    {/* Delete */}
-                                                    <button onClick={() => { if (window.confirm(`Permanently delete ${u.email}?`)) userAction(u.email, 'delete'); }} title="Delete permanently"
-                                                        className="p-1.5 rounded-lg text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors">
-                                                        <Icon name="Trash2" size={13}/>
-                                                    </button>
+                                                    <button onClick={() => userAction(u.email, 'enable')} title="Enable" className="p-1.5 rounded-lg text-emerald-500 hover:bg-emerald-50 hover:text-emerald-700 transition-colors"><Icon name="UserCheck" size={13}/></button>
+                                                    <button onClick={() => userAction(u.email, 'disable')} title="Disable" className="p-1.5 rounded-lg text-amber-500 hover:bg-amber-50 hover:text-amber-700 transition-colors"><Icon name="UserX" size={13}/></button>
+                                                    <button onClick={() => { if (window.confirm(`Permanently delete ${u.email}?`)) userAction(u.email, 'delete'); }} title="Delete permanently" className="p-1.5 rounded-lg text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors"><Icon name="Trash2" size={13}/></button>
                                                 </div>
                                             </li>
                                         ))}
                                     </ul>
                                 }
-                            </div>
-                        </div>
-                    )}
+                            </>
+                        )}
 
-                    {/* ── Owner-only: Cloudinary Storage ───────────────────── */}
-                    {user && user.email === OWNER_EMAIL && (
-                        <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden">
+                        {/* ── Storage ───────────────────────────────────────── */}
+                        {adminSubTab === 'storage' && adminCard(
                             <div className="px-8 py-5 border-b border-slate-100 flex items-center gap-3">
                                 <Icon name="HardDrive" size={16} className="text-orange-500"/>
                                 <div>
                                     <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Admin</p>
                                     <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight">Cloudinary Storage</h3>
                                 </div>
-                            </div>
-                            <div className="p-8 space-y-4">
+                            </div>,
+                            <>
                                 <p className="text-xs text-slate-500 leading-relaxed">Purge images from all <code className="bg-slate-100 px-1 rounded text-[10px]">jdinjax/</code> subfolders older than the selected threshold. Images are on eBay's servers after posting — safe to clear.</p>
                                 <div className="flex items-center gap-3 flex-wrap">
                                     <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Older than</label>
@@ -3776,11 +3844,126 @@ www.scout-recon.com`
                                         </p>
                                     </div>
                                 )}
+                            </>
+                        )}
+
+                        {/* ── API Usage ─────────────────────────────────────── */}
+                        {adminSubTab === 'usage' && (
+                            <div className="space-y-4">
+                                <div className="flex items-center justify-between">
+                                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Live Provider Metrics</p>
+                                    <button onClick={() => loadUsage()}
+                                        className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-700 active:scale-95 transition-all">
+                                        <Icon name="RefreshCw" size={11}/> Refresh All
+                                    </button>
+                                </div>
+
+                                {/* Gemini */}
+                                {usageCardShell('Gemini 2.5 Flash', 'Google AI', 'Sparkles', 'bg-blue-500', usageLoading.gemini, () => loadUsage(['gemini']),
+                                    !usageData.gemini
+                                        ? <p className="text-xs text-slate-400 italic">Click Refresh to load.</p>
+                                        : !usageData.gemini.ok
+                                        ? <p className="text-xs text-red-400 font-bold">{usageData.gemini.error}</p>
+                                        : (() => {
+                                            const g = usageData.gemini;
+                                            const estCost = ((g.monthInputTokens / 1e6) * 0.075 + (g.monthOutputTokens / 1e6) * 0.30).toFixed(4);
+                                            return (
+                                                <div className="space-y-4">
+                                                    {progressBar(g.todayRequests, 10000, 'Today (RPD Limit)')}
+                                                    <div className="grid grid-cols-2 gap-3">
+                                                        {statBox('Today Requests',   g.todayRequests.toLocaleString(), 'of 10,000 daily limit')}
+                                                        {statBox('Est. Month Cost',  `$${estCost}`, 'pay-as-you-go')}
+                                                        {statBox('Month Requests',   g.monthRequests.toLocaleString())}
+                                                        {statBox('Input Tokens',     `${(g.monthInputTokens  / 1000).toFixed(1)}K`, 'this month')}
+                                                        {statBox('Output Tokens',    `${(g.monthOutputTokens / 1000).toFixed(1)}K`, 'this month')}
+                                                    </div>
+                                                    <p className="text-[9px] text-slate-300 font-bold">Updated {new Date(g.fetchedAt).toLocaleTimeString()}</p>
+                                                </div>
+                                            );
+                                        })()
+                                )}
+
+                                {/* SerpAPI */}
+                                {usageCardShell('SerpAPI', 'Search Intelligence', 'Search', 'bg-emerald-500', usageLoading.serpapi, () => loadUsage(['serpapi']),
+                                    !usageData.serpapi
+                                        ? <p className="text-xs text-slate-400 italic">Click Refresh to load.</p>
+                                        : !usageData.serpapi.ok
+                                        ? <p className="text-xs text-red-400 font-bold">{usageData.serpapi.error}</p>
+                                        : (() => {
+                                            const s = usageData.serpapi;
+                                            const used  = s.thisMonthUsage   || 0;
+                                            const total = s.searchesPerMonth || 0;
+                                            return (
+                                                <div className="space-y-4">
+                                                    {total > 0 && progressBar(used, total, 'Monthly Searches')}
+                                                    <div className="grid grid-cols-2 gap-3">
+                                                        {statBox('Plan',            s.plan || '—')}
+                                                        {statBox('Searches Left',   (s.searchesLeft || 0).toLocaleString(), 'this billing cycle')}
+                                                        {statBox('Used This Month', used.toLocaleString())}
+                                                        {statBox('Monthly Limit',   total > 0 ? total.toLocaleString() : '—')}
+                                                    </div>
+                                                    <p className="text-[9px] text-slate-300 font-bold">Updated {new Date(s.fetchedAt).toLocaleTimeString()}</p>
+                                                </div>
+                                            );
+                                        })()
+                                )}
+
+                                {/* Cloudinary */}
+                                {usageCardShell('Cloudinary', 'Image Storage', 'Image', 'bg-purple-500', usageLoading.cloudinary, () => loadUsage(['cloudinary']),
+                                    !usageData.cloudinary
+                                        ? <p className="text-xs text-slate-400 italic">Click Refresh to load.</p>
+                                        : !usageData.cloudinary.ok
+                                        ? <p className="text-xs text-red-400 font-bold">{usageData.cloudinary.error}</p>
+                                        : (() => {
+                                            const c = usageData.cloudinary;
+                                            const storageMB  = (c.storageUsed    / 1024 / 1024).toFixed(0);
+                                            const storageMax = (c.storageLimit   / 1024 / 1024).toFixed(0);
+                                            const bwMB       = (c.bandwidthUsed  / 1024 / 1024).toFixed(0);
+                                            const bwMax      = (c.bandwidthLimit / 1024 / 1024).toFixed(0);
+                                            return (
+                                                <div className="space-y-4">
+                                                    {progressBar(c.storageUsed, c.storageLimit, 'Storage')}
+                                                    {progressBar(c.bandwidthUsed, c.bandwidthLimit, 'Bandwidth')}
+                                                    <div className="grid grid-cols-2 gap-3">
+                                                        {statBox('Plan',      c.plan || '—')}
+                                                        {statBox('Assets',    (c.resources || 0).toLocaleString(), 'total images')}
+                                                        {statBox('Storage',   `${storageMB} MB`, `of ${storageMax} MB`)}
+                                                        {statBox('Bandwidth', `${bwMB} MB`,      `of ${bwMax} MB`)}
+                                                    </div>
+                                                    <p className="text-[9px] text-slate-300 font-bold">Updated {new Date(c.fetchedAt).toLocaleTimeString()}</p>
+                                                </div>
+                                            );
+                                        })()
+                                )}
+
+                                {/* Server */}
+                                {usageCardShell('Railway Server', 'Node.js Process', 'Server', 'bg-slate-600', usageLoading.server, () => loadUsage(['server']),
+                                    !usageData.server
+                                        ? <p className="text-xs text-slate-400 italic">Click Refresh to load.</p>
+                                        : !usageData.server.ok
+                                        ? <p className="text-xs text-red-400 font-bold">{usageData.server.error}</p>
+                                        : (() => {
+                                            const sv = usageData.server;
+                                            const upH = Math.floor(sv.uptimeSeconds / 3600);
+                                            const upM = Math.floor((sv.uptimeSeconds % 3600) / 60);
+                                            return (
+                                                <div className="space-y-4">
+                                                    <div className="grid grid-cols-2 gap-3">
+                                                        {statBox('Uptime',      `${upH}h ${upM}m`)}
+                                                        {statBox('Node',        sv.nodeVersion)}
+                                                        {statBox('Heap Used',   `${sv.heapUsedMB} MB`, `of ${sv.heapTotalMB} MB`)}
+                                                        {statBox('RSS Memory',  `${sv.rssMB} MB`)}
+                                                    </div>
+                                                    <p className="text-[9px] text-slate-300 font-bold">Updated {new Date(sv.fetchedAt).toLocaleTimeString()}</p>
+                                                </div>
+                                            );
+                                        })()
+                                )}
                             </div>
-                        </div>
-                    )}
-                </section>
-            );
+                        )}
+                    </section>
+                );
+            };
 
             const renderProcessTab = () => (
                 <section className="space-y-6">
@@ -4885,6 +5068,11 @@ www.scout-recon.com`
                                 <button onClick={() => setActiveTab('settings')} className={"w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all " + (activeTab === 'settings' ? "bg-slate-800 text-white shadow-md" : "text-slate-500 hover:bg-slate-50")}>
                                     <Icon name="Settings" size={15}/> Settings
                                 </button>
+                                {user?.email === OWNER_EMAIL && (
+                                    <button onClick={() => setActiveTab('admin')} className={"w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all " + (activeTab === 'admin' ? "bg-violet-600 text-white shadow-md" : "text-slate-500 hover:bg-slate-50")}>
+                                        <Icon name="ShieldCheck" size={15}/> Admin
+                                    </button>
+                                )}
                                 <div className="pt-4 border-t border-slate-100 mt-4">
                                     <button onClick={() => setShowScanner(true)} className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest text-emerald-600 hover:bg-emerald-50 transition-all">
                                         <Icon name="ScanLine" size={15}/> Scan Barcode
@@ -4914,15 +5102,15 @@ www.scout-recon.com`
                         <div className="panel-center">
                             <div className="px-8 py-6 border-b border-slate-200 bg-white flex items-center justify-between sticky top-0 z-10">
                                 <div>
-                                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">{activeTab === 'process' ? 'Listing Processor' : activeTab === 'settings' ? 'Account Configuration' : activeTab === 'targets' ? 'Sourcing Targets' : 'Inventory'}</p>
-                                    <h2 className="text-base font-black text-slate-800 uppercase tracking-tight">{activeTab === 'process' ? 'Generate Ads' : activeTab === 'settings' ? 'Settings' : activeTab === 'targets' ? targets.length + ' Watching' : listings.length + ' Drafts Ready'}</h2>
+                                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">{activeTab === 'process' ? 'Listing Processor' : activeTab === 'settings' ? 'Account Configuration' : activeTab === 'targets' ? 'Sourcing Targets' : activeTab === 'admin' ? 'Owner Only' : 'Inventory'}</p>
+                                    <h2 className="text-base font-black text-slate-800 uppercase tracking-tight">{activeTab === 'process' ? 'Generate Ads' : activeTab === 'settings' ? 'Settings' : activeTab === 'targets' ? targets.length + ' Watching' : activeTab === 'admin' ? 'Admin Panel' : listings.length + ' Drafts Ready'}</h2>
                                 </div>
                                 <button onClick={() => setShowScanner(true)} className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-400 transition-all active:scale-95 shadow-md shadow-emerald-100">
                                     <Icon name="ScanLine" size={14}/> Scan
                                 </button>
                             </div>
                             <div className="p-8">
-                                {activeTab === 'process' ? renderProcessTab() : activeTab === 'settings' ? renderSettingsTab() : activeTab === 'targets' ? renderTargetsTab() : renderListingsTab()}
+                                {activeTab === 'process' ? renderProcessTab() : activeTab === 'settings' ? renderSettingsTab() : activeTab === 'targets' ? renderTargetsTab() : activeTab === 'admin' ? renderAdminTab() : renderListingsTab()}
                             </div>
                             <footer className="py-6 text-center text-[9px] font-black uppercase tracking-[0.3em] text-slate-300 border-t">© 2026 BLACK KNIGHT ARMAMENT</footer>
                         </div>
