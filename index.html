@@ -2971,7 +2971,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     }));
 
                     images.forEach(img => URL.revokeObjectURL(img.url));
-                    setImages([]); setActiveTab('listings'); showToast(`${total} Ad${total !== 1 ? 's' : ''} Generated.`);
+                    setImages([]); setInventoryFolder('drafts'); setActiveTab('listings'); showToast(`${total} Ad${total !== 1 ? 's' : ''} Generated.`);
                 } catch (e) { showToast(e.message || 'Processing failed — check console.', 'error'); console.error('[processImages]', e); } finally { setIsProcessing(false); setStatus(""); }
             };
 
@@ -3419,6 +3419,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     runPriceResearch({ id: newDocRef.id, ...aiData, conditionId: batchCondition });
 
                     setBarcodeListingData(null);
+                    setInventoryFolder('drafts');
                     setActiveTab('listings');
                     showToast('Barcode listing generated successfully.');
                 } catch(e) { setErrorMsg('Barcode listing failed: ' + e.message); }
