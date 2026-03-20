@@ -336,7 +336,7 @@ app.get('/auth/ebay', (req, res) => {
 
 app.get('/auth/ebay/callback', async (req, res) => {
     const { code, state, error } = req.query;
-    if (error) return res.redirect(`/?ebay_error=${encodeURIComponent(error)}`);
+    if (error) return res.redirect(`/?ebay_error=${encodeURIComponent(error)}&tab=settings`);
     if (!code || !state) return res.status(400).send('Invalid callback');
     let uid;
     try { const d = JSON.parse(Buffer.from(state, 'base64').toString()); uid = d.uid; if (Date.now() - d.ts > 600_000) throw new Error('Expired'); }
@@ -353,8 +353,8 @@ app.get('/auth/ebay/callback', async (req, res) => {
         await adminFirestore.doc(`users/${uid}/ebay/tokens`).set({ accessToken: td.access_token, refreshToken: td.refresh_token, expiresAt: Date.now() + td.expires_in * 1000, scope: td.scope || EBAY_SCOPES, connectedAt: Date.now(), env: EBAY_ENV });
         console.log(`[eBay] User ${uid} connected (${EBAY_ENV})`);
 
-        res.redirect('/?ebay_connected=1');
-    } catch(e) { console.error('[eBay] Callback error:', e.message); res.redirect(`/?ebay_error=${encodeURIComponent(e.message)}`); }
+        res.redirect('/?ebay_connected=1&tab=settings');
+    } catch(e) { console.error('[eBay] Callback error:', e.message); res.redirect(`/?ebay_error=${encodeURIComponent(e.message)}&tab=settings`); }
 });
 
 app.post('/api/ebay/connect', requireUser, jsonSmall, async (req, res) => {

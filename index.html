@@ -2109,12 +2109,13 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             useEffect(() => {
                 if (!user) return;
                 const params = new URLSearchParams(window.location.search);
+                if (params.get('tab')) setActiveTab(params.get('tab'));
                 if (params.get('ebay_connected') === '1') {
                     window.history.replaceState({}, '', '/');
-                    showToast('eBay account connected!');
+                    showToast('eBay account connected!', 'success');
                 }
                 if (params.get('ebay_error')) {
-                    showToast('eBay connection failed: ' + params.get('ebay_error'));
+                    showToast('eBay connection failed: ' + params.get('ebay_error'), 'error');
                     window.history.replaceState({}, '', '/');
                 }
                 user.getIdToken().then(async tok => {
