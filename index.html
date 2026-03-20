@@ -2003,24 +2003,23 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         dbRef.current = firebase.firestore();
                         firebase.auth().onAuthStateChanged(async u => {
                             if (!u) { setUser(null); setAuthLoading(false); return; }
-                            // Owner always has access
-                            if (u.email === OWNER_EMAIL) {
-                                setUser(u); setAuthLoading(false); return;
-                            }
-                            // Check whitelist: system/access/approved/{email}
+                            // Check access via server — Admin SDK bypasses Firestore rules
                             try {
-                                const snap = await dbRef.current
-                                    .collection('system/access/approved')
-                                    .doc(u.email.toLowerCase())
-                                    .get();
-                                if (snap.exists) {
+                                const idToken = await u.getIdToken();
+                                const res     = await fetch('/api/check-access', {
+                                    headers: { 'Authorization': `Bearer ${idToken}` }
+                                });
+                                const data = await res.json();
+                                if (data.allowed) {
                                     setUser(u); setAuthLoading(false);
                                 } else {
+                                    console.warn('[Auth] Access denied:', data.reason);
                                     firebase.auth().signOut();
                                     setAccessDenied(true);
                                     setAuthLoading(false);
                                 }
                             } catch(e) {
+                                console.error('[Auth] Access check failed:', e.message);
                                 firebase.auth().signOut();
                                 setAccessDenied(true);
                                 setAuthLoading(false);

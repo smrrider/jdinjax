@@ -197,6 +197,44 @@ const requireOwner = async (req, res, next) => {
 // ─── API Routes ───────────────────────────────────────────────────────────
 
 /**
+ * ACCESS CHECK ENDPOINT
+ * Called by the frontend after Google sign-in instead of reading Firestore
+ * directly (which requires deployed rules). Uses Admin SDK — bypasses all
+ * Firestore security rules. Returns { allowed: true } for owner or whitelisted
+ * users, { allowed: false, reason } otherwise.
+ */
+app.get('/api/check-access', async (req, res) => {
+    if (!adminAuth || !adminFirestore) {
+        // Admin SDK not configured — fall back to allow owner only via token email
+        return res.status(503).json({ allowed: false, reason: 'Admin SDK not configured.' });
+    }
+    const header  = req.headers['authorization'] || '';
+    const idToken = header.startsWith('Bearer ') ? header.slice(7) : null;
+    if (!idToken) return res.status(401).json({ allowed: false, reason: 'No token.' });
+    try {
+        const decoded = await adminAuth.verifyIdToken(idToken);
+        const email   = (decoded.email || '').toLowerCase();
+        if (!email) return res.json({ allowed: false, reason: 'No email in token.' });
+        // Owner always has access
+        if (email === OWNER_EMAIL.toLowerCase()) return res.json({ allowed: true, owner: true });
+        // Check Firestore whitelist via Admin SDK (bypasses client security rules)
+        const snap = await adminFirestore
+            .collection('system/access/approved')
+            .doc(email)
+            .get();
+        if (snap.exists) {
+            console.log(`[Access] Granted: ${email}`);
+            return res.json({ allowed: true });
+        }
+        console.log(`[Access] Denied (not whitelisted): ${email}`);
+        return res.json({ allowed: false, reason: 'Not approved.' });
+    } catch(e) {
+        console.error('[Access] Check failed:', e.message);
+        return res.status(401).json({ allowed: false, reason: 'Invalid token.' });
+    }
+});
+
+/**
  * CONFIG ENDPOINT
  * Safely shares PUBLIC keys with the frontend from Railway variables.
  */
