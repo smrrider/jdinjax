@@ -1034,7 +1034,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         try {
                             const timestamp = Math.round(Date.now() / 1000);
                             const signRes = await fetch(SIGN_API_URL, {
-                                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await user.getIdToken()}` },
                                 body: JSON.stringify({ userId: user.uid, timestamp })
                             });
                             const { signature, folder } = await signRes.json();
@@ -2604,7 +2604,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     // Sign + upload using existing pattern
                     const timestamp = Math.round(Date.now() / 1000);
                     const signRes = await fetch(SIGN_API_URL, {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await user.getIdToken()}` },
                         body: JSON.stringify({ userId: user.uid, timestamp })
                     });
                     const { signature, folder } = await signRes.json();
@@ -2877,7 +2877,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         const timestamp = Math.round(Date.now() / 1000);
                         const signRes = await fetch(SIGN_API_URL, {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
+                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await user.getIdToken()}` },
                             body: JSON.stringify({ userId: user.uid, timestamp })
                         });
                         const { signature, folder } = await signRes.json();
