@@ -1906,6 +1906,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const [isRegistering, setIsRegistering] = useState(false);
 
             const [images, setImages] = useState([]);
+            const [processorKeyword, setProcessorKeyword] = useState('');
             const [listings, setListings] = useState([]);
             const [isProcessing, setIsProcessing] = useState(false);
             const [status, setStatus] = useState("");
@@ -1943,11 +1944,12 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const listingInFlight = useRef(new Set());  // IDs currently being submitted — double-click guard
 
             const dbRef = useRef(null);
+            const dragItemRef = useRef(null);
             const [showScanner,    setShowScanner]    = useState(false);
             const [scanResult,     setScanResult]     = useState(null);  // { upc, ... }
             const [reconPreload,   setReconPreload]   = useState(null);
             const [barcodeListingData, setBarcodeListingData] = useState(null); // { title, image, price, upc }
-            const [activeTab,       setActiveTab]       = useState('process');  // keep single source
+            const [activeTab,       setActiveTab]       = useState(() => { try { return localStorage.getItem('scoutTab') || 'listings'; } catch { return 'listings'; } });
             const [showSettings,    setShowSettings]    = useState(false);
             const [approvedUsers,   setApprovedUsers]   = useState([]);
             const [newUserEmail,    setNewUserEmail]    = useState('');
@@ -1977,6 +1979,10 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 window.addEventListener('resize', onResize);
                 return () => window.removeEventListener('resize', onResize);
             }, []);
+
+            useEffect(() => {
+                try { localStorage.setItem('scoutTab', activeTab); } catch {}
+            }, [activeTab]);
 
             useEffect(() => {
                 const init = async () => {
@@ -2895,7 +2901,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
                                 model: "gemini-2.5-flash",
-                                contents: [{ role: "user", parts: [{ text: "Technical eBay JSON data." }, { inlineData: { mimeType: primaryB64.mimeType, data: primaryB64.data } }] }],
+                                contents: [{ role: "user", parts: [{ text: processorKeyword.trim() ? `Item context: "${processorKeyword.trim()}" — Technical eBay JSON data.` : "Technical eBay JSON data." }, { inlineData: { mimeType: primaryB64.mimeType, data: primaryB64.data } }] }],
                                 systemInstruction: { parts: [{ text: JDINJAX_SYSTEM_PROMPT }] },
                                 generationConfig: { responseMimeType: "application/json", responseSchema: JSON_SCHEMA }
                             })
@@ -4021,6 +4027,23 @@ www.scout-recon.com`
                         </button>
                         <button onClick={nuclearReset} className="px-5 py-2 bg-red-50 text-red-600 rounded-xl text-[9px] font-black border border-red-100 uppercase transition-all hover:bg-red-100 flex items-center gap-2 shadow-sm"><Icon name="Zap" size={12}/> Purge</button>
                     </div>
+                    {/* Keyword hint */}
+                    <div className="flex items-center gap-3 bg-white border border-slate-200 rounded-2xl px-4 py-3 shadow-sm">
+                        <Icon name="Tag" size={14} className="text-blue-400 shrink-0"/>
+                        <input
+                            type="text"
+                            placeholder="Keyword hint (optional) — e.g. Snap-on, vintage Sony, Canon EF lens"
+                            value={processorKeyword}
+                            onChange={e => setProcessorKeyword(e.target.value)}
+                            className="flex-1 text-xs font-bold text-slate-700 placeholder:text-slate-300 bg-transparent focus:outline-none"
+                        />
+                        {processorKeyword && (
+                            <button onClick={() => setProcessorKeyword('')} className="text-slate-300 hover:text-red-400 transition-colors shrink-0">
+                                <Icon name="X" size={12}/>
+                            </button>
+                        )}
+                    </div>
+
                     <div className="bg-white border-2 border-dashed border-slate-300 rounded-[2.5rem] p-12 text-center relative group hover:border-blue-400 transition-all shadow-sm">
                         <input type="file" multiple accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer z-10" onChange={(e) => setImages([...images, ...Array.from(e.target.files).map(file => ({ id: Math.random().toString(36), url: URL.createObjectURL(file), file }))])} />
                         <Icon name="Upload" size={48} className="text-blue-500 mb-4" />
@@ -4030,9 +4053,23 @@ www.scout-recon.com`
                     {images.length > 0 && (
                         <div className="bg-white rounded-[2rem] border border-slate-200 overflow-hidden shadow-sm animate-in slide-in-from-bottom-4">
                             <div className="p-4 grid grid-cols-4 sm:grid-cols-8 gap-3 max-h-64 overflow-y-auto no-scrollbar">
-                                {images.map(img => (
-                                    <div key={img.id} className="aspect-square rounded-xl overflow-hidden border border-slate-100 relative group">
-                                        <img src={img.url} className="w-full h-full object-cover" />
+                                {images.map((img, idx) => (
+                                    <div key={img.id}
+                                        draggable
+                                        onDragStart={() => { dragItemRef.current = img.id; }}
+                                        onDragOver={e => e.preventDefault()}
+                                        onDrop={() => {
+                                            const from = images.findIndex(i => i.id === dragItemRef.current);
+                                            const to   = images.findIndex(i => i.id === img.id);
+                                            if (from === to) return;
+                                            const next = [...images];
+                                            const [moved] = next.splice(from, 1);
+                                            next.splice(to, 0, moved);
+                                            setImages(next);
+                                        }}
+                                        className="aspect-square rounded-xl overflow-hidden border border-slate-100 relative group cursor-grab active:cursor-grabbing select-none">
+                                        <img src={img.url} className="w-full h-full object-cover pointer-events-none" />
+                                        <span className="absolute top-1 left-1 bg-black/60 text-white text-[8px] font-black rounded px-1 py-0.5 leading-none">{idx + 1}</span>
                                         <button onClick={() => { URL.revokeObjectURL(img.url); setImages(images.filter(i => i.id !== img.id)); }} className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"><Icon name="Trash2" size={12}/></button>
                                     </div>
                                 ))}
@@ -4580,7 +4617,7 @@ www.scout-recon.com`
                                                     <div className="flex justify-between text-[9px]">
                                                         <span className="text-slate-500">Low <span className="font-black text-slate-700">${pr.active.low}</span></span>
                                                         <span className="text-slate-500">Mid <span className="font-black text-slate-700">${pr.active.mid}</span></span>
-                                                        <span className="text-slate-500">High <span className="font-black text-slate-700">${pr.active.high}</span></span>
+                                                        <span className="text-slate-500">Ask High <span className="font-black text-slate-700">${pr.active.high}</span></span>
                                                     </div>
                                                 </div>
                                                 <div className={`rounded-xl p-2.5 border ${pr.sold ? 'bg-white/70 border-slate-100' : 'bg-slate-50 border-slate-100 opacity-50'}`}>

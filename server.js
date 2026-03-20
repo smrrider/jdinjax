@@ -738,11 +738,15 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
         // Move It  — 10th pct of sold × 0.97 = fastest turnover price
         // Market   — 50th pct of sold (median transaction price)
         // Hold     — 90th pct of sold = premium but achievable; falls back to active high
-        const strategies = {
-            moveIt: sold ? parseFloat((sold.low  * 0.97).toFixed(2)) : parseFloat((active.low).toFixed(2)),
-            market: sold ? parseFloat((sold.mid).toFixed(2))         : parseFloat((active.mid).toFixed(2)),
-            hold:   sold ? parseFloat((sold.high).toFixed(2))        : parseFloat((active.high).toFixed(2))
-        };
+        // Strategies are only computed when sold data backs them.
+        // Hold = 90th pct of sold. If no sold baseline, return null so the
+        // frontend falls back to the simple estimate view rather than showing
+        // ask-price percentiles as if they were sold-based targets.
+        const strategies = sold ? {
+            moveIt: parseFloat((sold.low  * 0.97).toFixed(2)),
+            market: parseFloat((sold.mid).toFixed(2)),
+            hold:   parseFloat((sold.high).toFixed(2))
+        } : null;
 
         const confidence   = activePrices.length >= 30 ? 'High' : activePrices.length >= 12 ? 'Medium' : 'Low';
         const condLabel    = conditionFilter.includes('1000') ? 'New' : 'Used/Similar';
@@ -753,10 +757,10 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
 
         res.json({
             source:     'ebay_browse',
-            // legacy fields kept for backward compat
-            low:        active.low,
-            mid:        active.mid,
-            high:       active.high,
+            // legacy fields kept for backward compat — prefer sold percentiles when available
+            low:        sold ? sold.low  : active.low,
+            mid:        sold ? sold.mid  : active.mid,
+            high:       sold ? sold.high : active.high,
             count:      active.count,
             confidence,
             basis,
