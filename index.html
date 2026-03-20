@@ -2525,6 +2525,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const [usageData,      setUsageData]      = useState({});        // { gemini, serpapi, cloudinary, server }
             const [usageLoading,   setUsageLoading]   = useState({});        // { gemini: bool, ... }
             const [bgRemoving,      setBgRemoving]      = useState(new Set()); // listing IDs currently processing bg removal
+            const [deleteConfirmId, setDeleteConfirmId] = useState(null);      // listing ID pending delete confirmation
 
             const cloudinaryPreview = async () => {
                 setPurgeLoading(true); setPurgePreview(null); setPurgeResult(null);
@@ -4355,10 +4356,22 @@ www.scout-recon.com`
                                         ? <button onClick={() => listOnEbay(l)} title="List on eBay" className="p-2 rounded-xl hover:bg-emerald-50 hover:text-emerald-600 text-slate-300 transition-colors"><Icon name="Tag" size={13}/></button>
                                         : l.ebayListingId && <a href={`https://www.ebay.com/itm/${l.ebayListingId}`} target="_blank" rel="noreferrer" title="View on eBay" className="p-2 rounded-xl hover:bg-emerald-50 hover:text-emerald-600 text-slate-300 transition-colors"><Icon name="ExternalLink" size={13}/></a>
                                     }
-                                    <button onClick={() => dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).delete()} title="Delete"
-                                        className="p-2 rounded-xl hover:bg-red-50 hover:text-red-500 text-slate-300 transition-colors">
-                                        <Icon name="Trash2" size={13}/>
-                                    </button>
+                                    {deleteConfirmId === l.id
+                                        ? <span className="flex items-center gap-1">
+                                            <button onClick={() => { dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).delete(); setDeleteConfirmId(null); }}
+                                                className="px-2 py-1 rounded-lg bg-red-500 text-white text-[9px] font-black uppercase tracking-widest hover:bg-red-600 transition-colors">
+                                                Confirm
+                                            </button>
+                                            <button onClick={() => setDeleteConfirmId(null)}
+                                                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors">
+                                                <Icon name="X" size={11}/>
+                                            </button>
+                                          </span>
+                                        : <button onClick={() => setDeleteConfirmId(l.id)} title="Delete"
+                                            className="p-2 rounded-xl hover:bg-red-50 hover:text-red-500 text-slate-300 transition-colors">
+                                            <Icon name="Trash2" size={13}/>
+                                          </button>
+                                    }
                                 </div>
                             </div>
                         ) : (
@@ -5126,11 +5139,23 @@ www.scout-recon.com`
                                                         );
                                                     })()}
                                                     {/* Delete — both tabs */}
-                                                    <button onClick={() => dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).delete()}
-                                                        className="p-3 text-red-500 hover:bg-red-50 rounded-xl transition-all active:scale-90"
-                                                        title={inventoryFolder === 'submitted' ? 'Remove from inventory (does not end eBay listing)' : 'Delete draft'}>
-                                                        <Icon name="Trash2" size={22}/>
-                                                    </button>
+                                                    {deleteConfirmId === l.id
+                                                        ? <span className="flex items-center gap-1">
+                                                            <button onClick={() => { dbRef.current.doc(`${getListingsPath(user.uid)}/${l.id}`).delete(); setDeleteConfirmId(null); }}
+                                                                className="px-3 py-2 rounded-xl bg-red-500 text-white text-[9px] font-black uppercase tracking-widest hover:bg-red-600 transition-colors active:scale-90">
+                                                                Confirm
+                                                            </button>
+                                                            <button onClick={() => setDeleteConfirmId(null)}
+                                                                className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors">
+                                                                <Icon name="X" size={16}/>
+                                                            </button>
+                                                          </span>
+                                                        : <button onClick={() => setDeleteConfirmId(l.id)}
+                                                            className="p-3 text-red-500 hover:bg-red-50 rounded-xl transition-all active:scale-90"
+                                                            title={inventoryFolder === 'submitted' ? 'Remove from inventory (does not end eBay listing)' : 'Delete draft'}>
+                                                            <Icon name="Trash2" size={22}/>
+                                                          </button>
+                                                    }
                                                 </div>
                                             </div>
                                         </div>
