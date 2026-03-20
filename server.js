@@ -2088,10 +2088,10 @@ app.get('/privacy', (req, res) => {
 </head>
 <body>
 <h1>Privacy Policy</h1>
-<p class="meta">Scout Recon &mdash; Black Knight Armament &mdash; Effective: January 1, 2025 &mdash; Last updated: March 2026</p>
+<p class="meta">Scout Recon &mdash; Effective: January 1, 2025 &mdash; Last updated: March 2026</p>
 
 <h2>Overview</h2>
-<p>Scout Recon is a private, invitation-only eBay resale management tool operated by Black Knight Armament. This policy describes what data we collect, how it is used, and how it is protected.</p>
+<p>Scout Recon is a private, invitation-only eBay resale management tool. This policy describes what data we collect, how it is used, and how it is protected.</p>
 
 <h2>Data We Collect</h2>
 <ul>
@@ -2132,9 +2132,9 @@ app.get('/privacy', (req, res) => {
 <p>All data is transmitted over HTTPS. Firestore access is restricted by security rules that enforce per-user data isolation — no user can access another user's data. The application is access-controlled by an invitation-only whitelist.</p>
 
 <h2>Contact</h2>
-<p>For privacy questions or data deletion requests, contact: <strong>blackknightarmament@proton.me</strong></p>
+<p>For privacy questions or data deletion requests, contact: <strong>admin@scout-recon.com</strong></p>
 
-<footer>Scout Recon &mdash; Black Knight Armament &mdash; &copy; 2026</footer>
+<footer>Scout Recon &mdash; &copy; 2026</footer>
 </body>
 </html>`);
 });
