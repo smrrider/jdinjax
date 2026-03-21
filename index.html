@@ -1567,6 +1567,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
 
                                                 {/* Sell-Through */}
                                                 {arMode === 'fo' ? (
+                                                    <>
                                                     <div className="bg-white border border-slate-200 rounded-2xl px-4 py-3 flex items-center gap-4">
                                                         <div className="flex-1">
                                                             <div className="flex justify-between mb-1">
@@ -1585,6 +1586,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                                                         <span className="text-[8px] font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-lg uppercase">{r.velocityLabel}</span>
                                                     </div>
                                                     <p className="text-[8px] text-slate-300 font-bold mt-1">AI velocity estimate · not derived from eBay data</p>
+                                                    </>
                                                 ) : (
                                                 <div className="bg-white border border-slate-200 rounded-2xl p-5">
                                                     <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-4">Est. Market Velocity</p>
