@@ -921,9 +921,18 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
         const listingFormat = (req.body.format === 'AUCTION') ? 'AUCTION' : 'FIXED_PRICE';
         const effectiveSku  = sku.replace(/-(FP|AUC)$/, '') + (listingFormat === 'AUCTION' ? '-AUC' : '-FP');
 
+        // ── Prohibited category gate ──────────────────────────────────────────
+        // eBay outright prohibits these categories. Block before any API call.
+        const PROHIBITED_CATEGORIES = new Set(['2976', '26460', '177893', '3076', '61573']);
+        if (categoryId && PROHIBITED_CATEGORIES.has(String(categoryId))) {
+            console.warn(`[eBay/list] Blocked prohibited category ${categoryId} for SKU ${sku}`);
+            return res.status(400).json({ error: `Category ${categoryId} is prohibited on eBay and cannot be listed.` });
+        }
+
         // ── Sanitise payload before sending to eBay ──────────────────────────
         const safeTitle = (title || '').trim().slice(0, 80);
         if (!safeTitle) return res.status(400).json({ error: 'Listing title is empty' });
+        console.log(`[eBay/list] Listing attempt — SKU: ${sku} | category: ${categoryId} | condition: ${conditionId} | user: ${req.uid}`);
 
         // Strip aspects with missing/empty values — eBay rejects empty arrays
         const safeAspects = {};
