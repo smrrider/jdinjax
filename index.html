@@ -1878,6 +1878,10 @@ Return ONLY valid JSON — no markdown, no preamble.`;
             });
             const [settingsSaving,  setSettingsSaving]  = useState(false);
             const [settingsSaved,   setSettingsSaved]   = useState(false);
+            const [settingsSubTab,  setSettingsSubTab]  = useState('account'); // 'account' | 'templates'
+            const [templates,       setTemplates]       = useState([]);
+            const [editingTemplate, setEditingTemplate] = useState(null); // null=list, obj=editor
+            const [activeProcessTemplate, setActiveProcessTemplate] = useState(''); // template _id or ''
             const [ebayConn,        setEbayConn]        = useState(null);   // null | { connected, env, connectedAt }
             const [ebayPolicies,    setEbayPolicies]    = useState(null);   // null | { fulfillment, payment, returns }
             const [ebayPoliciesSyncing, setEbayPoliciesSyncing] = useState(false);
@@ -1983,6 +1987,17 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                 const unsub = dbRef.current.collection(path).orderBy('savedAt', 'desc').onSnapshot(
                     snap => setTargets(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
                     err => console.warn('[Targets] Load failed:', err.message)
+                );
+                return () => unsub();
+            }, [user]);
+
+            // Load listing templates
+            useEffect(() => {
+                if (!user || !dbRef.current) return;
+                const path = `artifacts/jdinjax-console/users/${user.uid}/listingTemplates`;
+                const unsub = dbRef.current.collection(path).orderBy('createdAt', 'desc').onSnapshot(
+                    snap => setTemplates(snap.docs.map(d => ({ _id: d.id, ...d.data() }))),
+                    err => console.warn('[Templates] Load failed:', err.message)
                 );
                 return () => unsub();
             }, [user]);
@@ -2360,6 +2375,61 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                     showToast('Settings saved.');
                 } catch(e) { showToast('Save failed: ' + e.message); }
                 finally { setSettingsSaving(false); }
+            };
+
+            // ── Listing Templates ─────────────────────────────────────────────────────
+            const BLANK_TEMPLATE = () => ({
+                name: '',
+                category:        { enabled: false, categoryId: '', categoryPath: '' },
+                condition:        { enabled: false, conditionId: '3000' },
+                shippingProfile:  { enabled: false, value: '' },
+                paymentProfile:   { enabled: false, value: '' },
+                returnProfile:    { enabled: false, value: '' },
+            });
+
+            const saveTemplate = async (tpl) => {
+                if (!user || !dbRef.current) return;
+                const path = `artifacts/jdinjax-console/users/${user.uid}/listingTemplates`;
+                const { _id, ...data } = tpl;
+                if (_id) {
+                    await dbRef.current.doc(`${path}/${_id}`).update({ ...data, updatedAt: Date.now() });
+                } else {
+                    await dbRef.current.collection(path).add({ ...data, createdAt: Date.now(), updatedAt: Date.now() });
+                }
+                setEditingTemplate(null);
+                showToast(_id ? 'Template updated.' : 'Template saved.');
+            };
+
+            const deleteTemplate = async (id) => {
+                if (!user || !dbRef.current) return;
+                await dbRef.current.doc(`artifacts/jdinjax-console/users/${user.uid}/listingTemplates/${id}`).delete();
+                showToast('Template deleted.');
+            };
+
+            // Returns a plain object of fields to overwrite on a listing doc.
+            // Only includes fields that are enabled on the template.
+            const templateOverride = (templateId) => {
+                const tpl = templates.find(t => t._id === templateId);
+                if (!tpl) return {};
+                const upd = {};
+                if (tpl.category?.enabled && tpl.category.categoryId) {
+                    upd.categoryId = tpl.category.categoryId;
+                    upd.categoryPath = tpl.category.categoryPath || '';
+                    upd.categorySource = 'Template';
+                }
+                if (tpl.condition?.enabled && tpl.condition.conditionId) upd.conditionId = tpl.condition.conditionId;
+                if (tpl.shippingProfile?.enabled && tpl.shippingProfile.value) upd.shippingProfile = tpl.shippingProfile.value;
+                if (tpl.paymentProfile?.enabled  && tpl.paymentProfile.value)  upd.paymentProfile  = tpl.paymentProfile.value;
+                if (tpl.returnProfile?.enabled   && tpl.returnProfile.value)   upd.returnProfile   = tpl.returnProfile.value;
+                return upd;
+            };
+
+            // Apply a template to an existing listing doc — overwrites enabled fields only.
+            const applyTemplate = async (templateId, listingId) => {
+                const upd = templateOverride(templateId);
+                if (Object.keys(upd).length === 0) { showToast('No fields enabled on this template.'); return; }
+                await dbRef.current.doc(`${getListingsPath(user.uid)}/${listingId}`).update(upd);
+                showToast('Template applied.');
             };
 
             // ── Admin fetch helper — attaches owner ID token to every admin API call ──
@@ -2837,38 +2907,42 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                         const aiData = JSON.parse(cleanJson(result.candidates[0].content.parts[0].text));
 
                         aiData.categorySource = 'AI Draft';
-                        const currentCondition = EBAY_CONDITIONS.find(c => c.id === batchCondition)?.label || 'Used';
-                        const finalConditionId = sanitizeConditionId(batchCondition, aiData.categoryId);
+                        const tplOverride = templateOverride(activeProcessTemplate);
+                        const effectiveConditionId = tplOverride.conditionId || sanitizeConditionId(batchCondition, aiData.categoryId);
+                        const currentCondition = EBAY_CONDITIONS.find(c => c.id === (tplOverride.conditionId || batchCondition))?.label || 'Used';
                         const listingPayload = {
                             ...aiData,
+                            ...tplOverride,
                             images: urls,
-                            conditionId: finalConditionId,
+                            conditionId: effectiveConditionId,
                             timestamp: Date.now(),
                             sku: `BKA-${Date.now()}`,
                             markdownDescription: buildDescription(aiData, currentCondition, settings.adFooter)
                         };
                         const docRef = await dbRef.current.collection(listingsPath).add(listingPayload);
 
-                        // Background: refine category first, then auto price research.
-                        // Sequencing matters — eBay Browse returns far better results when
-                        // it has the correct leaf category rather than the initial Gemini guess.
+                        // Background: refine category first (skip if template locks it), then auto price research.
                         (async () => {
-                            let resolvedCategoryId = aiData.categoryId;
+                            let resolvedCategoryId = tplOverride.categoryId || aiData.categoryId;
                             try {
-                                const catRes = await fetch(CATEGORY_API_URL, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ title: aiData.title, keyFeatures: aiData.keyFeatures || [], description: aiData.markdownDescription || '' })
-                                });
-                                if (catRes.ok) {
-                                    const catData = await catRes.json();
-                                    resolvedCategoryId = catData.categoryId;
-                                    await docRef.update({
-                                        categoryId:     catData.categoryId,
-                                        categoryPath:   catData.categoryPath,
-                                        categorySource: catData.confidence === 'High' ? 'AI Verified' : 'AI Predicted',
-                                        conditionId:    sanitizeConditionId(batchCondition, catData.categoryId)
+                                if (tplOverride.categoryId) {
+                                    // Category locked by template — no AI resolve needed
+                                } else {
+                                    const catRes = await fetch(CATEGORY_API_URL, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ title: aiData.title, keyFeatures: aiData.keyFeatures || [], description: aiData.markdownDescription || '' })
                                     });
+                                    if (catRes.ok) {
+                                        const catData = await catRes.json();
+                                        resolvedCategoryId = catData.categoryId;
+                                        await docRef.update({
+                                            categoryId:     catData.categoryId,
+                                            categoryPath:   catData.categoryPath,
+                                            categorySource: catData.confidence === 'High' ? 'AI Verified' : 'AI Predicted',
+                                            conditionId:    sanitizeConditionId(batchCondition, catData.categoryId)
+                                        });
+                                    }
                                 }
                             } catch(e) { console.warn('Category resolve failed:', e.message); }
                             // Auto price research fires after category is resolved.
@@ -2965,21 +3039,25 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                 listingInFlight.current.add(listing.id);
 
                 // Guard: policies must be configured
-                if (!ebayPolicies || !settings.shippingProfile || !settings.paymentProfile || !settings.returnProfile) {
+                // Listing-level overrides (from templates) take precedence over account settings
+                const effectiveShipping = listing.shippingProfile || settings.shippingProfile;
+                const effectivePayment  = listing.paymentProfile  || settings.paymentProfile;
+                const effectiveReturn   = listing.returnProfile   || settings.returnProfile;
+                if (!ebayPolicies || !effectiveShipping || !effectivePayment || !effectiveReturn) {
                     showToast('Configure eBay policies in Settings first', 'error');
                     return;
                 }
 
-                // Resolve policy IDs from names stored in settings
-                const fulfillmentPolicy = ebayPolicies.fulfillment?.find(p => p.name === settings.shippingProfile);
-                const paymentPolicy     = ebayPolicies.payment?.find(p => p.name === settings.paymentProfile);
-                const returnPolicy      = ebayPolicies.returns?.find(p => p.name === settings.returnProfile);
+                // Resolve policy IDs from names (listing-level override falls back to account settings)
+                const fulfillmentPolicy = ebayPolicies.fulfillment?.find(p => p.name === effectiveShipping);
+                const paymentPolicy     = ebayPolicies.payment?.find(p => p.name === effectivePayment);
+                const returnPolicy      = ebayPolicies.returns?.find(p => p.name === effectiveReturn);
 
                 if (!fulfillmentPolicy || !paymentPolicy || !returnPolicy) {
                     const missing = [
-                        !fulfillmentPolicy && settings.shippingProfile,
-                        !paymentPolicy     && settings.paymentProfile,
-                        !returnPolicy      && settings.returnProfile
+                        !fulfillmentPolicy && effectiveShipping,
+                        !paymentPolicy     && effectivePayment,
+                        !returnPolicy      && effectiveReturn
                     ].filter(Boolean).join(', ');
                     showToast(`eBay policy not found: ${missing}`, 'error');
                     return;
@@ -3290,27 +3368,36 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                     const result = await res.json();
                     const aiData = JSON.parse(cleanJson(result.candidates[0].content.parts[0].text));
 
-                    // Category resolve
+                    // Category resolve (skip if template locks category)
+                    const bcTplOverride = templateOverride(activeProcessTemplate);
                     let finalSource = 'UNMAPPED';
-                    try {
-                        const catRes = await fetch(CATEGORY_API_URL, {
-                            method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ title: aiData.title, keyFeatures: aiData.keyFeatures || [], description: aiData.markdownDescription || '' })
-                        });
-                        if (catRes.ok) {
-                            const catData = await catRes.json();
-                            aiData.categoryId = catData.categoryId;
-                            aiData.categoryPath = catData.categoryPath;
-                            finalSource = catData.confidence === 'High' ? 'AI Verified' : 'AI Predicted';
-                        }
-                    } catch(e) { console.warn('[Barcode Listing] Category resolve failed:', e.message); }
+                    if (bcTplOverride.categoryId) {
+                        aiData.categoryId = bcTplOverride.categoryId;
+                        aiData.categoryPath = bcTplOverride.categoryPath || '';
+                        finalSource = 'Template';
+                    } else {
+                        try {
+                            const catRes = await fetch(CATEGORY_API_URL, {
+                                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ title: aiData.title, keyFeatures: aiData.keyFeatures || [], description: aiData.markdownDescription || '' })
+                            });
+                            if (catRes.ok) {
+                                const catData = await catRes.json();
+                                aiData.categoryId = catData.categoryId;
+                                aiData.categoryPath = catData.categoryPath;
+                                finalSource = catData.confidence === 'High' ? 'AI Verified' : 'AI Predicted';
+                            }
+                        } catch(e) { console.warn('[Barcode Listing] Category resolve failed:', e.message); }
+                    }
 
                     aiData.categorySource = finalSource;
-                    const currentCondition = EBAY_CONDITIONS.find(ec => ec.id === batchCondition)?.label || 'Used';
+                    const bcConditionId = bcTplOverride.conditionId || batchCondition;
+                    const currentCondition = EBAY_CONDITIONS.find(ec => ec.id === bcConditionId)?.label || 'Used';
                     const newDocRef = await dbRef.current.collection(listingsPath).add({
                         ...aiData,
+                        ...bcTplOverride,
                         images: imageUrls,
-                        conditionId: batchCondition,
+                        conditionId: bcConditionId,
                         timestamp: Date.now(),
                         sku: 'BKA-' + Date.now(),
                         markdownDescription: buildDescription(aiData, currentCondition, settings.adFooter),
@@ -3333,6 +3420,164 @@ Return ONLY valid JSON — no markdown, no preamble.`;
 
             const renderSettingsTab = () => (
                 <section className="space-y-6 max-w-xl">
+
+                    {/* ── Sub-tab nav ───────────────────────────────────────────────── */}
+                    <div className="flex gap-1 p-1 bg-slate-100 rounded-2xl w-fit">
+                        {[
+                            { key: 'account',   label: 'Account',   icon: 'Settings' },
+                            { key: 'templates', label: 'Templates', icon: 'LayoutTemplate' },
+                        ].map(({ key, label, icon }) => (
+                            <button key={key} onClick={() => { setSettingsSubTab(key); setEditingTemplate(null); }}
+                                className={`px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${settingsSubTab === key ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
+                                <Icon name={icon} size={12}/> {label}
+                                {key === 'templates' && templates.length > 0 && <span className="bg-blue-600 text-white text-[8px] font-black rounded-full w-4 h-4 flex items-center justify-center">{templates.length}</span>}
+                            </button>
+                        ))}
+                    </div>
+
+                    {settingsSubTab === 'templates' ? (
+                    /* ── Templates sub-tab ────────────────────────────────────────── */
+                    <div className="space-y-4">
+                        {editingTemplate ? (
+                        /* Template editor */
+                        <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden">
+                            <div className="px-8 py-5 border-b border-slate-100 flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                    <Icon name="LayoutTemplate" size={16} className="text-blue-600"/>
+                                    <div>
+                                        <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Listing Template</p>
+                                        <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight">{editingTemplate._id ? 'Edit Template' : 'New Template'}</h3>
+                                    </div>
+                                </div>
+                                <button onClick={() => setEditingTemplate(null)} className="text-slate-400 hover:text-slate-600"><Icon name="X" size={16}/></button>
+                            </div>
+                            <div className="p-8 space-y-5">
+                                {/* Name */}
+                                <div>
+                                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 flex items-center gap-2"><Icon name="Tag" size={11}/> Template Name</label>
+                                    <input type="text" value={editingTemplate.name} onChange={e => setEditingTemplate(t => ({ ...t, name: e.target.value }))}
+                                        placeholder="e.g. Vintage Electronics"
+                                        className="w-full px-4 py-3 rounded-2xl border border-slate-200 text-sm font-bold text-slate-700 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-50 bg-slate-50 placeholder-slate-300"/>
+                                </div>
+
+                                {/* Toggle rows */}
+                                {[
+                                    { key: 'condition',       label: 'Condition',       icon: 'Star',       type: 'condition' },
+                                    { key: 'category',        label: 'Category',        icon: 'Tag',        type: 'category',  hint: 'Overrides AI — leave off to let Gemini decide' },
+                                    { key: 'shippingProfile', label: 'Shipping Policy', icon: 'Truck',      type: 'policy', policyKey: 'fulfillment' },
+                                    { key: 'paymentProfile',  label: 'Payment Policy',  icon: 'CreditCard', type: 'policy', policyKey: 'payment' },
+                                    { key: 'returnProfile',   label: 'Return Policy',   icon: 'RotateCcw',  type: 'policy', policyKey: 'returns' },
+                                ].map(({ key, label, icon, type, hint, policyKey }) => {
+                                    const field = editingTemplate[key] || {};
+                                    const setField = (patch) => setEditingTemplate(t => ({ ...t, [key]: { ...(t[key] || {}), ...patch } }));
+                                    return (
+                                        <div key={key} className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
+                                            <div className="flex items-center justify-between">
+                                                <div className="flex items-center gap-2">
+                                                    <Icon name={icon} size={12} className="text-slate-400"/>
+                                                    <p className="text-[9px] font-black text-slate-700 uppercase tracking-widest">{label}</p>
+                                                    {hint && !field.enabled && <p className="text-[8px] text-slate-400 italic">{hint}</p>}
+                                                </div>
+                                                <button onClick={() => setField({ enabled: !field.enabled })}
+                                                    className={`relative w-9 h-5 rounded-full transition-colors duration-200 ${field.enabled ? 'bg-blue-600' : 'bg-slate-300'}`}>
+                                                    <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${field.enabled ? 'translate-x-4' : 'translate-x-0'}`}/>
+                                                </button>
+                                            </div>
+                                            {field.enabled && (
+                                                <div>
+                                                    {type === 'condition' && (
+                                                        <select value={field.conditionId || '3000'} onChange={e => setField({ conditionId: e.target.value })}
+                                                            className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 focus:outline-none focus:border-blue-400 bg-white">
+                                                            {EBAY_CONDITIONS_STANDARD.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                                                        </select>
+                                                    )}
+                                                    {type === 'category' && (
+                                                        <div className="space-y-2">
+                                                            <input type="text" value={field.categoryId || ''} onChange={e => setField({ categoryId: e.target.value })}
+                                                                placeholder="Category ID (e.g. 625)"
+                                                                className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 focus:outline-none focus:border-blue-400 bg-white placeholder-slate-300"/>
+                                                            <input type="text" value={field.categoryPath || ''} onChange={e => setField({ categoryPath: e.target.value })}
+                                                                placeholder="Category path (e.g. Cameras & Photo > Film Cameras)"
+                                                                className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-500 focus:outline-none focus:border-blue-400 bg-white placeholder-slate-300"/>
+                                                        </div>
+                                                    )}
+                                                    {type === 'policy' && (
+                                                        ebayPolicies?.[policyKey]?.length > 0 ? (
+                                                            <select value={field.value || ''} onChange={e => setField({ value: e.target.value })}
+                                                                className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 focus:outline-none focus:border-blue-400 bg-white">
+                                                                <option value="">— Select Policy —</option>
+                                                                {(ebayPolicies[policyKey] || []).map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
+                                                            </select>
+                                                        ) : (
+                                                            <input type="text" value={field.value || ''} onChange={e => setField({ value: e.target.value })}
+                                                                placeholder="Policy name (sync eBay in Account tab to populate)"
+                                                                className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 focus:outline-none focus:border-blue-400 bg-white placeholder-slate-300"/>
+                                                        )
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+
+                                <div className="flex gap-3 pt-2">
+                                    <button onClick={() => setEditingTemplate(null)}
+                                        className="flex-1 py-3 rounded-2xl border border-slate-200 text-slate-500 text-[10px] font-black uppercase tracking-widest hover:bg-slate-50 transition-all">
+                                        Cancel
+                                    </button>
+                                    <button onClick={() => saveTemplate(editingTemplate)} disabled={!editingTemplate.name.trim()}
+                                        className="flex-1 py-3 rounded-2xl bg-blue-600 text-white text-[10px] font-black uppercase tracking-widest hover:bg-blue-500 transition-all active:scale-95 disabled:bg-slate-200 disabled:text-slate-400 shadow-md shadow-blue-100">
+                                        <Icon name="Save" size={12} className="inline mr-1.5"/> Save Template
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        ) : (
+                        /* Template list */
+                        <>
+                        <div className="flex items-center justify-between">
+                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{templates.length} Template{templates.length !== 1 ? 's' : ''}</p>
+                            <button onClick={() => setEditingTemplate(BLANK_TEMPLATE())}
+                                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-500 transition-all active:scale-95 shadow-md shadow-blue-100">
+                                <Icon name="Plus" size={12}/> New Template
+                            </button>
+                        </div>
+                        {templates.length === 0 ? (
+                            <div className="bg-white rounded-[2rem] border border-dashed border-slate-300 p-12 text-center">
+                                <Icon name="LayoutTemplate" size={32} className="text-slate-300 mx-auto mb-3"/>
+                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">No Templates Yet</p>
+                                <p className="text-xs text-slate-400">Templates let you pre-set condition, category, and eBay policies for specific item types.</p>
+                            </div>
+                        ) : templates.map(tpl => {
+                            const enabledCount = ['category','condition','shippingProfile','paymentProfile','returnProfile'].filter(k => tpl[k]?.enabled).length;
+                            return (
+                                <div key={tpl._id} className="bg-white rounded-[2rem] border border-slate-200 shadow-sm px-6 py-4 flex items-center gap-4">
+                                    <div className="w-10 h-10 bg-blue-50 rounded-2xl flex items-center justify-center shrink-0">
+                                        <Icon name="LayoutTemplate" size={18} className="text-blue-600"/>
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <p className="text-sm font-black text-slate-800 truncate">{tpl.name}</p>
+                                        <p className="text-[9px] text-slate-400 font-bold mt-0.5">{enabledCount} field{enabledCount !== 1 ? 's' : ''} active</p>
+                                    </div>
+                                    <div className="flex items-center gap-2 shrink-0">
+                                        <button onClick={() => setEditingTemplate({ ...tpl })}
+                                            className="px-3 py-2 rounded-xl bg-slate-100 text-slate-600 text-[9px] font-black uppercase hover:bg-slate-200 transition-all active:scale-95">
+                                            <Icon name="Pencil" size={11}/>
+                                        </button>
+                                        <button onClick={() => deleteTemplate(tpl._id)}
+                                            className="px-3 py-2 rounded-xl bg-red-50 text-red-500 text-[9px] font-black uppercase hover:bg-red-100 transition-all active:scale-95">
+                                            <Icon name="Trash2" size={11}/>
+                                        </button>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                        </>
+                        )}
+                    </div>
+                    ) : (
+                    /* ── Account sub-tab (existing settings content) ─────────────── */
+                    <>
 
                     {/* ── eBay Account Connection ───────────────────────────────────── */}
                     <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden">
@@ -3533,6 +3778,8 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                             ? <><Icon name="Check" size={14}/> Saved to Account</>
                             : <><Icon name="Save" size={14}/> Save Settings</>}
                     </button>
+                    </> /* end Account sub-tab */
+                    )} {/* end settingsSubTab ternary */}
 
                 </section>
             );
@@ -3908,6 +4155,19 @@ www.scout-recon.com`
                         </button>
                         <button onClick={nuclearReset} className="px-5 py-2 bg-red-50 text-red-600 rounded-xl text-[9px] font-black border border-red-100 uppercase transition-all hover:bg-red-100 flex items-center gap-2 shadow-sm"><Icon name="Zap" size={12}/> Purge</button>
                     </div>
+                    {/* Template picker */}
+                    {templates.length > 0 && (
+                        <div className="flex items-center gap-3 bg-white px-5 py-2.5 rounded-2xl border border-slate-200 shadow-sm">
+                            <Icon name="LayoutTemplate" size={13} className="text-blue-500 shrink-0"/>
+                            <span className="text-[9px] font-black uppercase text-slate-400 shrink-0">Template</span>
+                            <select value={activeProcessTemplate} onChange={e => setActiveProcessTemplate(e.target.value)}
+                                className="flex-1 bg-transparent text-[10px] font-black text-blue-600 focus:outline-none uppercase cursor-pointer">
+                                <option value="">None</option>
+                                {templates.map(t => <option key={t._id} value={t._id}>{t.name}</option>)}
+                            </select>
+                            {activeProcessTemplate && <button onClick={() => setActiveProcessTemplate('')} className="text-slate-300 hover:text-slate-500"><Icon name="X" size={12}/></button>}
+                        </div>
+                    )}
                     {/* Keyword hint */}
                     <div className="flex items-center gap-3 bg-white border border-slate-200 rounded-2xl px-4 py-3 shadow-sm">
                         <Icon name="Tag" size={14} className="text-blue-400 shrink-0"/>
@@ -4683,7 +4943,26 @@ www.scout-recon.com`
                                 )}
                                 <div className="border-t border-slate-100 pt-6">
                                     {editingListingId === l.id ? (
-                                        <div className="flex gap-3 w-full">
+                                        <div className="flex flex-col gap-3 w-full">
+                                            {templates.length > 0 && (
+                                                <div className="flex items-center gap-2">
+                                                    <select id={`tpl-apply-${l.id}`} defaultValue=""
+                                                        className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-[10px] font-black text-slate-700 focus:outline-none focus:border-blue-400 uppercase cursor-pointer">
+                                                        <option value="">— Apply Template —</option>
+                                                        {templates.map(t => <option key={t._id} value={t._id}>{t.name}</option>)}
+                                                    </select>
+                                                    <button
+                                                        onClick={() => {
+                                                            const sel = document.getElementById(`tpl-apply-${l.id}`);
+                                                            if (sel?.value) applyTemplate(sel.value, l.id);
+                                                            else showToast('Select a template first.');
+                                                        }}
+                                                        className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-[9px] font-black uppercase hover:bg-indigo-500 transition-all active:scale-95 shadow-sm whitespace-nowrap flex items-center gap-1.5">
+                                                        <Icon name="LayoutTemplate" size={11}/> Apply
+                                                    </button>
+                                                </div>
+                                            )}
+                                            <div className="flex gap-3 w-full">
                                             <button
                                                 onClick={async () => {
                                                     const updates = {};
@@ -4707,6 +4986,7 @@ www.scout-recon.com`
                                                 className="px-5 py-2.5 rounded-xl text-[10px] font-black uppercase border border-slate-200 flex items-center gap-2 hover:bg-slate-50 transition-all shadow-sm active:scale-95">
                                                 <Icon name="X" size={14}/> Cancel
                                             </button>
+                                            </div>
                                         </div>
                                     ) : (
                                         <div className="flex flex-col gap-3">
