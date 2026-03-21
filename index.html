@@ -4410,7 +4410,7 @@ www.scout-recon.com`
                                         <img src={img.url} className="w-full h-full object-cover pointer-events-none" />
                                         <span className="absolute top-1 left-1 bg-black/60 text-white text-[8px] font-black rounded px-1 py-0.5 leading-none">{idx + 1}</span>
                                         <button onClick={() => { URL.revokeObjectURL(img.url); setImages(images.filter(i => i.id !== img.id)); }} className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"><Icon name="Trash2" size={12}/></button>
-                                        <button onClick={() => setAnnotatingImgId(img.id)} className="absolute bottom-0 inset-x-0 bg-orange-500/90 text-white py-1 text-[8px] font-black uppercase tracking-widest flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity" title="Annotate flaws"><Icon name="PenLine" size={9}/> Annotate</button>
+                                        <button onClick={() => setAnnotatingImgId(img.id)} className="absolute bottom-0 inset-x-0 bg-orange-500 text-white py-1 text-[8px] font-black uppercase tracking-widest flex items-center justify-center gap-1 transition-opacity opacity-60 hover:opacity-100" title="Annotate flaws"><Icon name="PenLine" size={9}/> Annotate</button>
                                     </div>
                                 ))}
                             </div>
