@@ -860,6 +860,9 @@ Return ONLY valid JSON — no markdown, no preamble.`;
             const [reconImage,    setReconImage]     = useState(null);
             const [condition,     setCondition]      = useState('1000');
             const [purchasePrice, setPurchasePrice]  = useState(() => localStorage.getItem('ps_purchase_price') || '');
+            const [costBasis,     setCostBasis]      = useState(() => localStorage.getItem('ps_cost_basis') || '');
+            const [costBasisEnabled, setCostBasisEnabled] = useState(() => localStorage.getItem('ps_cost_basis_enabled') === 'true');
+            const [showCostBasisInfo, setShowCostBasisInfo] = useState(false);
             const [isRunning,     setIsRunning]      = useState(false);
             const [reconStatus,   setReconStatus]    = useState('');
             const [result,        setResult]         = useState(null);
@@ -895,6 +898,13 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                 else localStorage.removeItem('ps_purchase_price');
             }, [purchasePrice]);
             useEffect(() => { localStorage.setItem('ps_mode', arMode); }, [arMode]);
+            useEffect(() => {
+                if (costBasis) localStorage.setItem('ps_cost_basis', costBasis);
+                else localStorage.removeItem('ps_cost_basis');
+            }, [costBasis]);
+            useEffect(() => {
+                localStorage.setItem('ps_cost_basis_enabled', costBasisEnabled ? 'true' : 'false');
+            }, [costBasisEnabled]);
 
             // Handle barcode preload from scan
             useEffect(() => {
@@ -936,6 +946,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                 setShippingMode('flat'); setFlatShippingFee('6.95');
                 setResult(null); setErrorMsg(null); setReconStatus(''); setActiveHistory(null);
                 setReconScanResults(null); setReconManualTitle('');
+                setCostBasis(''); // clear value each scan; toggle preference retained
             };
 
             const purgeHistory = () => {
@@ -1039,11 +1050,14 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                     setReconStatus("Running intel analysis...");
 
                     // Build Gemini parts  -  image if available, barcode title if not
+                    const costAnchor = (costBasisEnabled && costBasis && parseFloat(costBasis) > 0)
+                        ? ` My cost basis is $${parseFloat(costBasis).toFixed(2)} — use this as the price floor; priceLow must be at or above this.`
+                        : '';
                     const geminiParts = [];
                     if (hasBarcode && barcodePreload.title) {
-                        geminiParts.push({ text: `Item: ${barcodePreload.title}${barcodePreload.price ? '. Reference price: ' + barcodePreload.price : ''}. UPC: ${barcodePreload.upc || ''}. Condition: ${condLabel}. Using your independent market knowledge, provide realistic pricing, sell-through rate estimate, days to sell estimate, and estimated package dimensions.` });
+                        geminiParts.push({ text: `Item: ${barcodePreload.title}${barcodePreload.price ? '. Reference price: ' + barcodePreload.price : ''}. UPC: ${barcodePreload.upc || ''}. Condition: ${condLabel}.${costAnchor} Using your independent market knowledge, provide realistic pricing, sell-through rate estimate, days to sell estimate, and estimated package dimensions.` });
                     } else {
-                        geminiParts.push({ text: `Analyze this item for resale pricing. Condition: ${condLabel}. Using your independent market knowledge (not eBay sold data), provide realistic pricing, sell-through rate estimate, days to sell estimate, and estimated package dimensions for shipping.` });
+                        geminiParts.push({ text: `Analyze this item for resale pricing. Condition: ${condLabel}.${costAnchor} Using your independent market knowledge (not eBay sold data), provide realistic pricing, sell-through rate estimate, days to sell estimate, and estimated package dimensions for shipping.` });
                     }
                     if (b64) geminiParts.push({ inlineData: { mimeType: reconMimeType, data: b64 } });
 
@@ -1262,6 +1276,53 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                                                     className="w-full bg-transparent text-[11px] font-black text-slate-800 focus:outline-none placeholder-slate-300" />
                                             </div>
                                         </div>
+                                    </div>
+
+                                    {/* Cost Basis Toggle + Info Popup */}
+                                    {showCostBasisInfo && (
+                                        <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-6" onClick={() => setShowCostBasisInfo(false)}>
+                                            <div className="bg-white rounded-3xl max-w-xs w-full shadow-2xl p-7" onClick={e => e.stopPropagation()}>
+                                                <div className="w-10 h-10 bg-emerald-100 rounded-2xl flex items-center justify-center mb-4">
+                                                    <Icon name="DollarSign" size={20} className="text-emerald-600"/>
+                                                </div>
+                                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Cost Basis</p>
+                                                <h3 className="text-base font-black text-slate-900 mb-3 leading-tight">Your Price Floor Anchor</h3>
+                                                <p className="text-xs text-slate-600 leading-relaxed mb-3">Enter what you paid — or plan to pay — for this item. Profit Scout uses it to anchor your minimum viable sell price.</p>
+                                                <ul className="text-[10px] text-slate-500 space-y-1.5 mb-5">
+                                                    <li className="flex items-start gap-2"><span className="text-emerald-500 font-black mt-0.5">✓</span> Guides Gemini to keep priceLow above your floor</li>
+                                                    <li className="flex items-start gap-2"><span className="text-emerald-500 font-black mt-0.5">✓</span> Clears automatically on each new scan</li>
+                                                    <li className="flex items-start gap-2"><span className="text-slate-400 font-black mt-0.5">✗</span> Never sent to eBay or stored in listings</li>
+                                                </ul>
+                                                <button onClick={() => setShowCostBasisInfo(false)}
+                                                    className="w-full py-3 bg-emerald-500 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-400 transition-all active:scale-95">
+                                                    Got It
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+                                    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                                        <div className="flex items-center justify-between mb-2">
+                                            <div className="flex items-center gap-2">
+                                                <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Cost Basis</p>
+                                                <button onClick={() => setShowCostBasisInfo(true)} className="text-slate-300 hover:text-slate-500 transition-colors">
+                                                    <Icon name="Info" size={11}/>
+                                                </button>
+                                            </div>
+                                            <button onClick={() => { if (!costBasisEnabled) setShowCostBasisInfo(true); setCostBasisEnabled(p => !p); }}
+                                                className={`relative w-9 h-5 rounded-full transition-colors duration-200 ${costBasisEnabled ? 'bg-emerald-500' : 'bg-slate-300'}`}>
+                                                <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${costBasisEnabled ? 'translate-x-4' : 'translate-x-0'}`}/>
+                                            </button>
+                                        </div>
+                                        {costBasisEnabled && (
+                                            <div className="flex items-center gap-1 mt-1">
+                                                <span className="text-slate-400 font-black text-sm">$</span>
+                                                <input type="number" step="0.01" min="0" value={costBasis}
+                                                    onChange={e => setCostBasis(e.target.value)}
+                                                    placeholder="0.00" autoFocus
+                                                    className="w-full bg-transparent text-[11px] font-black text-slate-800 focus:outline-none placeholder-slate-300"/>
+                                            </div>
+                                        )}
+                                        {!costBasisEnabled && <p className="text-[8px] text-slate-300 font-bold">Toggle on to set a price floor</p>}
                                     </div>
 
                                     {/* Shipping Mode */}
@@ -1752,6 +1813,32 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                                                 </div>
                                             </div>
 
+
+                                            {/* Cost Basis Toggle — modal panel */}
+                                            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                                                <div className="flex items-center justify-between mb-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Cost Basis</p>
+                                                        <button onClick={() => setShowCostBasisInfo(true)} className="text-slate-300 hover:text-slate-500 transition-colors">
+                                                            <Icon name="Info" size={11}/>
+                                                        </button>
+                                                    </div>
+                                                    <button onClick={() => { if (!costBasisEnabled) setShowCostBasisInfo(true); setCostBasisEnabled(p => !p); }}
+                                                        className={`relative w-9 h-5 rounded-full transition-colors duration-200 ${costBasisEnabled ? 'bg-emerald-500' : 'bg-slate-300'}`}>
+                                                        <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${costBasisEnabled ? 'translate-x-4' : 'translate-x-0'}`}/>
+                                                    </button>
+                                                </div>
+                                                {costBasisEnabled && (
+                                                    <div className="flex items-center gap-1 mt-1">
+                                                        <span className="text-slate-400 font-black text-sm">$</span>
+                                                        <input type="number" step="0.01" min="0" value={costBasis}
+                                                            onChange={e => setCostBasis(e.target.value)}
+                                                            placeholder="0.00"
+                                                            className="w-full bg-transparent text-[11px] font-black text-slate-800 focus:outline-none placeholder-slate-300"/>
+                                                    </div>
+                                                )}
+                                                {!costBasisEnabled && <p className="text-[8px] text-slate-300 font-bold">Toggle on to set a price floor</p>}
+                                            </div>
 
                                             {/* Shipping Mode — Full Recon only */}
                                             {arMode === 'full' && (
