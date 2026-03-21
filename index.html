@@ -833,36 +833,41 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                 canvas.width  = img.naturalWidth;
                 canvas.height = img.naturalHeight;
                 ctx.drawImage(img, 0, 0);
-                const r = Math.max(Math.round(canvas.width * 0.028), 18);
-                currentPins.forEach((pin, i) => {
-                    const num = String(i + 1);
+                const dot = Math.max(Math.round(canvas.width * 0.008), 5);
+                const fs  = Math.max(Math.round(canvas.width * 0.014), 11);
+                currentPins.forEach((pin) => {
                     const lbl = pin.label;
+                    // Small orange dot
                     ctx.beginPath();
-                    ctx.arc(pin.x, pin.y, r, 0, Math.PI * 2);
+                    ctx.arc(pin.x, pin.y, dot, 0, Math.PI * 2);
                     ctx.fillStyle   = '#f97316';
                     ctx.fill();
                     ctx.strokeStyle = '#fff';
-                    ctx.lineWidth   = Math.max(2, r * 0.12);
+                    ctx.lineWidth   = Math.max(1, dot * 0.3);
                     ctx.stroke();
-                    ctx.fillStyle    = '#fff';
-                    ctx.font         = `900 ${Math.round(r * 1.1)}px Arial`;
-                    ctx.textAlign    = 'center';
-                    ctx.textBaseline = 'middle';
-                    ctx.fillText(num, pin.x, pin.y);
-                    const fs = Math.max(Math.round(r * 0.85), 12);
-                    ctx.font = `700 ${fs}px Arial`;
+                    // Measure label
+                    ctx.font = `600 ${fs}px Arial`;
                     const tw = ctx.measureText(lbl).width;
-                    const px = r * 0.55, py = r * 0.35;
-                    const bx = pin.x + r + 6;
+                    const px = fs * 0.45, py = fs * 0.28;
+                    const bx = pin.x + dot + 5;
                     const by = pin.y - fs * 0.5 - py;
                     const bw = tw + px * 2;
                     const bh = fs + py * 2;
-                    ctx.fillStyle = '#1e293b';
+                    // Connecting tick
+                    ctx.beginPath();
+                    ctx.moveTo(pin.x + dot, pin.y);
+                    ctx.lineTo(bx, by + bh / 2);
+                    ctx.strokeStyle = '#f97316';
+                    ctx.lineWidth   = Math.max(1, dot * 0.25);
+                    ctx.stroke();
+                    // Badge background
+                    ctx.fillStyle = 'rgba(15, 23, 42, 0.82)';
                     ctx.fillRect(bx, by, bw, bh);
+                    // Badge text
                     ctx.fillStyle    = '#fff';
                     ctx.textAlign    = 'left';
                     ctx.textBaseline = 'alphabetic';
-                    ctx.fillText(lbl, bx + px, by + bh - py - 2);
+                    ctx.fillText(lbl, bx + px, by + bh - py - 1);
                 });
             }, []);
 
@@ -3135,7 +3140,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                             // No eBay marketplace data is used in pricing (ALA §9.5 compliant).
                             autoResearchPrice(docRef.id, {
                                 title:       aiData.title,
-                                conditionId: finalConditionId,
+                                conditionId: effectiveConditionId,
                                 categoryId:  resolvedCategoryId,
                                 brand:       aiData.brand,
                                 model:       aiData.model
@@ -4405,7 +4410,7 @@ www.scout-recon.com`
                                         <img src={img.url} className="w-full h-full object-cover pointer-events-none" />
                                         <span className="absolute top-1 left-1 bg-black/60 text-white text-[8px] font-black rounded px-1 py-0.5 leading-none">{idx + 1}</span>
                                         <button onClick={() => { URL.revokeObjectURL(img.url); setImages(images.filter(i => i.id !== img.id)); }} className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"><Icon name="Trash2" size={12}/></button>
-                                        <button onClick={() => setAnnotatingImgId(img.id)} className="absolute bottom-1 right-1 bg-orange-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity" title="Annotate flaws"><Icon name="PenLine" size={12}/></button>
+                                        <button onClick={() => setAnnotatingImgId(img.id)} className="absolute bottom-0 inset-x-0 bg-orange-500/90 text-white py-1 text-[8px] font-black uppercase tracking-widest flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity" title="Annotate flaws"><Icon name="PenLine" size={9}/> Annotate</button>
                                     </div>
                                 ))}
                             </div>
