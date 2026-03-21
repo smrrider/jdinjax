@@ -71,7 +71,7 @@ const PORT = process.env.PORT || 3001;
 // Without this, express-rate-limit throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR and
 // crashes the middleware chain before body-parser runs → req.body is undefined.
 app.set('trust proxy', 1);
-const APP_VERSION = "7.1.0";
+const APP_VERSION = "7.0.0";
 
 // Owner email — drives server-side admin gate
 const OWNER_EMAIL = process.env.OWNER_EMAIL || 'admin@scout-recon.com';
