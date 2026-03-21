@@ -71,7 +71,7 @@ const PORT = process.env.PORT || 3001;
 // Without this, express-rate-limit throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR and
 // crashes the middleware chain before body-parser runs → req.body is undefined.
 app.set('trust proxy', 1);
-const APP_VERSION = "6.1.0";
+const APP_VERSION = "7.1.0";
 
 // Owner email — drives server-side admin gate
 const OWNER_EMAIL = process.env.OWNER_EMAIL || 'admin@scout-recon.com';
@@ -91,7 +91,6 @@ const BKA_CATEGORY_MAP = {
     "177885": "Sporting Goods > Hunting > Gun Parts > Handguards & Forends",
     "177887": "Sporting Goods > Hunting > Gun Parts > Triggers",
     "177889": "Sporting Goods > Hunting > Gun Parts > Barrels",
-    "177893": "Sporting Goods > Hunting > Gun Parts > Suppressors & Silencers",
     "3259":   "Clothing, Shoes & Accessories > Men > Men's Clothing",
     "52387":  "Sporting Goods > Outdoor Sports > Camping & Hiking > Bags & Packs",
     "31771":  "Sporting Goods > Hunting > Tactical & Duty Gear",
@@ -551,7 +550,7 @@ app.get('/api/ebay/category-specifics', async (req, res) => {
 // Hit this in the browser to verify Browse API connectivity and token acquisition.
 // e.g. /api/ebay/price-research-test?q=wetsuit
 // GET /api/ebay/sold-test?q=wetsuit&cond=1000 — SerpAPI sold listings diagnostic
-app.get('/api/ebay/sold-test', async (req, res) => {
+app.get('/api/ebay/sold-test', requireUser, async (req, res) => {
     try {
         const q          = req.query.q    || 'wetsuit';
         const condId      = parseInt(req.query.cond || '1000');
@@ -576,7 +575,7 @@ app.get('/api/ebay/sold-test', async (req, res) => {
     } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('/api/ebay/price-research-test', async (req, res) => {
+app.get('/api/ebay/price-research-test', requireUser, async (req, res) => {
     try {
         const q = req.query.q || 'iPhone 15 Pro Max';
         const token = await getEbayProdAppToken();
@@ -906,7 +905,7 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
             '6000': 'USED_ACCEPTABLE',
             '7000': 'FOR_PARTS_OR_NOT_WORKING'
         };
-        const conditionEnum = CONDITION_MAP[String(conditionId)] || 'USED_GOOD';
+        const conditionEnum = CONDITION_MAP[String(conditionId)] || (() => { console.warn(`[eBay/list] Unknown conditionId "${conditionId}" — defaulting to USED_GOOD`); return 'USED_GOOD'; })();
 
         // format + SKU must be derived before inventory_item PUT uses effectiveSku
         const listingFormat = (req.body.format === 'AUCTION') ? 'AUCTION' : 'FIXED_PRICE';
@@ -1096,7 +1095,7 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
 
         // ── Step 4: Volume discount promotion (FIXED_PRICE only, best-effort) ─
         const volumeDiscounts = (req.body.volumeDiscounts || [])
-            .filter(d => d.minQty >= 2 && d.pctOff > 0 && d.pctOff < 100);
+            .filter(d => Number.isInteger(d.minQty) && Number.isInteger(d.pctOff) && d.minQty >= 2 && d.pctOff > 0 && d.pctOff < 100);
         if (listingFormat === 'FIXED_PRICE' && volumeDiscounts.length > 0) {
             try {
                 const promoPayload = {
@@ -1584,7 +1583,7 @@ app.post('/ebay/notifications/account-deletion', express.json(), async (req, res
                 if (credSnap.exists && credSnap.data()?.username === ebayUserId) {
                     deletions.push(
                         adminFirestore.doc(`users/${doc.id}/ebay/credentials`).delete(),
-                        adminFirestore.doc(`users/${doc.id}/ebay/token`).delete()
+                        adminFirestore.doc(`users/${doc.id}/ebay/tokens`).delete()
                     );
                     console.log(`[eBay] Deleted eBay data for SR user ${doc.id}`);
                 }
