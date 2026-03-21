@@ -64,6 +64,18 @@ function ebayFetch(urlStr, { method = 'GET', headers = {}, body } = {}) {
     });
 }
 
+// Retries ebayFetch up to 2 times on 5xx infrastructure errors (per eBay AGC requirement).
+// 4xx errors (business logic / bad input) are returned immediately without retry.
+async function ebayFetchWithRetry(urlStr, opts = {}, maxRetries = 2) {
+    let lastRes;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        lastRes = await ebayFetch(urlStr, opts);
+        if (lastRes.status < 500) return lastRes;
+        if (attempt < maxRetries) await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+    }
+    return lastRes;
+}
+
 const app  = express();
 const PORT = process.env.PORT || 3001;
 
@@ -964,7 +976,7 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
 
         console.log(`[eBay/list] PUT inventory_item payload: ${JSON.stringify(inventoryItem).slice(0, 800)}`);
 
-        const putRes = await ebayFetch(
+        const putRes = await ebayFetchWithRetry(
             `${EBAY_API_BASE}/sell/inventory/v1/inventory_item/${encodeURIComponent(effectiveSku)}`,
             { method: 'PUT', headers, body: JSON.stringify(inventoryItem) }
         );
@@ -982,7 +994,7 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
         // GET existing locations — use first enabled one, or create SR_DEFAULT if none exist.
         let merchantLocationKey = 'SR_DEFAULT';
         try {
-            const locRes  = await ebayFetch(`${EBAY_API_BASE}/sell/inventory/v1/location`, { method: 'GET', headers });
+            const locRes  = await ebayFetchWithRetry(`${EBAY_API_BASE}/sell/inventory/v1/location`, { method: 'GET', headers });
             const locData = await locRes.json();
             const locs    = locData.locations || [];
             const enabled = locs.find(l => l.merchantLocationStatus === 'ENABLED') || locs[0];
@@ -991,7 +1003,7 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
                 console.log(`[eBay/list] Using existing location: ${merchantLocationKey}`);
             } else {
                 // No locations — create SR_DEFAULT with seller's country US
-                const createRes = await ebayFetch(
+                const createRes = await ebayFetchWithRetry(
                     `${EBAY_API_BASE}/sell/inventory/v1/location/SR_DEFAULT`,
                     {
                         method: 'POST', headers,
@@ -1060,7 +1072,7 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
         // ── Step 2: POST offer — check for existing first to avoid "already exists" error ──
         // GET existing offers for this SKU; if found, UPDATE (PUT) instead of creating.
         let offerId;
-        const getOffersRes  = await ebayFetch(
+        const getOffersRes  = await ebayFetchWithRetry(
             `${EBAY_API_BASE}/sell/inventory/v1/offer?sku=${encodeURIComponent(effectiveSku)}`,
             { method: 'GET', headers }
         );
@@ -1069,7 +1081,7 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
 
         if (existingOffer) {
             offerId = existingOffer.offerId;
-            const updateRes = await ebayFetch(
+            const updateRes = await ebayFetchWithRetry(
                 `${EBAY_API_BASE}/sell/inventory/v1/offer/${offerId}`,
                 { method: 'PUT', headers, body: JSON.stringify(offerPayload) }
             );
@@ -1078,13 +1090,13 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
             } else {
                 // Incompatible offer (e.g. format mismatch) — delete and recreate
                 console.warn(`[eBay/list] PUT offer failed, deleting and recreating: ${offerId}`);
-                await ebayFetch(`${EBAY_API_BASE}/sell/inventory/v1/offer/${offerId}`, { method: 'DELETE', headers });
+                await ebayFetchWithRetry(`${EBAY_API_BASE}/sell/inventory/v1/offer/${offerId}`, { method: 'DELETE', headers });
                 offerId = null;
             }
         }
 
         if (!offerId) {
-            const offerRes  = await ebayFetch(`${EBAY_API_BASE}/sell/inventory/v1/offer`,
+            const offerRes  = await ebayFetchWithRetry(`${EBAY_API_BASE}/sell/inventory/v1/offer`,
                 { method: 'POST', headers, body: JSON.stringify(offerPayload) }
             );
             const offerData = await offerRes.json();
@@ -1098,7 +1110,7 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
         }
 
         // ── Step 3: Publish offer ─────────────────────────────────────────────
-        const publishRes  = await ebayFetch(
+        const publishRes  = await ebayFetchWithRetry(
             `${EBAY_API_BASE}/sell/inventory/v1/offer/${offerId}/publish`,
             { method: 'POST', headers }
         );
@@ -1132,7 +1144,7 @@ app.post('/api/ebay/list', requireUser, express.json({ limit: '512kb' }), async 
                         listingIds: [listingId]
                     }
                 };
-                const promoRes  = await ebayFetch(`${EBAY_API_BASE}/sell/marketing/v1/item_promotion`,
+                const promoRes  = await ebayFetchWithRetry(`${EBAY_API_BASE}/sell/marketing/v1/item_promotion`,
                     { method: 'POST', headers, body: JSON.stringify(promoPayload) }
                 );
                 const promoData = await promoRes.json();
@@ -1189,7 +1201,7 @@ app.post('/api/ebay/sync-status', requireUser, express.json({ limit: '64kb' }), 
         // Fan-out — one GET per offer; Promise.allSettled so a single 404 never aborts the rest
         const fetches = offerIds.map(async (offerId) => {
             try {
-                const r = await ebayFetch(
+                const r = await ebayFetchWithRetry(
                     `${EBAY_API_BASE}/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`,
                     { method: 'GET', headers: hdrs }
                 );
@@ -1222,7 +1234,7 @@ app.post('/api/ebay/sync-status', requireUser, express.json({ limit: '64kb' }), 
                 + `?filter=orderfulfillmentstatus%3A%7BFULFILLED%7D`
                 + `&creationDateRange=%5B${encodeURIComponent(since)}..%5D`
                 + `&limit=50`;
-            const ordersR  = await ebayFetch(orderUrl, { method: 'GET', headers: hdrs });
+            const ordersR  = await ebayFetchWithRetry(orderUrl, { method: 'GET', headers: hdrs });
             if (ordersR.ok) {
                 const ordersData = await ordersR.json();
                 for (const order of (ordersData.orders || [])) {
@@ -1262,7 +1274,7 @@ app.post('/api/ebay/sync-status', requireUser, express.json({ limit: '64kb' }), 
             const toCheck   = Object.values(results).filter(r => r.listingId && r.ebayStatus === 'PUBLISHED');
             await Promise.allSettled(toCheck.map(async (result) => {
                 try {
-                    const br = await ebayFetch(
+                    const br = await ebayFetchWithRetry(
                         `${EBAY_API_BASE}/buy/browse/v1/item/v1%7C${result.listingId}%7C0`,
                         { method: 'GET', headers: browseHdr }
                     );
@@ -1362,9 +1374,9 @@ app.post('/api/ebay/relist', requireUser, express.json({ limit: '64kb' }), async
 
         // ── Resolve policy names → IDs ──────────────────────────────────────────
         const [fpRes, ppRes, rpRes] = await Promise.all([
-            ebayFetch(`${EBAY_API_BASE}/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_US`, { method: 'GET', headers }),
-            ebayFetch(`${EBAY_API_BASE}/sell/account/v1/payment_policy?marketplace_id=EBAY_US`,     { method: 'GET', headers }),
-            ebayFetch(`${EBAY_API_BASE}/sell/account/v1/return_policy?marketplace_id=EBAY_US`,      { method: 'GET', headers })
+            ebayFetchWithRetry(`${EBAY_API_BASE}/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_US`, { method: 'GET', headers }),
+            ebayFetchWithRetry(`${EBAY_API_BASE}/sell/account/v1/payment_policy?marketplace_id=EBAY_US`,     { method: 'GET', headers }),
+            ebayFetchWithRetry(`${EBAY_API_BASE}/sell/account/v1/return_policy?marketplace_id=EBAY_US`,      { method: 'GET', headers })
         ]);
         const [fpData, ppData, rpData] = await Promise.all([fpRes.json(), ppRes.json(), rpRes.json()]);
         const fp = (fpData.fulfillmentPolicies || []).find(p => p.name === cfg.shippingProfile);
@@ -1386,7 +1398,7 @@ app.post('/api/ebay/relist', requireUser, express.json({ limit: '64kb' }), async
         });
 
         // ── Step 1: PUT inventory_item ──────────────────────────────────────────
-        const invRes = await ebayFetch(
+        const invRes = await ebayFetchWithRetry(
             `${EBAY_API_BASE}/sell/inventory/v1/inventory_item/${encodeURIComponent(effectiveSku)}`,
             {
                 method: 'PUT', headers,
@@ -1405,11 +1417,11 @@ app.post('/api/ebay/relist', requireUser, express.json({ limit: '64kb' }), async
         // ── Step 2: Resolve merchant location ──────────────────────────────────
         let merchantLocationKey;
         try {
-            const locData = await (await ebayFetch(`${EBAY_API_BASE}/sell/inventory/v1/location`, { method: 'GET', headers })).json();
+            const locData = await (await ebayFetchWithRetry(`${EBAY_API_BASE}/sell/inventory/v1/location`, { method: 'GET', headers })).json();
             const locs    = locData.locations || [];
             merchantLocationKey = locs.find(x => x.merchantLocationStatus === 'ENABLED')?.merchantLocationKey || locs[0]?.merchantLocationKey;
             if (!merchantLocationKey) {
-                const cr = await ebayFetch(`${EBAY_API_BASE}/sell/inventory/v1/location/SR_DEFAULT`, {
+                const cr = await ebayFetchWithRetry(`${EBAY_API_BASE}/sell/inventory/v1/location/SR_DEFAULT`, {
                     method: 'POST', headers,
                     body:   JSON.stringify({ location: { address: { country: 'US' } }, locationType: 'WAREHOUSE', merchantLocationStatus: 'ENABLED', name: 'Scout Recon Default Location' })
                 });
@@ -1433,7 +1445,7 @@ app.post('/api/ebay/relist', requireUser, express.json({ limit: '64kb' }), async
         if (merchantLocationKey) offerPayload.merchantLocationKey = merchantLocationKey;
 
         let offerId;
-        const existingOffers = await (await ebayFetch(
+        const existingOffers = await (await ebayFetchWithRetry(
             `${EBAY_API_BASE}/sell/inventory/v1/offer?sku=${encodeURIComponent(effectiveSku)}`,
             { method: 'GET', headers }
         )).json();
@@ -1441,20 +1453,20 @@ app.post('/api/ebay/relist', requireUser, express.json({ limit: '64kb' }), async
 
         if (existingOffer) {
             offerId = existingOffer.offerId;
-            const updRes = await ebayFetch(`${EBAY_API_BASE}/sell/inventory/v1/offer/${offerId}`, { method: 'PUT', headers, body: JSON.stringify(offerPayload) });
+            const updRes = await ebayFetchWithRetry(`${EBAY_API_BASE}/sell/inventory/v1/offer/${offerId}`, { method: 'PUT', headers, body: JSON.stringify(offerPayload) });
             if (!updRes.ok) {
-                await ebayFetch(`${EBAY_API_BASE}/sell/inventory/v1/offer/${offerId}`, { method: 'DELETE', headers });
+                await ebayFetchWithRetry(`${EBAY_API_BASE}/sell/inventory/v1/offer/${offerId}`, { method: 'DELETE', headers });
                 offerId = null;
             }
         }
         if (!offerId) {
-            const postData = await (await ebayFetch(`${EBAY_API_BASE}/sell/inventory/v1/offer`, { method: 'POST', headers, body: JSON.stringify(offerPayload) })).json();
+            const postData = await (await ebayFetchWithRetry(`${EBAY_API_BASE}/sell/inventory/v1/offer`, { method: 'POST', headers, body: JSON.stringify(offerPayload) })).json();
             if (!postData.offerId) throw new Error(postData.errors?.[0]?.message || 'POST offer failed');
             offerId = postData.offerId;
         }
 
         // ── Step 4: Publish ─────────────────────────────────────────────────────
-        const pubData = await (await ebayFetch(`${EBAY_API_BASE}/sell/inventory/v1/offer/${offerId}/publish`, { method: 'POST', headers, body: '{}' })).json();
+        const pubData = await (await ebayFetchWithRetry(`${EBAY_API_BASE}/sell/inventory/v1/offer/${offerId}/publish`, { method: 'POST', headers, body: '{}' })).json();
         if (!pubData.listingId) throw new Error(pubData.errors?.[0]?.message || 'publish failed');
 
         const listingId  = pubData.listingId;
