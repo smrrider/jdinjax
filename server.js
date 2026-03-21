@@ -1550,14 +1550,6 @@ app.get('/ebay/notifications/account-deletion', (req, res) => {
 app.post('/ebay/notifications/account-deletion', express.json(), async (req, res) => {
     res.status(200).json({ success: true }); // Always acknowledge immediately
     try {
-        // Verify shared token appended to notification URL (?token=EBAY_NOTIFICATION_TOKEN).
-        if (EBAY_NOTIFICATION_TOKEN) {
-            const provided = req.query.token || '';
-            if (provided !== EBAY_NOTIFICATION_TOKEN) {
-                console.warn('[eBay/notifications] Rejected — invalid or missing token');
-                return;
-            }
-        }
         const notification = req.body?.notification || req.body || {};
         const topic        = notification?.metadata?.topic || notification?.topic || '';
         const data         = notification?.data || {};
