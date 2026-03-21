@@ -127,7 +127,7 @@
     <script type="text/babel">
         const { useState, useEffect, useCallback, useRef, useMemo } = React;
 
-        const APP_VERSION = "7.0.0"; // Forward Observer, Targets, split scan/photo
+        const APP_VERSION = "8.0.0"; // ALA §9.5 compliance — SerpAPI decommissioned
 
         const _host    = window.location.hostname;
         const _isLocal = (_host === '127.0.0.1' || _host === 'localhost' || _host === '');
@@ -583,20 +583,20 @@ SHIPPING LOGISTICS:
         };
 
         const ScanResult = ({ upc, onClose, onSendToRecon, onSendToListing, showToast }) => {
-            const [engine, setEngine]     = useState('ebay');
+            // engine state removed — UPCitemdb is engine-agnostic (ALA §9.5 — 21 MAR 2026)
             const [loading, setLoading]   = useState(true);
             const [results, setResults]   = useState([]);
             const [topTitle, setTopTitle] = useState('');
             const [selected, setSelected] = useState(0);
 
-            useEffect(() => { doSearch('ebay'); }, []);
+            useEffect(() => { doSearch(); }, []);
 
-            const doSearch = async (eng) => {
-                setLoading(true); setEngine(eng);
+            const doSearch = async () => {
+                setLoading(true);
                 try {
                     const res = await fetch(BARCODE_API_URL, {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ upc, engine: eng })
+                        body: JSON.stringify({ upc })
                     });
                     const d = await res.json();
                     setResults(d.results || []);
@@ -620,22 +620,14 @@ SHIPPING LOGISTICS:
                             <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors"><Icon name="X" size={18}/></button>
                         </div>
 
-                        {/* Engine toggle */}
-                        <div className="px-6 pt-5 flex gap-2">
-                            {['ebay','amazon'].map(eng => (
-                                <button key={eng} onClick={() => doSearch(eng)}
-                                    className={"flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all " + (engine===eng ? (eng==='ebay' ? 'bg-blue-600 text-white shadow-md' : 'bg-orange-500 text-white shadow-md') : 'bg-slate-100 text-slate-500 hover:bg-slate-200')}>
-                                    {eng === 'ebay' ? 'eBay' : 'Amazon'}
-                                </button>
-                            ))}
-                        </div>
+                        {/* Engine toggle removed — UPCitemdb is engine-agnostic (ALA §9.5 — 21 MAR 2026) */}
 
                         {/* Results */}
                         <div className="px-6 py-4 max-h-64 overflow-y-auto no-scrollbar">
                             {loading ? (
                                 <div className="flex items-center justify-center py-8 gap-3">
                                     <Icon name="Loader2" size={20} className="text-blue-500 animate-spin" />
-                                    <span className="text-[11px] font-black text-slate-400 uppercase">Searching {engine}...</span>
+                                    <span className="text-[11px] font-black text-slate-400 uppercase">Looking up barcode...</span>
                                 </div>
                             ) : results.length === 0 ? (
                                 <div className="text-center py-8">
@@ -648,8 +640,8 @@ SHIPPING LOGISTICS:
                                     {r.image && <img src={r.image} className="w-12 h-12 rounded-xl object-cover border border-slate-200 shrink-0" />}
                                     <div className="min-w-0 flex-1">
                                         <p className="text-[10px] font-black text-slate-800 leading-tight line-clamp-2">{r.title}</p>
-                                        {r.price && <p className="text-[11px] font-black text-emerald-600 mt-1">{r.price}</p>}
-                                        {r.condition && <p className="text-[9px] text-slate-400 uppercase mt-0.5">{r.condition}</p>}
+                                        {/* price display removed — UPCitemdb price fields not passed through (ALA §9.5) */}
+                                        {r.brand && <p className="text-[9px] text-slate-400 uppercase mt-0.5">{r.brand}</p>}
                                     </div>
                                     {selected===i && <div className="w-4 h-4 bg-blue-600 rounded-full shrink-0 mt-1 flex items-center justify-center"><Icon name="Check" size={10} className="text-white"/></div>}
                                 </div>
@@ -678,10 +670,26 @@ SHIPPING LOGISTICS:
 
         // --- ARBITRAGE SCOUT -----------------------------------------------------
 
-        const SCOUT_SYSTEM_PROMPT = `You are an expert eBay arbitrage analyst and resale market specialist. 
-Analyze the provided item image and condition, then return a complete arbitrage assessment as JSON.
-All prices must end in .95. Be precise and realistic based on actual eBay sold listings data.
-Return ONLY valid JSON  -  no markdown, no preamble.`;
+        const SCOUT_SYSTEM_PROMPT = `You are an expert resale market analyst and pricing specialist.
+Analyze the provided item image and condition, then return a complete market assessment as JSON.
+All prices must end in .95. Be precise and realistic based on your independent market knowledge.
+
+CRITICAL RULES — pricing fields (priceLow, priceMid, priceHigh, priceBasis):
+- Do NOT reference eBay, eBay listings, eBay sold data, or eBay marketplace prices
+- Do NOT reference Amazon, Walmart, or any specific marketplace pricing data
+- Base all pricing on your independent training knowledge of general retail and resale markets
+- priceBasis must describe your reasoning without citing any specific marketplace or platform
+
+CRITICAL RULES — velocity fields (sellThroughRate, daysToSell, velocityLabel):
+- sellThroughRate must be estimated from your independent knowledge of general resale
+  market velocity for this item category — NOT derived from eBay listing or sold counts
+- daysToSell must be a general market estimate based on item type and condition —
+  NOT computed from eBay active or completed listing data
+- velocityLabel must reflect general market demand (e.g. HIGH, MEDIUM, LOW, SLOW) based
+  on your independent assessment of the item category
+- Do NOT derive any velocity metric from eBay marketplace data of any kind
+
+Return ONLY valid JSON — no markdown, no preamble.`;
 
         const SCOUT_SCHEMA = {
             type: "OBJECT",
@@ -808,23 +816,16 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
 
         // ── ReconScanResults — shared between inline and modal Recon modes ────────
         // Previously duplicated ~80 lines of JSX. Single source of truth.
-        const ReconScanResultsPanel = ({ reconScanResults, reconManualTitle, setReconManualTitle, reconSearchEngine, setBarcodePreload, setReconScanResults, setResult, setActiveHistory, setShowReconScanner, setReconImage }) => {
+        // Engine toggle removed from ReconScanResultsPanel — UPCitemdb is engine-agnostic (ALA §9.5 — 21 MAR 2026)
+        const ReconScanResultsPanel = ({ reconScanResults, reconManualTitle, setReconManualTitle, setBarcodePreload, setReconScanResults, setResult, setActiveHistory, setShowReconScanner, setReconImage }) => {
             if (!reconScanResults) return null;
-            const { loading, items, noResults, engine, upc } = reconScanResults;
+            const { loading, items, noResults, upc } = reconScanResults;
             return (
                 <div className="rounded-2xl border-2 border-slate-200 overflow-hidden">
-                    <div className="flex border-b border-slate-100">
-                        {['ebay','amazon'].map(eng => (
-                            <button key={eng} onClick={() => reconSearchEngine(eng, upc)}
-                                className={"flex-1 py-2.5 text-[10px] font-black uppercase tracking-widest transition-all " + (engine===eng ? (eng==='ebay' ? 'bg-blue-600 text-white' : 'bg-orange-500 text-white') : 'bg-slate-50 text-slate-400 hover:bg-slate-100')}>
-                                {eng === 'ebay' ? 'eBay' : 'Amazon'}
-                            </button>
-                        ))}
-                    </div>
                     {loading ? (
                         <div className="py-8 text-center">
                             <Icon name="Loader2" size={24} className="animate-spin text-emerald-500 mx-auto mb-2"/>
-                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Searching {engine}...</p>
+                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Looking up barcode...</p>
                         </div>
                     ) : noResults ? (
                         <div className="p-4 space-y-3">
@@ -843,7 +844,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                     {item.image && <img src={item.image} className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0" onError={(e) => e.target.style.display='none'}/>}
                                     <div className="flex-1 min-w-0">
                                         <p className="text-xs font-bold text-slate-800 leading-snug line-clamp-2">{item.title}</p>
-                                        {item.price && <p className="text-[10px] text-emerald-600 font-black mt-0.5">{item.price}</p>}
+                                        {item.brand && <p className="text-[10px] text-slate-400 font-black mt-0.5">{item.brand}</p>}
                                     </div>
                                     <Icon name="ChevronRight" size={14} className="text-slate-300 shrink-0"/>
                                 </button>
@@ -854,11 +855,11 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             );
         };
 
-        const ArbitrageRecon = ({ proxyUrl, ebayConditions, showToast, dbRef, user, inline = false, scanPreload = null, onScanRequest, onSendToProcessing, onSaveTarget, userSettings = {} }) => {
+        const ProfitScout = ({ proxyUrl, ebayConditions, showToast, dbRef, user, inline = false, scanPreload = null, onScanRequest, onSendToProcessing, onSaveTarget, userSettings = {} }) => {
             const [isOpen,        setIsOpen]        = useState(false);
             const [reconImage,    setReconImage]     = useState(null);
             const [condition,     setCondition]      = useState('1000');
-            const [purchasePrice, setPurchasePrice]  = useState(() => localStorage.getItem('ar_purchase_price') || '');
+            const [purchasePrice, setPurchasePrice]  = useState(() => localStorage.getItem('ps_purchase_price') || '');
             const [isRunning,     setIsRunning]      = useState(false);
             const [reconStatus,   setReconStatus]    = useState('');
             const [result,        setResult]         = useState(null);
@@ -869,13 +870,12 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const [flatShippingFee, setFlatShippingFee] = useState('6.95');
             const [barcodePreload,  setBarcodePreload]  = useState(null);
             const [errorMsg,      setErrorMsg]       = useState(null);
-            const [arLivePrices,  setArLivePrices]   = useState(null);  // live eBay price research result
-            const [arPriceLoading, setArPriceLoading] = useState(false);
+            // arLivePrices / arPriceLoading removed — ALA §9.5 compliance — 21 MAR 2026
             const [reconScanResults, setReconScanResults] = useState(null);
             const [reconManualTitle, setReconManualTitle] = useState('');
             const [showReconScanner, setShowReconScanner] = useState(false);
-            const [reconDefaultEngine, setReconDefaultEngine] = useState('ebay');
-            const [arMode, setArMode] = useState(() => localStorage.getItem('ar_mode') || 'fo');
+            // reconDefaultEngine removed — engine toggle decommissioned (ALA §9.5 — 21 MAR 2026)
+            const [arMode, setArMode] = useState(() => localStorage.getItem('ps_mode') || 'fo');
 
             // Load Recon history from Firestore on mount
             useEffect(() => {
@@ -891,10 +891,10 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
 
             // Persist purchase price and AR mode across sessions
             useEffect(() => {
-                if (purchasePrice) localStorage.setItem('ar_purchase_price', purchasePrice);
-                else localStorage.removeItem('ar_purchase_price');
+                if (purchasePrice) localStorage.setItem('ps_purchase_price', purchasePrice);
+                else localStorage.removeItem('ps_purchase_price');
             }, [purchasePrice]);
-            useEffect(() => { localStorage.setItem('ar_mode', arMode); }, [arMode]);
+            useEffect(() => { localStorage.setItem('ps_mode', arMode); }, [arMode]);
 
             // Handle barcode preload from scan
             useEffect(() => {
@@ -913,41 +913,28 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
 
             const handleReconScan = async (upc) => {
                 setShowReconScanner(false);
-                setReconScanResults({ loading: true, items: [], noResults: false, engine: reconDefaultEngine });
+                setReconScanResults({ loading: true, items: [], noResults: false });
                 const BARCODE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
                     ? 'http://127.0.0.1:3001/api/barcode-search' : '/api/barcode-search';
                 try {
-                    const res = await fetch(BARCODE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ upc, engine: reconDefaultEngine }) });
+                    const res = await fetch(BARCODE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ upc }) });
                     const data = await res.json();
                     const items = data.results || [];
-                    setReconScanResults({ loading: false, items, noResults: items.length === 0, engine: reconDefaultEngine, upc });
+                    setReconScanResults({ loading: false, items, noResults: items.length === 0, upc });
                 } catch(e) {
-                    setReconScanResults({ loading: false, items: [], noResults: true, engine: reconDefaultEngine, upc });
+                    setReconScanResults({ loading: false, items: [], noResults: true, upc });
                 }
             };
 
-            const reconSearchEngine = async (eng, upc) => {
-                setReconScanResults(prev => ({ ...prev, loading: true, engine: eng }));
-                const BARCODE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-                    ? 'http://127.0.0.1:3001/api/barcode-search' : '/api/barcode-search';
-                try {
-                    const res = await fetch(BARCODE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ upc, engine: eng }) });
-                    const data = await res.json();
-                    const items = data.results || [];
-                    setReconScanResults(prev => ({ ...prev, loading: false, items, noResults: items.length === 0 }));
-                } catch(e) {
-                    setReconScanResults(prev => ({ ...prev, loading: false, items: [], noResults: true }));
-                }
-            };
+            // reconSearchEngine removed — engine toggle decommissioned (ALA §9.5 — 21 MAR 2026)
 
             const reset = () => {
                 if (reconImage && reconImage.url && reconImage.url.startsWith('blob:')) {
                     URL.revokeObjectURL(reconImage.url);
                 }
-                setReconImage(null); setCondition('1000'); setPurchasePrice(localStorage.getItem('ar_purchase_price') || '');
+                setReconImage(null); setCondition('1000'); setPurchasePrice(localStorage.getItem('ps_purchase_price') || '');
                 setShippingMode('flat'); setFlatShippingFee('6.95');
                 setResult(null); setErrorMsg(null); setReconStatus(''); setActiveHistory(null);
-                setArLivePrices(null); setArPriceLoading(false);
                 setReconScanResults(null); setReconManualTitle('');
             };
 
@@ -991,12 +978,12 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             };
 
             const handleSaveTarget = async () => {
-                const r = activeResult || displayResult;
+                const r = displayResult;
                 if (!r || !user || !dbRef || !dbRef.current) return;
                 const target = {
                     title: r.itemTitle,
                     imageUrl: r.imageUrl || null,
-                    marketPrice: (arLivePrices?.strategies?.market || r.priceMid || 0).toFixed(2),
+                    marketPrice: (r.priceMid || 0).toFixed(2),
                     sellThroughRate: r.sellThroughRate || 0,
                     savedAt: Date.now(),
                 };
@@ -1006,7 +993,6 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     onSaveTarget && onSaveTarget(target);
                     // Reset to ready state (price stays)
                     setResult(null); setReconImage(null); setBarcodePreload(null);
-                    setArLivePrices(null); setArPriceLoading(false);
                 } catch(e) { showToast('Save failed: ' + e.message); }
             };
 
@@ -1055,9 +1041,9 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     // Build Gemini parts  -  image if available, barcode title if not
                     const geminiParts = [];
                     if (hasBarcode && barcodePreload.title) {
-                        geminiParts.push({ text: `Item: ${barcodePreload.title}${barcodePreload.price ? '. Current market price: ' + barcodePreload.price : ''}. UPC: ${barcodePreload.upc || ''}. Condition: ${condLabel}. Analyze for eBay arbitrage  -  provide pricing, sell-through rate, days to sell, and estimated package dimensions.` });
+                        geminiParts.push({ text: `Item: ${barcodePreload.title}${barcodePreload.price ? '. Reference price: ' + barcodePreload.price : ''}. UPC: ${barcodePreload.upc || ''}. Condition: ${condLabel}. Using your independent market knowledge, provide realistic pricing, sell-through rate estimate, days to sell estimate, and estimated package dimensions.` });
                     } else {
-                        geminiParts.push({ text: `Analyze this item for eBay arbitrage. Condition: ${condLabel}. Provide realistic pricing based on actual eBay sold data, sell-through rate, days to sell, and estimated package dimensions for shipping.` });
+                        geminiParts.push({ text: `Analyze this item for resale pricing. Condition: ${condLabel}. Using your independent market knowledge (not eBay sold data), provide realistic pricing, sell-through rate estimate, days to sell estimate, and estimated package dimensions for shipping.` });
                     }
                     if (b64) geminiParts.push({ inlineData: { mimeType: reconMimeType, data: b64 } });
 
@@ -1096,21 +1082,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                     setActiveHistory(null);
                     setBarcodePreload(null);
 
-                    // Fire live eBay price research in background — non-blocking
-                    setArLivePrices(null);
-                    setArPriceLoading(true);
-                    (async () => {
-                        try {
-                            const token = await user.getIdToken();
-                            const pr = await fetch('/api/ebay/price-research', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                                body: JSON.stringify({ title: ai.itemTitle, conditionId: condition })
-                            }).then(r => r.json());
-                            if (pr.strategies) setArLivePrices(pr);
-                        } catch(e) { console.warn('[AR] Live price research failed:', e.message); }
-                        finally { setArPriceLoading(false); }
-                    })();
+                    // eBay live price research removed — ALA §9.5 compliance — 21 MAR 2026
 
                     // Persist to Firestore, enforce 20-result cap
                     if (user && dbRef && dbRef.current) {
@@ -1131,15 +1103,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                 finally { setIsRunning(false); setReconStatus(''); }
             };
 
-            // When live eBay prices are available, recalculate cost stack using
-            // the Market strategy price instead of Gemini's estimate.
-            const activeResult = React.useMemo(() => {
-                if (!displayResult) return displayResult;
-                if (!arLivePrices?.strategies?.market) return displayResult;
-                const livePrice = arLivePrices.strategies.market;
-                const liveArb = calcArbitrage(livePrice, displayResult.purchasePrice, displayResult.arb?.uspsEstimate || displayResult.shipping || 0, displayResult.shippingMode || 'flat', displayResult.arb?.flatFeeCollected || 0, userSettings);
-                return { ...displayResult, priceMid: livePrice, arb: liveArb };
-            }, [displayResult, arLivePrices, userSettings]);
+            // activeResult useMemo removed — ALA §9.5 compliance — 21 MAR 2026
+            // All result display now uses displayResult directly.
 
             // -- Inline mode: desktop right panel -------------------------------------
             if (inline) {
@@ -1175,7 +1140,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between shrink-0 bg-white">
                             <div className="flex items-center gap-2">
                                 <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
-                                <p className="text-[10px] font-black text-slate-700 uppercase tracking-widest">Arbitrage Recon</p>
+                                <p className="text-[10px] font-black text-slate-700 uppercase tracking-widest">Profit Scout</p>
                             </div>
                             <div className="flex items-center gap-2">
                                 {onScanRequest && (
@@ -1251,28 +1216,17 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                         )}
                                     </div>
 
-                                    {/* Default scan engine toggle + Scan Barcode button */}
-                                    <div className="flex gap-2">
-                                        <div className="flex bg-slate-100 rounded-xl p-0.5 shrink-0">
-                                            {['ebay','amazon'].map(eng => (
-                                                <button key={eng} onClick={() => setReconDefaultEngine(eng)}
-                                                    className={"px-3 py-2 rounded-[10px] text-[9px] font-black uppercase transition-all " + (reconDefaultEngine === eng ? (eng === 'ebay' ? 'bg-blue-600 text-white shadow-sm' : 'bg-orange-500 text-white shadow-sm') : 'text-slate-400 hover:text-slate-600')}>
-                                                    {eng === 'ebay' ? 'eBay' : 'AMZ'}
-                                                </button>
-                                            ))}
-                                        </div>
-                                        <button onClick={() => setShowReconScanner(true)}
-                                            className="flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 bg-slate-100 text-slate-600 hover:bg-emerald-50 hover:text-emerald-600 active:scale-95">
-                                            <Icon name="ScanLine" size={12}/> Scan Barcode
-                                        </button>
-                                    </div>
+                                    {/* Scan Barcode button (engine toggle removed — ALA §9.5 — 21 MAR 2026) */}
+                                    <button onClick={() => setShowReconScanner(true)}
+                                        className="w-full py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-1.5 bg-slate-100 text-slate-600 hover:bg-emerald-50 hover:text-emerald-600 active:scale-95">
+                                        <Icon name="ScanLine" size={12}/> Scan Barcode
+                                    </button>
 
                                     {/* Scan results */}
                                     <ReconScanResultsPanel
                                         reconScanResults={reconScanResults}
                                         reconManualTitle={reconManualTitle}
                                         setReconManualTitle={setReconManualTitle}
-                                        reconSearchEngine={reconSearchEngine}
                                         setBarcodePreload={setBarcodePreload}
                                         setReconScanResults={setReconScanResults}
                                         setResult={setResult}
@@ -1340,7 +1294,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                     {/* Run Button */}
                                     <button onClick={runRecon} disabled={isRunning || (!reconImage && !barcodePreload)}
                                         className={`w-full py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest transition-all active:scale-95 shadow-lg flex items-center justify-center gap-3 ${isRunning || (!reconImage && !barcodePreload) ? "bg-slate-200 text-slate-400" : 'bg-emerald-500 text-white shadow-emerald-100 hover:bg-emerald-400'}`}>
-                                        {isRunning ? <><Icon name="Loader2" size={16} className="animate-spin" /> {reconStatus || 'Running Recon...'}</> : <><Icon name="Zap" size={16} /> Run Arbitrage Intel</>}
+                                        {isRunning ? <><Icon name="Loader2" size={16} className="animate-spin" /> {reconStatus || 'Running Recon...'}</> : <><Icon name="Zap" size={16} /> Run Profit Scout</>}
                                     </button>
                                 </div>
                             )}
@@ -1350,11 +1304,11 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                 const r = displayResult;
                                 return (
                                     <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-400">
-                                        {(() => { const ar = activeResult || r; const liveVerdict = getVerdict(ar.arb.netProfit); return (
+                                        {(() => { const ar = r; const liveVerdict = getVerdict(ar.arb.netProfit); return (
                                         <div className={`rounded-2xl border-2 px-5 py-4 flex items-center justify-between ${liveVerdict.css}`}>
                                             <div>
                                                 <p className="text-xl font-black leading-none">{liveVerdict.label}</p>
-                                                <p className="text-[10px] font-black uppercase tracking-widest mt-1 opacity-70">Arbitrage Verdict</p>
+                                                <p className="text-[10px] font-black uppercase tracking-widest mt-1 opacity-70">Profit Verdict</p>
                                             </div>
                                             <div className="text-right">
                                                 <p className="text-2xl font-black leading-none">${ar.arb.netProfit.toFixed(2)}</p>
@@ -1372,57 +1326,41 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                         </div>
                                         <div className="bg-white border border-slate-200 rounded-2xl p-4">
                                             <div className="flex items-center gap-2 mb-3">
-                                                <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">eBay Market Intel</p>
-                                                {arPriceLoading && <Icon name="Loader2" size={10} className="animate-spin text-blue-400 ml-1"/>}
-                                                {arLivePrices && <span className="text-[7px] font-black px-1.5 py-0.5 rounded bg-blue-600 text-white uppercase">⚡ Live</span>}
+                                                <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">AI Price Intel</p>
+                                                <span className="text-[7px] font-black px-1.5 py-0.5 rounded bg-slate-600 text-white uppercase">🤖 AI</span>
                                             </div>
-                                            {arLivePrices?.strategies ? (
-                                                <div className="grid grid-cols-3 gap-1.5">
-                                                    {[
-                                                        { key:'moveIt', label:'🔥 Move It', color:'bg-orange-50 border-orange-200 text-orange-700' },
-                                                        { key:'market', label:'✅ Market',  color:'bg-emerald-50 border-emerald-200 text-emerald-700' },
-                                                        { key:'hold',   label:'💰 Hold',    color:'bg-violet-50 border-violet-200 text-violet-700' },
-                                                    ].map(s => (
-                                                        <div key={s.key} className={`rounded-xl p-2 border text-center ${s.color}`}>
-                                                            <span className="text-[7px] font-black uppercase block mb-0.5">{s.label}</span>
-                                                            <span className="text-sm font-black block">${Number(arLivePrices.strategies[s.key]||0).toFixed(2)}</span>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            ) : (
-                                                <div className="flex items-end gap-2">
-                                                    <div className="text-center flex-1 bg-slate-50 rounded-xl p-2 border border-slate-200">
-                                                        <p className="text-[8px] font-black text-slate-400 uppercase mb-1">Low</p>
-                                                        <p className="text-sm font-black text-slate-500">${Number(r.priceLow||0).toFixed(2)}</p>
+                                            <div className="grid grid-cols-3 gap-1.5">
+                                                {[
+                                                    { key:'priceLow',  label:'🔥 Move It', sub:'Undercut market', color:'bg-orange-50 border-orange-200 text-orange-700' },
+                                                    { key:'priceMid',  label:'✅ Market',  sub:'Active median',  color:'bg-emerald-50 border-emerald-200 text-emerald-700' },
+                                                    { key:'priceHigh', label:'💰 Hold',    sub:'Near ask high',  color:'bg-violet-50 border-violet-200 text-violet-700' },
+                                                ].map(s => (
+                                                    <div key={s.key} className={`rounded-xl p-2 border text-center ${s.color}`}>
+                                                        <span className="text-[7px] font-black uppercase block mb-0.5">{s.label}</span>
+                                                        <span className="text-sm font-black block">${Number(r[s.key]||0).toFixed(2)}</span>
+                                                        <span className="text-[7px] opacity-70 block">{s.sub}</span>
                                                     </div>
-                                                    <div className="text-center flex-1 bg-blue-50 rounded-xl p-2 border-2 border-blue-200">
-                                                        <p className="text-[8px] font-black text-blue-500 uppercase mb-1">Mid</p>
-                                                        <p className="text-base font-black text-blue-700">${Number(r.priceMid||0).toFixed(2)}</p>
-                                                    </div>
-                                                    <div className="text-center flex-1 bg-slate-50 rounded-xl p-2 border border-slate-200">
-                                                        <p className="text-[8px] font-black text-slate-400 uppercase mb-1">High</p>
-                                                        <p className="text-sm font-black text-slate-500">${Number(r.priceHigh||0).toFixed(2)}</p>
-                                                    </div>
-                                                </div>
-                                            )}
+                                                ))}
+                                            </div>
+                                            <p className="text-[8px] text-slate-300 font-bold mt-2">Independent AI estimate · not derived from eBay data</p>
                                         </div>
                                         <div className="bg-white border border-slate-200 rounded-2xl p-4">
                                             <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-3">Cost Stack</p>
-                                            <div className="space-y-1">{renderCostStack(activeResult || r)}</div>
+                                            <div className="space-y-1">{renderCostStack(r)}</div>
                                             <div className="flex justify-between items-center pt-2 mt-2 border-t-2 border-slate-200">
                                                 <span className="text-[11px] font-black text-slate-800 uppercase">Net Profit</span>
-                                                <span className={'text-base font-black ' + ((activeResult || r).arb.netProfit >= 15 ? 'text-emerald-600' : (activeResult || r).arb.netProfit >= 5 ? 'text-amber-600' : 'text-red-500')}>
-                                                    ${(activeResult || r).arb.netProfit.toFixed(2)}
+                                                <span className={'text-base font-black ' + (r.arb.netProfit >= 15 ? 'text-emerald-600' : r.arb.netProfit >= 5 ? 'text-amber-600' : 'text-red-500')}>
+                                                    ${r.arb.netProfit.toFixed(2)}
                                                 </span>
                                             </div>
                                         </div>
                                         <div className="bg-white border border-slate-200 rounded-2xl p-4">
-                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-3">Market Velocity</p>
+                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-3">Est. Market Velocity</p>
                                             <div className="flex items-center gap-4">
                                                 <div className="flex-1">
                                                     <div className="flex justify-between mb-1">
-                                                        <span className="text-[9px] font-black text-slate-400 uppercase">Sell-Through</span>
-                                                        <span className="text-[9px] font-black text-slate-700">{r.sellThroughRate}%</span>
+                                                        <span className="text-[9px] font-black text-slate-400 uppercase">Est. Sell Rate</span>
+                                                        <span className="text-[9px] font-black text-slate-700">~{r.sellThroughRate}%</span>
                                                     </div>
                                                     <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
                                                         <div className={`h-full rounded-full ${r.sellThroughRate >= 60 ? 'bg-emerald-400' : r.sellThroughRate >= 30 ? 'bg-amber-400' : 'bg-red-400'}`}
@@ -1431,15 +1369,16 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                 </div>
                                                 <div className="text-right shrink-0">
                                                     <p className="text-base font-black text-slate-800 leading-none">~{r.daysToSell}d</p>
-                                                    <p className="text-[8px] font-black text-slate-400 uppercase mt-0.5">Days to Sell</p>
+                                                    <p className="text-[8px] font-black text-slate-400 uppercase mt-0.5">Est. Days to Sell</p>
                                                 </div>
                                             </div>
+                                            <p className="text-[8px] text-slate-300 font-bold mt-2">AI velocity estimate · not derived from eBay data</p>
                                         </div>
                                         <button onClick={() => onSendToProcessing && onSendToProcessing({ title: r.itemTitle, imageUrl: r.imageUrl, price: r.priceMid })}
                                             className="w-full py-4 bg-blue-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-500 transition-all active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-blue-100">
                                             <Icon name="PackagePlus" size={13}/> Send to Add Processor
                                         </button>
-                                        <button onClick={() => { setResult(null); setReconImage(null); setBarcodePreload(null); setArLivePrices(null); setArPriceLoading(false); setActiveHistory(null); }}
+                                        <button onClick={() => { setResult(null); setReconImage(null); setBarcodePreload(null); setActiveHistory(null); }}
                                             className="w-full py-3 bg-slate-100 text-slate-600 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all active:scale-95">
                                             <Icon name="RotateCcw" size={12} className="inline mr-1"/> New Recon
                                         </button>
@@ -1479,8 +1418,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                 <Icon name="Crosshair" size={18} className="text-white" />
                                             </div>
                                             <div>
-                                                <h2 className="text-sm font-black uppercase tracking-tight leading-none">Arbitrage Recon</h2>
-                                                <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mt-0.5">eBay Flip Intel Engine</p>
+                                                <h2 className="text-sm font-black uppercase tracking-tight leading-none">Profit Scout</h2>
+                                                <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mt-0.5">Resale Profit Engine</p>
                                             </div>
                                         </div>
                                         <button onClick={() => setIsOpen(false)} className="p-2 hover:bg-slate-100 rounded-xl transition-colors">
@@ -1517,11 +1456,11 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                             <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-400">
 
                                                 {/* Verdict Banner */}
-                                                {(() => { const ar = activeResult || r; const liveVerdict = getVerdict(ar.arb.netProfit); return (
+                                                {(() => { const ar = r; const liveVerdict = getVerdict(ar.arb.netProfit); return (
                                                 <div className={`rounded-2xl border-2 px-6 py-5 flex items-center justify-between ${liveVerdict.css}`}>
                                                     <div>
                                                         <p className="text-2xl font-black leading-none">{liveVerdict.label}</p>
-                                                        <p className="text-[10px] font-black uppercase tracking-widest mt-1 opacity-70">Arbitrage Verdict</p>
+                                                        <p className="text-[10px] font-black uppercase tracking-widest mt-1 opacity-70">Profit Verdict</p>
                                                     </div>
                                                     <div className="text-right">
                                                         <p className="text-3xl font-black leading-none">${ar.arb.netProfit.toFixed(2)}</p>
@@ -1544,49 +1483,25 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                 {/* Price Intel */}
                                                 <div className="bg-white border border-slate-200 rounded-2xl p-5">
                                                     <div className="flex items-center gap-2 mb-4">
-                                                        <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">eBay Market Intel</p>
-                                                        {arPriceLoading && <Icon name="Loader2" size={10} className="animate-spin text-blue-400"/>}
-                                                        {arLivePrices && <span className="text-[7px] font-black px-1.5 py-0.5 rounded bg-blue-600 text-white uppercase">⚡ Live</span>}
-                                                        {!arLivePrices && !arPriceLoading && <span className="text-[7px] font-black text-slate-400 uppercase">{r.priceConfidence} Confidence</span>}
+                                                        <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">AI Price Intel</p>
+                                                        <span className="text-[7px] font-black px-1.5 py-0.5 rounded bg-slate-600 text-white uppercase">🤖 AI</span>
+                                                        <span className="text-[7px] font-black text-slate-400 uppercase">{r.priceConfidence} Confidence</span>
                                                     </div>
-                                                    {arLivePrices?.strategies ? (
-                                                        <>
-                                                            <div className="grid grid-cols-3 gap-2 mb-3">
-                                                                {[
-                                                                    { key:'moveIt', label:'🔥 Move It', sub:'Fastest sale',     color:'bg-orange-50 border-orange-200 text-orange-700' },
-                                                                    { key:'market', label:'✅ Market',  sub:'Sold avg',         color:'bg-emerald-50 border-emerald-200 text-emerald-700' },
-                                                                    { key:'hold',   label:'💰 Hold',    sub:'Sold high',        color:'bg-violet-50 border-violet-200 text-violet-700' },
-                                                                ].map(s => (
-                                                                    <div key={s.key} className={`rounded-2xl p-3 border text-center ${s.color}`}>
-                                                                        <span className="text-[8px] font-black uppercase block mb-1">{s.label}</span>
-                                                                        <span className="text-lg font-black block">${Number(arLivePrices.strategies[s.key]||0).toFixed(2)}</span>
-                                                                        <span className="text-[7px] opacity-70 block">{s.sub}</span>
-                                                                    </div>
-                                                                ))}
+                                                    <div className="grid grid-cols-3 gap-2 mb-3">
+                                                        {[
+                                                            { key:'priceLow',  label:'🔥 Move It', sub:'Undercut market', color:'bg-orange-50 border-orange-200 text-orange-700' },
+                                                            { key:'priceMid',  label:'✅ Market',  sub:'Active median',  color:'bg-emerald-50 border-emerald-200 text-emerald-700' },
+                                                            { key:'priceHigh', label:'💰 Hold',    sub:'Near ask high',  color:'bg-violet-50 border-violet-200 text-violet-700' },
+                                                        ].map(s => (
+                                                            <div key={s.key} className={`rounded-2xl p-3 border text-center ${s.color}`}>
+                                                                <span className="text-[8px] font-black uppercase block mb-1">{s.label}</span>
+                                                                <span className="text-lg font-black block">${Number(r[s.key]||0).toFixed(2)}</span>
+                                                                <span className="text-[7px] opacity-70 block">{s.sub}</span>
                                                             </div>
-                                                            {arMode !== 'fo' && <p className="text-[10px] text-slate-500 italic border-l-2 border-blue-200 pl-3 leading-relaxed">{arLivePrices.basis}</p>}
-                                                            <p className="text-[8px] text-slate-300 font-bold mt-1.5">Pricing data sourced from eBay Marketplace</p>
-                                                        </>
-                                                    ) : (
-                                                        <>
-                                                            <div className="flex items-end gap-3 mb-3">
-                                                                <div className="text-center flex-1 bg-slate-50 rounded-xl p-3 border border-slate-200">
-                                                                    <p className="text-[8px] font-black text-slate-400 uppercase mb-1">Low</p>
-                                                                    <p className="text-base font-black text-slate-500">${Number(r.priceLow || 0).toFixed(2)}</p>
-                                                                </div>
-                                                                <div className="text-center flex-1 bg-blue-50 rounded-xl p-3 border-2 border-blue-200">
-                                                                    <p className="text-[8px] font-black text-blue-500 uppercase mb-1">Mid</p>
-                                                                    <p className="text-xl font-black text-blue-700">${Number(r.priceMid || 0).toFixed(2)}</p>
-                                                                </div>
-                                                                <div className="text-center flex-1 bg-slate-50 rounded-xl p-3 border border-slate-200">
-                                                                    <p className="text-[8px] font-black text-slate-400 uppercase mb-1">High</p>
-                                                                    <p className="text-base font-black text-slate-500">${Number(r.priceHigh || 0).toFixed(2)}</p>
-                                                                </div>
-                                                            </div>
-                                                            {arMode !== 'fo' && <p className="text-[10px] text-slate-500 italic border-l-2 border-blue-200 pl-3 leading-relaxed">{r.priceBasis}</p>}
-                                                            <p className="text-[8px] text-slate-300 font-bold mt-1.5">Pricing data sourced from eBay Marketplace</p>
-                                                        </>
-                                                    )}
+                                                        ))}
+                                                    </div>
+                                                    {arMode !== 'fo' && <p className="text-[10px] text-slate-500 italic border-l-2 border-slate-200 pl-3 leading-relaxed">{r.priceBasis}</p>}
+                                                    <p className="text-[8px] text-slate-300 font-bold mt-1.5">Independent AI estimate · not derived from eBay data</p>
                                                 </div>
 
                                                 {/* Sell-Through */}
@@ -1594,8 +1509,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                     <div className="bg-white border border-slate-200 rounded-2xl px-4 py-3 flex items-center gap-4">
                                                         <div className="flex-1">
                                                             <div className="flex justify-between mb-1">
-                                                                <span className="text-[8px] font-black text-slate-400 uppercase">STR</span>
-                                                                <span className="text-[9px] font-black text-slate-700">{r.sellThroughRate}%</span>
+                                                                <span className="text-[8px] font-black text-slate-400 uppercase">EST. STR</span>
+                                                                <span className="text-[9px] font-black text-slate-700">~{r.sellThroughRate}%</span>
                                                             </div>
                                                             <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
                                                                 <div className={`h-full rounded-full ${r.sellThroughRate >= 60 ? 'bg-emerald-400' : r.sellThroughRate >= 30 ? 'bg-amber-400' : 'bg-red-400'}`}
@@ -1604,18 +1519,19 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                         </div>
                                                         <div className="shrink-0 text-right">
                                                             <span className="text-sm font-black text-slate-800">~{r.daysToSell}d</span>
-                                                            <span className="text-[8px] font-black text-slate-400 uppercase ml-1">to sell</span>
+                                                            <span className="text-[8px] font-black text-slate-400 uppercase ml-1">est. to sell</span>
                                                         </div>
                                                         <span className="text-[8px] font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-lg uppercase">{r.velocityLabel}</span>
                                                     </div>
+                                                    <p className="text-[8px] text-slate-300 font-bold mt-1">AI velocity estimate · not derived from eBay data</p>
                                                 ) : (
                                                 <div className="bg-white border border-slate-200 rounded-2xl p-5">
-                                                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-4">Market Velocity</p>
+                                                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-4">Est. Market Velocity</p>
                                                     <div className="flex items-center gap-6">
                                                         <div className="flex-1">
                                                             <div className="flex justify-between mb-2">
-                                                                <span className="text-[9px] font-black text-slate-400 uppercase">Sell-Through Rate</span>
-                                                                <span className="text-[9px] font-black text-slate-700">{r.sellThroughRate}%</span>
+                                                                <span className="text-[9px] font-black text-slate-400 uppercase">Est. Sell-Through Rate</span>
+                                                                <span className="text-[9px] font-black text-slate-700">~{r.sellThroughRate}%</span>
                                                             </div>
                                                             <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
                                                                 <div className={`h-full rounded-full transition-all ${r.sellThroughRate >= 60 ? 'bg-emerald-400' : r.sellThroughRate >= 30 ? 'bg-amber-400' : 'bg-red-400'}`}
@@ -1624,12 +1540,13 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                         </div>
                                                         <div className="text-right shrink-0">
                                                             <p className="text-lg font-black text-slate-800 leading-none">~{r.daysToSell}d</p>
-                                                            <p className="text-[8px] font-black text-slate-400 uppercase mt-0.5">Avg. Days to Sell</p>
+                                                            <p className="text-[8px] font-black text-slate-400 uppercase mt-0.5">Est. Days to Sell</p>
                                                         </div>
                                                     </div>
                                                     <div className="mt-3 bg-slate-50 rounded-xl px-4 py-2 border border-slate-100 inline-block">
                                                         <span className="text-[10px] font-black text-slate-600 uppercase">{r.velocityLabel}</span>
                                                     </div>
+                                                    <p className="text-[8px] text-slate-300 font-bold mt-3">AI velocity estimate · not derived from eBay data</p>
                                                 </div>
                                                 )}
 
@@ -1648,7 +1565,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                     )}
                                                     <div className="space-y-2.5">
                                                         {(() => {
-                                                            const ar = activeResult || r;
+                                                            const ar = r;
                                                             const mode = r.shippingMode || 'flat';
                                                             const usps = ar.arb.uspsEstimate || r.shipping || 0;
                                                             const rows = [
@@ -1678,8 +1595,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                         })()}
                                                         <div className="flex justify-between items-center pt-2 mt-1 border-t-2 border-slate-200">
                                                             <span className="text-[11px] font-black text-slate-800 uppercase tracking-wide">Net Profit</span>
-                                                            <span className={'text-lg font-black ' + ((activeResult || r).arb.netProfit >= 15 ? 'text-emerald-600' : (activeResult || r).arb.netProfit >= 5 ? 'text-amber-600' : 'text-red-500')}>
-                                                                ${(activeResult || r).arb.netProfit.toFixed(2)}
+                                                            <span className={'text-lg font-black ' + (r.arb.netProfit >= 15 ? 'text-emerald-600' : r.arb.netProfit >= 5 ? 'text-amber-600' : 'text-red-500')}>
+                                                                ${r.arb.netProfit.toFixed(2)}
                                                             </span>
                                                         </div>
                                                     </div>
@@ -1719,7 +1636,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                         className="flex-1 py-4 bg-emerald-500 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-400 transition-all active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-emerald-100">
                                                         <Icon name="Crosshair" size={13}/> Save Target
                                                     </button>
-                                                    <button onClick={() => { setResult(null); setReconImage(null); setBarcodePreload(null); setArLivePrices(null); setArPriceLoading(false); setActiveHistory(null); }}
+                                                    <button onClick={() => { setResult(null); setReconImage(null); setBarcodePreload(null); setActiveHistory(null); }}
                                                         className="flex-1 py-4 bg-slate-100 text-slate-600 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all active:scale-95 flex items-center justify-center gap-2">
                                                         <Icon name="SkipForward" size={13}/> Pass / Next
                                                     </button>
@@ -1730,7 +1647,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                         className="w-full mt-2 py-4 bg-blue-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-500 transition-all active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-blue-100">
                                                         <Icon name="PackagePlus" size={13}/> Send to Add Processor
                                                     </button>
-                                                    <button onClick={() => { setResult(null); setReconImage(null); setBarcodePreload(null); setArLivePrices(null); setArPriceLoading(false); setActiveHistory(null); }}
+                                                    <button onClick={() => { setResult(null); setReconImage(null); setBarcodePreload(null); setActiveHistory(null); }}
                                                         className="w-full mt-2 py-3 bg-slate-100 text-slate-600 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all active:scale-95">
                                                         <Icon name="RotateCcw" size={12} className="inline mr-1"/> New Recon
                                                     </button>
@@ -1743,7 +1660,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                     {/* Session History — Full Recon only */}
                                     {arMode === 'full' && history.length > 0 && (
                                         <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200">
-                                            <div className="flex items-center justify-between mb-3"><p className="text-[8px] font-black uppercase text-slate-400 tracking-widest">Scout History ({history.length}/20)</p>{confirmPurge ? (<span className="flex items-center gap-1"><button onClick={() => setConfirmPurge(false)} className="text-[8px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-600 px-2 py-1 rounded-lg hover:bg-slate-100 transition-colors">Cancel</button><button onClick={purgeHistory} className="text-[8px] font-black uppercase tracking-widest text-white bg-red-500 hover:bg-red-600 px-2 py-1 rounded-lg transition-colors">Confirm</button></span>) : (<button onClick={() => setConfirmPurge(true)} className="flex items-center gap-1 text-[8px] font-black uppercase tracking-widest text-red-400 hover:text-red-600 transition-colors px-2 py-1 rounded-lg hover:bg-red-50"><Icon name="Trash2" size={10}/> Clear</button>)}</div>
+                                            <div className="flex items-center justify-between mb-3"><p className="text-[8px] font-black uppercase text-slate-400 tracking-widest">Profit History ({history.length}/20)</p>{confirmPurge ? (<span className="flex items-center gap-1"><button onClick={() => setConfirmPurge(false)} className="text-[8px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-600 px-2 py-1 rounded-lg hover:bg-slate-100 transition-colors">Cancel</button><button onClick={purgeHistory} className="text-[8px] font-black uppercase tracking-widest text-white bg-red-500 hover:bg-red-600 px-2 py-1 rounded-lg transition-colors">Confirm</button></span>) : (<button onClick={() => setConfirmPurge(true)} className="flex items-center gap-1 text-[8px] font-black uppercase tracking-widest text-red-400 hover:text-red-600 transition-colors px-2 py-1 rounded-lg hover:bg-red-50"><Icon name="Trash2" size={10}/> Clear</button>)}</div>
                                             <div className="space-y-1">
                                                 {history.map((h, i) => (
                                                     <button key={i} onClick={() => { setActiveHistory(i); setResult(null); }}
@@ -1765,16 +1682,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                         <>
                                             {/* Split input: Barcode (left) + Photo (right) */}
                                             <div className="flex gap-3">
-                                                {/* Barcode scan */}
+                                                {/* Barcode scan (engine toggle removed — ALA §9.5 — 21 MAR 2026) */}
                                                 <div className="flex flex-col gap-1.5 flex-1">
-                                                    <div className="flex bg-slate-100 rounded-xl p-0.5">
-                                                        {['ebay','amazon'].map(eng => (
-                                                            <button key={eng} onClick={() => setReconDefaultEngine(eng)}
-                                                                className={"flex-1 py-1.5 rounded-[10px] text-[9px] font-black uppercase transition-all " + (reconDefaultEngine === eng ? (eng === 'ebay' ? 'bg-blue-600 text-white shadow-sm' : 'bg-orange-500 text-white shadow-sm') : 'text-slate-400 hover:text-slate-600')}>
-                                                                {eng === 'ebay' ? 'eBay' : 'AMZ'}
-                                                            </button>
-                                                        ))}
-                                                    </div>
                                                     <button onClick={() => setShowReconScanner(true)}
                                                         className="flex-1 py-5 rounded-2xl border-2 border-dashed border-slate-300 hover:border-emerald-400 hover:bg-emerald-50 transition-all flex flex-col items-center justify-center gap-2 text-slate-400 hover:text-emerald-600 active:scale-95">
                                                         <Icon name="ScanLine" size={28}/>
@@ -1806,7 +1715,6 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                                 reconScanResults={reconScanResults}
                                                 reconManualTitle={reconManualTitle}
                                                 setReconManualTitle={setReconManualTitle}
-                                                reconSearchEngine={reconSearchEngine}
                                                 setBarcodePreload={setBarcodePreload}
                                                 setReconScanResults={setReconScanResults}
                                                 setResult={setResult}
@@ -1876,7 +1784,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                                             {/* Run Button */}
                                             <button onClick={runRecon} disabled={isRunning || (!reconImage && !barcodePreload)}
                                                 className={`w-full py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest transition-all active:scale-95 shadow-lg flex items-center justify-center gap-3 ${isRunning || (!reconImage && !barcodePreload) ? "bg-slate-200 text-slate-400" : 'bg-emerald-500 text-white shadow-emerald-100 hover:bg-emerald-400'}`}>
-                                                {isRunning ? <><Icon name="Loader2" size={16} className="animate-spin" /> {reconStatus || 'Running Recon...'}</> : <><Icon name="Zap" size={16} /> Run Arbitrage Intel</>}
+                                                {isRunning ? <><Icon name="Loader2" size={16} className="animate-spin" /> {reconStatus || 'Running Recon...'}</> : <><Icon name="Zap" size={16} /> Run Profit Scout</>}
                                             </button>
                                             {(!reconImage && !barcodePreload) && (
                                                 <p className="text-[10px] text-slate-400 text-center uppercase tracking-widest">Load an image or scan a barcode to run</p>
@@ -2459,7 +2367,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             };
 
             // ── API Usage loader ──────────────────────────────────────────────
-            const loadUsage = async (providers = ['gemini', 'serpapi', 'cloudinary', 'server']) => {
+            const loadUsage = async (providers = ['gemini', 'cloudinary', 'server']) => {
                 setUsageLoading(prev => ({ ...prev, ...Object.fromEntries(providers.map(p => [p, true])) }));
                 const results = await Promise.allSettled(
                     providers.map(async p => {
@@ -2986,32 +2894,15 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
             const runPriceResearch = async (listing) => {
                 const condition = EBAY_CONDITIONS.find(c => c.id === listing.conditionId)?.label || 'Used';
                 let prices = null;
-                // 1. eBay Browse API — real active listings
-                try {
-                    const tok = await user.getIdToken();
-                    const ebayRes = await fetch('/api/ebay/price-research', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${tok}` },
-                        body: JSON.stringify({ title: listing.title, conditionId: listing.conditionId, categoryId: listing.categoryId, brand: listing.brand, model: listing.model })
-                    });
-                    const ebayData = await ebayRes.json();
-                    if (ebayData.source === 'ebay_browse' && ebayData.mid) {
-                        prices = {
-                            low: ebayData.low, mid: ebayData.mid, high: ebayData.high,
-                            confidence: ebayData.confidence, basis: ebayData.basis,
-                            count: ebayData.count, source: 'eBay Live', conditionId: listing.conditionId,
-                            active: ebayData.active, sold: ebayData.sold, strategies: ebayData.strategies
-                        };
-                    }
-                } catch(e) { console.warn('[Price] Browse API error:', e.message); }
-                // 2. Gemini fallback
+                // eBay Browse API call removed — ALA §9.5 compliance — 21 MAR 2026
+                // Gemini AI estimate is the sole pricing source.
                 if (!prices) {
                     const res = await fetch(PROXY_API_URL, {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             model: 'gemini-2.5-flash',
                             contents: [{ role: "user", parts: [{ text: `Estimate current eBay market value for: "${listing.title}". Condition: ${condition}. Return ONLY JSON with keys: low, mid, high (all numbers ending in .95), confidence (string: Low/Medium/High), basis (string: brief 1-sentence rationale).` }] }],
-                            systemInstruction: { parts: [{ text: "You are an expert eBay pricing analyst specializing in firearms accessories, tactical gear, and general merchandise. Analyze real eBay sold listings data. All prices must end in .95. Return ONLY valid JSON with no markdown or preamble." }] },
+                            systemInstruction: { parts: [{ text: "You are an expert resale pricing analyst specializing in general merchandise and tactical gear. Use your independent market knowledge to estimate realistic resale prices. Do NOT reference eBay sold data or any specific marketplace. All prices must end in .95. Return ONLY valid JSON with no markdown or preamble." }] },
                             generationConfig: { responseMimeType: "application/json" }
                         })
                     });
@@ -3292,7 +3183,7 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
                         <ul className="text-xs text-slate-500 space-y-1 list-disc list-inside mb-6">
                             <li>Node server running on port 3001?</li>
                             <li>.env has all FIREBASE_* keys set?</li>
-                            <li>GEMINI_API_KEY and SERPAPI_KEY present?</li>
+                            <li>GEMINI_API_KEY present?</li>
                             <li>CLOUDINARY_* vars configured?</li>
                         </ul>
                         <button onClick={() => window.location.reload()} className="w-full py-3 bg-red-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-red-500 transition-all">
@@ -3338,7 +3229,8 @@ Return ONLY valid JSON  -  no markdown, no preamble.`;
 
             const handleSendToRecon = (item, upc) => {
                 setScanResult(null);
-                setReconPreload({ title: item.title, upc, price: item.price });
+                // price removed from preload — UPCitemdb price fields not passed through (ALA §9.5)
+                setReconPreload({ title: item.title, upc });
             };
 
             const handleSendToListing = (item, upc) => {
@@ -3895,30 +3787,7 @@ www.scout-recon.com`
                                         })()
                                 )}
 
-                                {/* SerpAPI */}
-                                {usageCardShell('SerpAPI', 'Search Intelligence', 'Search', 'bg-emerald-500', usageLoading.serpapi, () => loadUsage(['serpapi']),
-                                    !usageData.serpapi
-                                        ? <p className="text-xs text-slate-400 italic">Click Refresh to load.</p>
-                                        : !usageData.serpapi.ok
-                                        ? <p className="text-xs text-red-400 font-bold">{usageData.serpapi.error}</p>
-                                        : (() => {
-                                            const s = usageData.serpapi;
-                                            const used  = s.thisMonthUsage   || 0;
-                                            const total = s.searchesPerMonth || 0;
-                                            return (
-                                                <div className="space-y-4">
-                                                    {total > 0 && progressBar(used, total, 'Monthly Searches')}
-                                                    <div className="grid grid-cols-2 gap-3">
-                                                        {statBox('Plan',            s.plan || '—')}
-                                                        {statBox('Searches Left',   (s.searchesLeft || 0).toLocaleString(), 'this billing cycle')}
-                                                        {statBox('Used This Month', used.toLocaleString())}
-                                                        {statBox('Monthly Limit',   total > 0 ? total.toLocaleString() : '—')}
-                                                    </div>
-                                                    <p className="text-[9px] text-slate-300 font-bold">Updated {new Date(s.fetchedAt).toLocaleTimeString()}</p>
-                                                </div>
-                                            );
-                                        })()
-                                )}
+                                {/* SerpAPI usage card removed — ALA §9.5 compliance — 21 MAR 2026 */}
 
                                 {/* Cloudinary */}
                                 {usageCardShell('Cloudinary', 'Image Storage', 'Image', 'bg-purple-500', usageLoading.cloudinary, () => loadUsage(['cloudinary']),
@@ -4689,8 +4558,8 @@ www.scout-recon.com`
                                     <div className="bg-gradient-to-br from-blue-50 to-slate-50 rounded-2xl p-5 border border-blue-100 mb-6 shadow-sm">
                                         {/* Header row */}
                                         <div className="flex items-center gap-2 mb-4">
-                                            <span className={`text-[8px] font-black px-2 py-1 rounded-lg uppercase tracking-widest ${pr.source === 'eBay Live' ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-500'}`}>
-                                                {pr.source === 'eBay Live' ? '⚡ eBay Live' : '🤖 AI Estimate'}
+                                            <span className="text-[8px] font-black px-2 py-1 rounded-lg uppercase tracking-widest bg-slate-600 text-white">
+                                                🤖 AI Estimate
                                             </span>
                                             <span className="text-[8px] font-black px-2 py-1 rounded-lg uppercase bg-green-100 text-green-700">{pr.confidence || 'N/A'}</span>
                                             <button onClick={() => researchPrice(l)} disabled={isPricing}
@@ -4704,9 +4573,9 @@ www.scout-recon.com`
                                         {pr.strategies ? (
                                             <div className="grid grid-cols-3 gap-2 mb-4">
                                                 {[
-                                                    { key: 'moveIt', label: '🔥 Move It',  sub: 'Fastest sale',      color: 'bg-orange-50 border-orange-200 hover:bg-orange-100 text-orange-700' },
-                                                    { key: 'market', label: '✅ Market',   sub: 'Sell at sold avg',  color: 'bg-emerald-50 border-emerald-200 hover:bg-emerald-100 text-emerald-700' },
-                                                    { key: 'hold',   label: '💰 Hold',     sub: 'Sold high',         color: 'bg-violet-50 border-violet-200 hover:bg-violet-100 text-violet-700' },
+                                                    { key: 'moveIt', label: '🔥 Move It',  sub: 'Undercut market',  color: 'bg-orange-50 border-orange-200 hover:bg-orange-100 text-orange-700' },
+                                                    { key: 'market', label: '✅ Market',   sub: 'AI median',        color: 'bg-emerald-50 border-emerald-200 hover:bg-emerald-100 text-emerald-700' },
+                                                    { key: 'hold',   label: '💰 Hold',     sub: 'AI high',          color: 'bg-violet-50 border-violet-200 hover:bg-violet-100 text-violet-700' },
                                                 ].map(s => (
                                                     <button key={s.key} onClick={() => applyPrice(pr.strategies[s.key])}
                                                         className={`rounded-2xl p-3 border text-center transition-all active:scale-95 ${s.color}`}>
@@ -4734,34 +4603,10 @@ www.scout-recon.com`
                                             </div>
                                         )}
 
-                                        {/* Active vs Sold data rows */}
-                                        {pr.active && (
-                                            <div className="grid grid-cols-2 gap-2 mb-3">
-                                                <div className="bg-white/70 rounded-xl p-2.5 border border-slate-100">
-                                                    <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block mb-1.5">📋 Active ({pr.active.count})</span>
-                                                    <div className="flex justify-between text-[9px]">
-                                                        <span className="text-slate-500">Low <span className="font-black text-slate-700">${pr.active.low}</span></span>
-                                                        <span className="text-slate-500">Mid <span className="font-black text-slate-700">${pr.active.mid}</span></span>
-                                                        <span className="text-slate-500">Ask High <span className="font-black text-slate-700">${pr.active.high}</span></span>
-                                                    </div>
-                                                </div>
-                                                <div className={`rounded-xl p-2.5 border ${pr.sold ? 'bg-white/70 border-slate-100' : 'bg-slate-50 border-slate-100 opacity-50'}`}>
-                                                    <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest block mb-1.5">✅ Sold {pr.sold ? `(${pr.sold.count})` : '(none)'}</span>
-                                                    {pr.sold ? (
-                                                        <div className="flex justify-between text-[9px]">
-                                                            <span className="text-slate-500">Low <span className="font-black text-slate-700">${pr.sold.low}</span></span>
-                                                            <span className="text-slate-500">Mid <span className="font-black text-slate-700">${pr.sold.mid}</span></span>
-                                                            <span className="text-slate-500">High <span className="font-black text-slate-700">${pr.sold.high}</span></span>
-                                                        </div>
-                                                    ) : (
-                                                        <span className="text-[8px] text-slate-400">No recent sold data</span>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        )}
+                                        {/* Active/Sold bands removed — ALA §9.5 compliance — 21 MAR 2026 */}
 
                                         <p className="text-[10px] text-slate-500 italic leading-relaxed border-l-2 border-blue-200 pl-3">{pr.basis}</p>
-                                        {pr.source === 'ebay_browse' && <p className="text-[8px] text-slate-300 font-bold mt-1.5">Pricing data sourced from eBay Marketplace</p>}
+                                        <p className="text-[8px] text-slate-300 font-bold mt-1.5">Independent AI estimate · not derived from eBay data</p>
                                     </div>
                                     );
                                 })()}
@@ -5310,7 +5155,7 @@ www.scout-recon.com`
 
                     </div>
                     {/* Desktop Recon FAB — same behaviour as mobile */}
-                    <ArbitrageRecon
+                    <ProfitScout
                         proxyUrl={PROXY_API_URL}
                         ebayConditions={EBAY_CONDITIONS}
                         showToast={showToast}
@@ -5401,7 +5246,7 @@ www.scout-recon.com`
                     </footer>
                 </div>
                 {/* Mobile Recon FAB */}
-                <ArbitrageRecon
+                <ProfitScout
                     proxyUrl={PROXY_API_URL}
                     ebayConditions={EBAY_CONDITIONS}
                     showToast={showToast}

@@ -83,7 +83,7 @@ const PORT = process.env.PORT || 3001;
 // Without this, express-rate-limit throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR and
 // crashes the middleware chain before body-parser runs → req.body is undefined.
 app.set('trust proxy', 1);
-const APP_VERSION = "7.0.0";
+const APP_VERSION = "8.0.0";
 
 // Owner email — drives server-side admin gate
 const OWNER_EMAIL = process.env.OWNER_EMAIL || 'admin@scout-recon.com';
@@ -140,13 +140,15 @@ const ALLOWED_IMAGE_HOSTS = new Set([
     'i.ebayimg.com',
     'm.media-amazon.com',
     'images-na.ssl-images-amazon.com',
-    'serpapi.com',
+    // serpapi.com removed — SerpAPI decommissioned (ALA §9.5 compliance — 21 MAR 2026)
     'encrypted-tbn0.gstatic.com',
     'encrypted-tbn1.gstatic.com',
     'encrypted-tbn2.gstatic.com',
     'encrypted-tbn3.gstatic.com',
     'shopping.googleapis.com',
-    'res.cloudinary.com',       // AR images uploaded during recon → sent to processor
+    'res.cloudinary.com',       // images uploaded during recon → sent to processor
+    'images.barcodelookup.com', // UPCitemdb product images
+    'buycott.com',              // UPCitemdb product images (alt CDN)
 ]);
 
 // ─── Middleware ────────────────────────────────────────────────────────────
@@ -571,31 +573,7 @@ app.get('/api/ebay/category-specifics', async (req, res) => {
 // GET /api/ebay/price-research-test — diagnostic endpoint, no auth required
 // Hit this in the browser to verify Browse API connectivity and token acquisition.
 // e.g. /api/ebay/price-research-test?q=wetsuit
-// GET /api/ebay/sold-test?q=wetsuit&cond=1000 — SerpAPI sold listings diagnostic
-app.get('/api/ebay/sold-test', requireUser, async (req, res) => {
-    try {
-        const q          = req.query.q    || 'wetsuit';
-        const condId      = parseInt(req.query.cond || '1000');
-        const lhCondition = condId === 1000 ? '1000' : condId <= 2750 ? null : '3000';
-        const serpKey    = process.env.SERPAPI_KEY;
-        if (!serpKey) return res.status(500).json({ error: 'SERPAPI_KEY not set' });
-        const serpBase   = { engine: 'ebay', _nkw: q, LH_Sold: '1', LH_Complete: '1', _ipg: '10', api_key: serpKey };
-        if (lhCondition) serpBase.LH_ItemCondition = lhCondition;
-        const serpParams = new URLSearchParams(serpBase);
-        const sr    = await fetch(`https://serpapi.com/search?${serpParams}`);
-        const sd    = await sr.json();
-        const items = sd.organic_results || sd.search_results || [];
-        res.json({
-            httpStatus: sr.status, itemCount: items.length,
-            serpError:  sd.error || null,
-            samples:    items.slice(0, 5).map(i => ({
-                title: i.title,
-                price: i.price?.extracted ?? i.extracted_price ?? i.price?.raw
-            })),
-            rawKeys: items[0] ? Object.keys(items[0]) : []
-        });
-    } catch(e) { res.status(500).json({ error: e.message }); }
-});
+// /api/ebay/sold-test — DELETED (ALA §9.5 compliance — 21 MAR 2026)
 
 app.get('/api/ebay/price-research-test', requireUser, async (req, res) => {
     try {
@@ -620,24 +598,23 @@ app.get('/api/ebay/price-research-test', requireUser, async (req, res) => {
     }
 });
 
-// In-memory cache for Finding API sold results — 6-hour TTL per search key.
-// Prevents burning the low findCompletedItems quota on repeated Re-Price calls
-// for the same item. Key = "searchQuery|conditionGroup".
-const _soldCache = new Map(); // key → { prices: [], ts: Date.now() }
-const SOLD_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
-const getCachedSoldPrices = (key) => {
-    const entry = _soldCache.get(key);
-    if (!entry) return null;
-    if (Date.now() - entry.ts > SOLD_CACHE_TTL_MS) { _soldCache.delete(key); return null; }
-    return entry.prices;
-};
-const setCachedSoldPrices = (key, prices) => _soldCache.set(key, { prices, ts: Date.now() });
-
-// POST /api/ebay/price-research — Phase 4 Live Price Intelligence
-// Queries eBay Browse API (active listings) + Finding API (sold listings) in parallel.
-// Returns active + sold price bands and three pricing strategy points.
+// POST /api/ebay/price-research — Compliant Live Price Intelligence
+// Feature flag: EBAY_PRICING_ENABLED=true required to activate.
+// Currently disabled pending eBay Restricted API written consent (ALA §8.5 / Option C).
+// Sold listing data pipeline removed per eBay ALA §9.5 compliance — 21 MAR 2026.
+// To activate when consent is received: set EBAY_PRICING_ENABLED=true in Railway env vars.
 app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }), async (req, res) => {
+
+    // ── Feature flag gate — disabled until eBay Option C written consent received ──
+    if (process.env.EBAY_PRICING_ENABLED !== 'true') {
+        return res.status(503).json({
+            error:  'eBay pricing data disabled pending Restricted API authorization.',
+            source: 'disabled',
+            code:   'PENDING_EBAY_CONSENT'
+        });
+    }
+
     const MIN_COMPS = 4;
     const pct = (arr, p) => arr[Math.max(0, Math.min(arr.length - 1, Math.floor(arr.length * p)))];
 
@@ -649,121 +626,34 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
         const words = title.split(/\s+/).filter(w => w.length > 1);
         const searchQuery = words.slice(0, 6).join(' ');
 
-        // Sold query fallback chain — most precise first, broadening until MIN_COMPS found.
-        // "Petzl RIG" (brand+model) may return 0 — sellers often omit model codes.
-        // "Petzl Descender" (brand + product type word) matches how buyers/sellers
-        // actually write eBay titles. Both are tried before falling back to title slices.
-        const brandModel   = [brand, model].filter(Boolean).join(' ').trim();
-        // Product type = last meaningful word in title that isn't the brand or model code
-        const stopWords    = new Set(['and','the','with','for','new','set','kit','lot','in','of','a']);
-        const typeWord     = [...words].reverse().find(w =>
-            w.length > 3 &&
-            !stopWords.has(w.toLowerCase()) &&
-            w.toLowerCase() !== (brand || '').toLowerCase() &&
-            w.toLowerCase() !== (model || '').toLowerCase()
-        );
-        const brandType = brand && typeWord ? `${brand} ${typeWord}` : '';
-        const soldQueryFallbacks = [
-            brandModel,                        // "Petzl RIG"
-            brandType,                         // "Petzl Descender"
-            words.slice(0, 3).join(' '),       // 3-word title slice
-            words.slice(0, 5).join(' '),       // 5-word title slice
-        ].filter((q, i, arr) => q && arr.indexOf(q) === i); // dedupe + remove empty
-
-        // Map SR conditionId → eBay condition groups
+        // Map SR conditionId → eBay Browse API condition filter
         const cid = parseInt(conditionId || '3000');
-        const lhCondition = cid === 1000 ? '1000' : cid <= 2750 ? null : '3000';
         let conditionFilter = '';
-        let soldConditionFilter = '';  // Marketplace Insights API uses same filter syntax as Browse
         if (cid === 1000) {
-            conditionFilter     = 'conditionIds:{1000}';
-            soldConditionFilter = 'conditionIds:{1000}';
+            conditionFilter = 'conditionIds:{1000}';
         } else if (cid >= 2000 && cid <= 2750) {
-            conditionFilter     = 'conditionIds:{2000|2010|2020|2030|2500|2750}';
-            soldConditionFilter = 'conditionIds:{2000|2010|2020|2030|2500|2750}';
+            conditionFilter = 'conditionIds:{2000|2010|2020|2030|2500|2750}';
         } else {
-            conditionFilter     = 'conditionIds:{3000|4000|5000|6000|7000}';
-            soldConditionFilter = 'conditionIds:{3000|4000|5000|6000|7000}';
+            conditionFilter = 'conditionIds:{3000|4000|5000|6000|7000}';
         }
 
-        // ── 1. Browse API — active fixed-price listings ───────────────────────
+        // ── Browse API — active fixed-price listings ───────────────────────────
+        // SerpAPI sold data pipeline removed (ALA §9.5 compliance — 21 MAR 2026).
+        // Sold-based strategies require eBay Restricted API written consent per §8.5.
         const activeFilterStr = `buyingOptions:{FIXED_PRICE},${conditionFilter}`;
-        const activeParams    = new URLSearchParams({ q: searchQuery, limit: '100' });
+        const activeParams = new URLSearchParams({ q: searchQuery, limit: '100' });
         if (categoryId) activeParams.set('category_ids', String(categoryId));
         const browseUrl = `${EBAY_PROD_API_BASE}/buy/browse/v1/item_summary/search?${activeParams}&filter=${activeFilterStr}`;
 
-        // ── 2. Sold listings via SerpAPI — keyed by primary sold query ──────────
-        // Cache key uses brandModel (most specific) so changing the search strategy
-        // never serves stale empty results from a previous broader/failed attempt.
-        console.log(`[Price] brand="${brand}" model="${model}" soldQueryFallbacks=${JSON.stringify(soldQueryFallbacks)}`);
-        const soldCacheKey = `${soldQueryFallbacks[0]}|${soldConditionFilter}`;
-        let soldPrices = getCachedSoldPrices(soldCacheKey);
-
-        if (soldPrices === null) {
-            // Use SerpAPI eBay engine with LH_Sold=1&LH_Complete=1 — same parameters
-            // eBay uses internally for sold/completed view. No eBay quota consumed.
-            // Marketplace Insights API (the native option) requires closed-beta allowlist.
-            const serpKey = process.env.SERPAPI_KEY;
-            if (!serpKey) {
-                console.warn('[Price] SERPAPI_KEY not set — sold data unavailable');
-                soldPrices = [];
-            } else {
-                try {
-                    let quotaExhausted = false;
-                    const fetchSoldItems = async (query, includeCondition) => {
-                        if (quotaExhausted) return [];
-                        const base = { engine: 'ebay', _nkw: query, LH_Sold: '1', LH_Complete: '1', api_key: serpKey };
-                        if (includeCondition && lhCondition) base.LH_ItemCondition = lhCondition;
-                        const sr  = await fetch(`https://serpapi.com/search?${new URLSearchParams(base)}`);
-                        const sd  = await sr.json();
-                        if (sd.error?.includes('run out of searches')) {
-                            quotaExhausted = true;
-                            console.warn('[Price] SerpAPI quota exhausted — sold data unavailable until plan renews');
-                            return [];
-                        }
-                        const items = sd.organic_results || sd.search_results || sd.items_results || [];
-                        return items
-                            .map(i => {
-                                const p = i.price;
-                                if (typeof p === 'number') return p;
-                                // SerpAPI sometimes returns { raw: "$49.95", extracted: 49.95 }
-                                if (p && typeof p === 'object') return parseFloat(p.extracted ?? p.value ?? 0);
-                                return parseFloat(String(p || '0').replace(/[^0-9.]/g, ''));
-                            })
-                            .filter(p => p > 0)
-                            .sort((a, b) => a - b);
-                    };
-
-                    // Try progressively broader queries until MIN_COMPS sold prices found.
-                    // Condition-filtered first, then without — bail entire loop if quota hit.
-                    soldPrices = [];
-                    for (const q of soldQueryFallbacks) {
-                        if (soldPrices.length >= MIN_COMPS || quotaExhausted) break;
-                        soldPrices = await fetchSoldItems(q, true);
-                        if (soldPrices.length < MIN_COMPS && lhCondition && !quotaExhausted) {
-                            soldPrices = await fetchSoldItems(q, false);
-                        }
-                        if (soldPrices.length < MIN_COMPS && !quotaExhausted) {
-                            console.log(`[Price] Sold: ${soldPrices.length} for "${q}" — trying broader query`);
-                        }
-                    }
-
-                    setCachedSoldPrices(soldCacheKey, soldPrices);
-                    console.log(`[Price] SerpAPI sold → ${soldPrices.length} prices for "${soldQueryFallbacks[0]}"`);
-                } catch(e) {
-                    console.warn('[Price] SerpAPI sold fetch error:', e.message);
-                    soldPrices = [];
-                }
-            }
-        } else {
-            console.log(`[Price] Sold prices from cache (${soldPrices.length}) for "${soldCacheKey}"`);
-        }
-
-        // ── Browse API — active fixed-price listings ──────────────────────────
         let activePrices = [];
         const browseRes = await fetch(browseUrl, {
-            headers: { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US', 'Content-Type': 'application/json' }
+            headers: {
+                'Authorization':           `Bearer ${token}`,
+                'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
+                'Content-Type':            'application/json'
+            }
         }).then(r => r.json()).catch(() => null);
+
         if (browseRes && !browseRes.errors) {
             activePrices = (browseRes.itemSummaries || [])
                 .map(i => parseFloat(i.price?.value))
@@ -771,64 +661,51 @@ app.post('/api/ebay/price-research', requireUser, express.json({ limit: '64kb' }
                 .sort((a, b) => a - b);
         }
 
-        console.log(`[Price] "${searchQuery}" — active: ${activePrices.length}, sold: ${soldPrices.length}`);
+        console.log(`[Price] "${searchQuery}" — active listings: ${activePrices.length}`);
 
-        // Need at least MIN_COMPS from active to proceed; sold is bonus data
         if (activePrices.length < MIN_COMPS) {
             return res.json({ source: 'insufficient', count: activePrices.length, searchQuery });
         }
 
-        // ── Price bands ───────────────────────────────────────────────────────
+        // ── Active listing price bands ─────────────────────────────────────────
         const active = {
-            low:  parseFloat(pct(activePrices, 0.10).toFixed(2)),
-            mid:  parseFloat(pct(activePrices, 0.50).toFixed(2)),
-            high: parseFloat(pct(activePrices, 0.90).toFixed(2)),
+            low:   parseFloat(pct(activePrices, 0.10).toFixed(2)),
+            mid:   parseFloat(pct(activePrices, 0.50).toFixed(2)),
+            high:  parseFloat(pct(activePrices, 0.90).toFixed(2)),
             count: activePrices.length
         };
 
-        const sold = soldPrices.length >= MIN_COMPS ? {
-            low:  parseFloat(pct(soldPrices, 0.10).toFixed(2)),
-            mid:  parseFloat(pct(soldPrices, 0.50).toFixed(2)),
-            high: parseFloat(pct(soldPrices, 0.90).toFixed(2)),
-            count: soldPrices.length
-        } : null;
+        // ── Pricing strategies — active-market derived ─────────────────────────
+        // Compliance note: These strategies use active eBay listing data only.
+        // Sold/completed listing data is not used. Sold-based strategies (§8.5
+        // Restricted API use case) will be added upon receipt of eBay written
+        // consent per Option C authorization process.
+        const strategies = {
+            moveIt: parseFloat((active.low  * 0.95).toFixed(2)),
+            market: parseFloat((active.mid).toFixed(2)),
+            hold:   parseFloat((active.high * 0.98).toFixed(2))
+        };
 
-        // ── Pricing strategies ────────────────────────────────────────────────
-        // Move It  — 10th pct of sold × 0.97 = fastest turnover price
-        // Market   — 50th pct of sold (median transaction price)
-        // Hold     — 90th pct of sold = premium but achievable; falls back to active high
-        // Strategies are only computed when sold data backs them.
-        // Hold = 90th pct of sold. If no sold baseline, return null so the
-        // frontend falls back to the simple estimate view rather than showing
-        // ask-price percentiles as if they were sold-based targets.
-        const strategies = sold ? {
-            moveIt: parseFloat((sold.low  * 0.97).toFixed(2)),
-            market: parseFloat((sold.mid).toFixed(2)),
-            hold:   parseFloat((sold.high).toFixed(2))
-        } : null;
-
-        const confidence   = activePrices.length >= 30 ? 'High' : activePrices.length >= 12 ? 'Medium' : 'Low';
-        const condLabel    = conditionFilter.includes('1000') ? 'New' : 'Used/Similar';
-        const soldCondNote = sold && soldPrices.length >= MIN_COMPS && !lhCondition ? ' · all conditions' : '';
-        const basis        = sold
-            ? `${active.count} active listings · ${sold.count} recent sales (${condLabel}${soldCondNote})`
-            : `${active.count} active listings — no sold data found (${condLabel})`;
+        const confidence = activePrices.length >= 30 ? 'High'
+            : activePrices.length >= 12 ? 'Medium'
+            : 'Low';
+        const condLabel = conditionFilter.includes('1000') ? 'New' : 'Used/Similar';
+        const basis     = `${active.count} active eBay listings (${condLabel}) — live market data`;
 
         res.json({
             source:     'ebay_browse',
-            // legacy fields kept for backward compat — prefer sold percentiles when available
-            low:        sold ? sold.low  : active.low,
-            mid:        sold ? sold.mid  : active.mid,
-            high:       sold ? sold.high : active.high,
+            low:        active.low,
+            mid:        active.mid,
+            high:       active.high,
             count:      active.count,
             confidence,
             basis,
             searchQuery,
-            // new fields
             active,
-            sold,
+            sold:       null,       // pending eBay Restricted API consent (ALA §8.5)
             strategies
         });
+
     } catch(e) {
         console.error('[Price] Research error:', e.message);
         res.status(502).json({ error: e.message, source: 'error' });
@@ -1701,28 +1578,8 @@ const geminiPick = async (title, keyFeatures, description, candidates) => {
     return result;
 };
 
-const fetchSerpApiCandidates = async (title) => {
-    const key = process.env.SERPAPI_KEY;
-    if (!key) throw new Error("SERPAPI_KEY not configured");
-    const params = new URLSearchParams({ engine: "ebay", _nkw: title, ebay_domain: "ebay.com", api_key: key });
-    // 12-second timeout — SerpAPI observed at ~7.7s, 12s gives reliable headroom
-    const controller = new AbortController();
-    const t0 = Date.now();
-    const timeout = setTimeout(() => controller.abort(), 12000);
-    let response;
-    try {
-        response = await fetch("https://serpapi.com/search?" + params.toString(), { signal: controller.signal });
-    } finally {
-        clearTimeout(timeout);
-    }
-    console.log("[Cat] SerpAPI responded in " + (Date.now() - t0) + "ms");
-    if (!response.ok) throw new Error("SerpApi HTTP " + response.status);
-    const data = await response.json();
-    const cats = (data.categories || []).filter(c => c.id && c.name);
-    if (!cats.length) throw new Error("SerpApi returned no category candidates");
-    console.log("[Scout Recon] SerpApi candidates: " + cats.map(c => c.id + ":" + c.name).join(", "));
-    return cats;
-};
+// fetchSerpApiCandidates — DELETED (ALA §9.5 compliance — 21 MAR 2026)
+// Category resolution now uses Gemini + eBay Taxonomy only (resolveViaGeminiOnly).
 
 const resolveViaGeminiOnly = async (title, keyFeatures, description) => {
     // Try eBay Taxonomy suggestions first — gives Gemini eBay-validated candidates
@@ -1774,19 +1631,8 @@ app.post("/api/category-resolve", stdLimiter, jsonSmall, async (req, res) => {
         } catch(e) { /* fall through to fresh attempt */ }
     }
 
-    // ── Stage 1: Hybrid (SerpApi 3s timeout + Gemini pick) ───────────────────
+    // ── Gemini + eBay Taxonomy (SerpAPI removed — ALA §9.5 compliance — 21 MAR 2026) ──
     const resolvePromise = (async () => {
-        try {
-            const candidates = await fetchSerpApiCandidates(title);
-            const result = await geminiPick(title, keyFeatures, description, candidates);
-            console.log("[Cat] Hybrid: " + result.categoryId + " " + result.categoryPath);
-            cacheSet(title, result);
-            return result;
-        } catch (err) {
-            console.warn("[Cat] Hybrid failed (" + err.message + ") — Gemini fallback");
-        }
-
-        // ── Stage 2: Pure Gemini fallback ────────────────────────────────────
         const result = await resolveViaGeminiOnly(title, keyFeatures, description);
         cacheSet(title, result);
         return result;
@@ -1806,50 +1652,47 @@ app.post("/api/category-resolve", stdLimiter, jsonSmall, async (req, res) => {
 /**
  * GEMINI PROXY
  */
-// ── Barcode Search ────────────────────────────────────────────────────────────
+// ── Barcode Search — UPCitemdb (replaces SerpAPI, ALA §9.5 compliance — 21 MAR 2026) ──
+// Uses UPCitemdb lookup API. Free tier: 100 req/day, no key required.
+// Paid tier: set UPCITEMDB_USER_KEY in Railway env vars.
+// NOTE: Price fields intentionally excluded from response (ALA §9.5 — no third-party sold data).
 app.post('/api/barcode-search', stdLimiter, jsonSmall, async (req, res) => {
-    const { upc, engine = 'ebay' } = req.body;
+    const { upc } = req.body;
     if (!upc) return res.status(400).json({ error: 'UPC required' });
     try {
-        const params = new URLSearchParams({ api_key: process.env.SERPAPI_KEY });
-        if (engine === 'amazon') {
-            params.set('engine', 'amazon');
-            params.set('k', upc);
-            params.set('amazon_domain', 'amazon.com');
-        } else {
-            params.set('engine', 'ebay');
-            params.set('_nkw', upc);
-        }
-        const barcodeCtrl = new AbortController();
-        const barcodeTO = setTimeout(() => barcodeCtrl.abort(), 10000);
+        const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+        if (process.env.UPCITEMDB_USER_KEY) headers['user_key'] = process.env.UPCITEMDB_USER_KEY;
+
+        const ctrl = new AbortController();
+        const to   = setTimeout(() => ctrl.abort(), 8000);
         let data;
         try {
-            const barcodeResp = await fetch('https://serpapi.com/search?' + params.toString(), { signal: barcodeCtrl.signal });
-            data = await barcodeResp.json();
+            const resp = await fetch('https://api.upcitemdb.com/prod/trial/lookup?upc=' + encodeURIComponent(upc), {
+                headers, signal: ctrl.signal
+            });
+            data = await resp.json();
         } finally {
-            clearTimeout(barcodeTO);
+            clearTimeout(to);
         }
-        console.log('[Barcode] engine=' + engine + ' upc=' + upc + ' keys=' + Object.keys(data).join(','));
 
-        let results = [];
-        if (engine === 'ebay') {
-            const raw = data.organic_results || [];
-            results = raw.slice(0, 6).map(function(r) {
-                var priceStr = '';
-                if (typeof r.price === 'string') priceStr = r.price;
-                else if (r.price && r.price.extracted) priceStr = '$' + r.price.extracted;
-                return { title: r.title || '', price: priceStr, image: r.thumbnail || '', condition: r.condition || '', url: r.link || '' };
-            });
-        } else {
-            const raw = data.organic_results || [];
-            results = raw.slice(0, 6).map(function(r) {
-                return { title: r.title || '', price: r.price || '', image: r.thumbnail || '', condition: '', url: r.link || '' };
-            });
+        if (!data || !data.items || data.items.length === 0) {
+            console.warn('[Barcode] UPCitemdb — no results for UPC:', upc);
+            return res.json({ upc, source: 'upcitemdb', results: [] });
         }
-        if (results.length === 0) {
-            console.warn('[Barcode] No results — snippet: ' + JSON.stringify(data).substring(0, 300));
-        }
-        res.json({ upc, engine, results });
+
+        // Map UPCitemdb items → unified result shape (price intentionally omitted — ALA §9.5)
+        const results = data.items.slice(0, 6).map(item => ({
+            title:     item.title     || '',
+            brand:     item.brand     || '',
+            model:     item.model     || '',
+            category:  item.category  || '',
+            image:     (item.images   && item.images[0]) || '',
+            condition: 'New',          // UPCitemdb describes retail/catalog items
+            url:       '',             // no third-party marketplace URL returned
+        }));
+
+        console.log('[Barcode] UPCitemdb hit — UPC:', upc, '| results:', results.length);
+        res.json({ upc, source: 'upcitemdb', results });
     } catch(e) {
         console.error('[Barcode] Error:', e.message);
         res.status(500).json({ error: e.message });
@@ -2190,27 +2033,7 @@ app.post('/api/admin/cloudinary-purge', requireOwner, jsonSmall, async (req, res
     res.json({ deleted, freedBytes });
 });
 
-// ── Admin: API usage — SerpAPI ────────────────────────────────────────────
-app.get('/api/admin/usage/serpapi', requireOwner, async (req, res) => {
-    const apiKey = process.env.SERPAPI_KEY;
-    if (!apiKey) return res.json({ ok: false, error: 'SERPAPI_KEY not configured', fetchedAt: new Date().toISOString() });
-    try {
-        const r = await fetch(`https://serpapi.com/account?api_key=${apiKey}`);
-        const d = await r.json();
-        if (!r.ok) return res.json({ ok: false, error: d.error || 'SerpAPI error', fetchedAt: new Date().toISOString() });
-        res.json({
-            ok:               true,
-            fetchedAt:        new Date().toISOString(),
-            plan:             d.plan_name,
-            accountEmail:     d.account_email,
-            searchesPerMonth: d.searches_per_month,
-            thisMonthUsage:   d.this_month_usage,
-            searchesLeft:     d.plan_searches_left,
-        });
-    } catch (e) {
-        res.json({ ok: false, error: e.message, fetchedAt: new Date().toISOString() });
-    }
-});
+// /api/admin/usage/serpapi — DELETED (ALA §9.5 compliance — 21 MAR 2026)
 
 // ── Admin: API usage — Cloudinary ─────────────────────────────────────────
 app.get('/api/admin/usage/cloudinary', requireOwner, async (req, res) => {
@@ -2375,5 +2198,7 @@ app.get('*', (req, res) => {
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`[Scout Recon] 🚀 Black Knight Command Center: v${APP_VERSION} active on port ${PORT}`);
-    console.log(`[Scout Recon] 🛒 SerpApi Category Engine: ${process.env.SERPAPI_KEY ? 'Ready' : '⚠️  SERPAPI_KEY missing'}`);
+    console.log(`[Scout Recon] 🔍 Category Engine: Gemini + eBay Taxonomy (SerpAPI decommissioned — ALA §9.5)`);
+    console.log(`[Scout Recon] 📦 Barcode Lookup: UPCitemdb ${process.env.UPCITEMDB_USER_KEY ? '(paid tier)' : '(free tier — 100 req/day)'}`);
+    console.log(`[Scout Recon] 💰 eBay Pricing: ${process.env.EBAY_PRICING_ENABLED === 'true' ? 'ENABLED (Browse API)' : '⚠️  DISABLED — pending eBay Restricted API consent (ALA §8.5)'}`);
 });
