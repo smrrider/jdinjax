@@ -668,7 +668,7 @@ SHIPPING LOGISTICS:
             );
         };
 
-        // --- ARBITRAGE SCOUT -----------------------------------------------------
+        // --- PROFIT SCOUT --------------------------------------------------------
 
         const SCOUT_SYSTEM_PROMPT = `You are an expert resale market analyst and pricing specialist.
 Analyze the provided item image and condition, then return a complete market assessment as JSON.
@@ -1201,7 +1201,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                     // Build Gemini parts  -  image if available, barcode title if not
                     const geminiParts = [];
                     if (hasBarcode && barcodePreload.title) {
-                        geminiParts.push({ text: `Item: ${barcodePreload.title}${barcodePreload.price ? '. Reference price: ' + barcodePreload.price : ''}. UPC: ${barcodePreload.upc || ''}. Condition: ${condLabel}. Using your independent market knowledge, provide realistic pricing, sell-through rate estimate, days to sell estimate, and estimated package dimensions.` });
+                        geminiParts.push({ text: `Item: ${barcodePreload.title}. UPC: ${barcodePreload.upc || ''}. Condition: ${condLabel}. Using your independent market knowledge, provide realistic pricing, an independent sell-through rate estimate (not from eBay listing data), estimated days to sell based on general market demand, and estimated package dimensions.` });
                     } else {
                         geminiParts.push({ text: `Analyze this item for resale pricing. Condition: ${condLabel}. Using your independent market knowledge (not eBay sold data), provide realistic pricing, sell-through rate estimate, days to sell estimate, and estimated package dimensions for shipping.` });
                     }
@@ -1994,7 +1994,7 @@ Return ONLY valid JSON — no markdown, no preamble.`;
             );
         };
 
-        // --- END ARBITRAGE SCOUT -------------------------------------------------
+        // --- END PROFIT SCOUT ----------------------------------------------------
 
 
         const App = () => {

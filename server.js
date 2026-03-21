@@ -575,7 +575,7 @@ app.get('/api/ebay/category-specifics', async (req, res) => {
 // e.g. /api/ebay/price-research-test?q=wetsuit
 // /api/ebay/sold-test — DELETED (ALA §9.5 compliance — 21 MAR 2026)
 
-app.get('/api/ebay/price-research-test', requireUser, async (req, res) => {
+app.get('/api/ebay/price-research-test', requireOwner, async (req, res) => {
     try {
         const q = req.query.q || 'iPhone 15 Pro Max';
         const token = await getEbayProdAppToken();
@@ -1238,7 +1238,11 @@ app.post('/api/ebay/relist', requireUser, express.json({ limit: '64kb' }), async
             .doc(`artifacts/jdinjax-console/users/${req.uid}/config/settings`)
             .get();
         const cfg = settingsSnap.exists ? settingsSnap.data() : {};
-        if (!cfg.shippingProfile || !cfg.paymentProfile || !cfg.returnProfile)
+        // Listing-level policy overrides (set by templates) take precedence over account settings
+        const effectiveShipping = l.shippingProfile || cfg.shippingProfile;
+        const effectivePayment  = l.paymentProfile  || cfg.paymentProfile;
+        const effectiveReturn   = l.returnProfile   || cfg.returnProfile;
+        if (!effectiveShipping || !effectivePayment || !effectiveReturn)
             return res.status(400).json({ error: 'eBay policies not configured in Settings' });
 
         // ── eBay credentials ────────────────────────────────────────────────────
@@ -1256,9 +1260,9 @@ app.post('/api/ebay/relist', requireUser, express.json({ limit: '64kb' }), async
             ebayFetchWithRetry(`${EBAY_API_BASE}/sell/account/v1/return_policy?marketplace_id=EBAY_US`,      { method: 'GET', headers })
         ]);
         const [fpData, ppData, rpData] = await Promise.all([fpRes.json(), ppRes.json(), rpRes.json()]);
-        const fp = (fpData.fulfillmentPolicies || []).find(p => p.name === cfg.shippingProfile);
-        const pp = (ppData.paymentPolicies     || []).find(p => p.name === cfg.paymentProfile);
-        const rp = (rpData.returnPolicies       || []).find(p => p.name === cfg.returnProfile);
+        const fp = (fpData.fulfillmentPolicies || []).find(p => p.name === effectiveShipping);
+        const pp = (ppData.paymentPolicies     || []).find(p => p.name === effectivePayment);
+        const rp = (rpData.returnPolicies       || []).find(p => p.name === effectiveReturn);
         if (!fp || !pp || !rp) return res.status(400).json({ error: 'eBay policy not found — check Settings' });
 
         const effectiveSku  = `SR-${listingDocId}-FP`;
