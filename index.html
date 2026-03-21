@@ -2869,7 +2869,9 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                                     });
                                 }
                             } catch(e) { console.warn('Category resolve failed:', e.message); }
-                            // Auto price research fires after category is resolved
+                            // Auto price research fires after category is resolved.
+                            // Post-remediation: uses Gemini independent knowledge only.
+                            // No eBay marketplace data is used in pricing (ALA §9.5 compliant).
                             autoResearchPrice(docRef.id, {
                                 title:       aiData.title,
                                 conditionId: finalConditionId,
@@ -2940,7 +2942,9 @@ Return ONLY valid JSON — no markdown, no preamble.`;
                 finally { setPricingListingId(null); }
             };
 
-            // Auto-run — fires silently after a new listing is created, no UI lock
+            // Auto-run — fires silently after a new listing is created, no UI lock.
+            // Data source: Gemini independent market knowledge only (ALA §9.5 compliant).
+            // eBay Browse/sold data not used. Option C consent required to add eBay data.
             const autoResearchPrice = async (listingId, listingSnapshot) => {
                 setAutoPricingIds(prev => new Set([...prev, listingId]));
                 try { await runPriceResearch({ id: listingId, ...listingSnapshot }); }
