@@ -414,51 +414,61 @@ app.get('/api/ebay/policies', requireUser, async (req, res) => {
 // ─── eBay Taxonomy API — Phase 3 ─────────────────────────────────────────────
 // Uses Client Credentials Grant (no user OAuth needed) for read-only taxonomy calls.
 
-let _ebayAppToken    = null;
-let _ebayAppTokenExp = 0;
-let _ebayTreeId      = null;
+let _ebayAppToken        = null;
+let _ebayAppTokenExp     = 0;
+let _ebayAppTokenPending = null;
+let _ebayTreeId          = null;
 
 const getEbayAppToken = async () => {
     if (_ebayAppToken && Date.now() < _ebayAppTokenExp - 60_000) return _ebayAppToken;
-    const creds = Buffer.from(`${EBAY_APP_ID}:${EBAY_CERT_ID}`).toString('base64');
-    const r = await fetch(EBAY_TOKEN_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Authorization': `Basic ${creds}` },
-        body: new URLSearchParams({ grant_type: 'client_credentials', scope: 'https://api.ebay.com/oauth/api_scope' })
-    });
-    const d = await r.json();
-    if (!r.ok) throw new Error(`App token failed: ${d.error_description || d.error}`);
-    _ebayAppToken    = d.access_token;
-    _ebayAppTokenExp = Date.now() + d.expires_in * 1000;
-    return _ebayAppToken;
+    if (_ebayAppTokenPending) return _ebayAppTokenPending;
+    _ebayAppTokenPending = (async () => {
+        const creds = Buffer.from(`${EBAY_APP_ID}:${EBAY_CERT_ID}`).toString('base64');
+        const r = await fetch(EBAY_TOKEN_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Authorization': `Basic ${creds}` },
+            body: new URLSearchParams({ grant_type: 'client_credentials', scope: 'https://api.ebay.com/oauth/api_scope' })
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(`App token failed: ${d.error_description || d.error}`);
+        _ebayAppToken    = d.access_token;
+        _ebayAppTokenExp = Date.now() + d.expires_in * 1000;
+        return _ebayAppToken;
+    })().finally(() => { _ebayAppTokenPending = null; });
+    return _ebayAppTokenPending;
 };
 
 // Production app token — always uses prod credentials regardless of EBAY_ENV.
 // Browse API (price research) must query real eBay data; sandbox has no listings.
-let _ebayProdAppToken    = null;
-let _ebayProdAppTokenExp = 0;
+let _ebayProdAppToken        = null;
+let _ebayProdAppTokenExp     = 0;
+let _ebayProdAppTokenPending = null;
 const EBAY_PROD_API_BASE  = 'https://api.ebay.com';
 const EBAY_PROD_TOKEN_URL = 'https://api.ebay.com/identity/v1/oauth2/token';
 const getEbayProdAppToken = async () => {
     if (_ebayProdAppToken && Date.now() < _ebayProdAppTokenExp - 60_000) return _ebayProdAppToken;
-    // Prefer explicit PROD vars; fall back to EBAY_APP_ID/EBAY_CERT_ID which in
-    // production mode already resolve to the prod credentials (see top of file).
-    const appId  = process.env.EBAY_APP_ID_PROD  || EBAY_APP_ID;
-    const certId = process.env.EBAY_CERT_ID_PROD || EBAY_CERT_ID;
-    if (!appId || !certId) throw new Error('No eBay production credentials available for Browse API');
-    console.log(`[Price] Getting prod token — env:${EBAY_ENV} appId:${appId.slice(0,8)}...`);
-    const creds = Buffer.from(`${appId}:${certId}`).toString('base64');
-    const r = await fetch(EBAY_PROD_TOKEN_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Authorization': `Basic ${creds}` },
-        body: new URLSearchParams({ grant_type: 'client_credentials', scope: 'https://api.ebay.com/oauth/api_scope' })
-    });
-    const d = await r.json();
-    if (!r.ok) throw new Error(`Prod app token failed: ${d.error_description || d.error}`);
-    _ebayProdAppToken    = d.access_token;
-    _ebayProdAppTokenExp = Date.now() + d.expires_in * 1000;
-    console.log(`[Price] Prod token OK, expires in ${d.expires_in}s`);
-    return _ebayProdAppToken;
+    if (_ebayProdAppTokenPending) return _ebayProdAppTokenPending;
+    _ebayProdAppTokenPending = (async () => {
+        // Prefer explicit PROD vars; fall back to EBAY_APP_ID/EBAY_CERT_ID which in
+        // production mode already resolve to the prod credentials (see top of file).
+        const appId  = process.env.EBAY_APP_ID_PROD  || EBAY_APP_ID;
+        const certId = process.env.EBAY_CERT_ID_PROD || EBAY_CERT_ID;
+        if (!appId || !certId) throw new Error('No eBay production credentials available for Browse API');
+        console.log(`[Price] Getting prod token — env:${EBAY_ENV} appId:${appId.slice(0,8)}...`);
+        const creds = Buffer.from(`${appId}:${certId}`).toString('base64');
+        const r = await fetch(EBAY_PROD_TOKEN_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Authorization': `Basic ${creds}` },
+            body: new URLSearchParams({ grant_type: 'client_credentials', scope: 'https://api.ebay.com/oauth/api_scope' })
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(`Prod app token failed: ${d.error_description || d.error}`);
+        _ebayProdAppToken    = d.access_token;
+        _ebayProdAppTokenExp = Date.now() + d.expires_in * 1000;
+        console.log(`[Price] Prod token OK, expires in ${d.expires_in}s`);
+        return _ebayProdAppToken;
+    })().finally(() => { _ebayProdAppTokenPending = null; });
+    return _ebayProdAppTokenPending;
 };
 
 const getEbayCategoryTreeId = async () => {
